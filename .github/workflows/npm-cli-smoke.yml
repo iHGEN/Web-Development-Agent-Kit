@@ -7,6 +7,8 @@ on:
       - "bin/**"
       - "bootstrap/**"
       - "scripts/**"
+      - "pack/agents/**"
+      - "pack/rules/**"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/npm-cli-smoke.yml"
@@ -16,6 +18,8 @@ on:
       - "bin/**"
       - "bootstrap/**"
       - "scripts/**"
+      - "pack/agents/**"
+      - "pack/rules/**"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/npm-cli-smoke.yml"
@@ -95,10 +99,23 @@ jobs:
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit.json"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit-source.json"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/index/project-profile.json"
+          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/rules/workflow.md"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/bin/remote-install.py"
 
           grep -q "web-kit-smoke-app" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
           grep -q "Project Agent Context" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+          grep -q ".agent-core/rules/workflow.md" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample"
+          profile = json.loads((sample / ".agent-core/index/project-profile.json").read_text())
+          graphify = profile["capabilities"]["graphify"]
+          assert graphify["detected"] is False
+          assert graphify["graph_ready"] is False
+          assert graphify["routing_mode"] == "standard"
+          PY
 
       - name: Test smart mode on current installation
         shell: bash
@@ -111,6 +128,46 @@ jobs:
           grep -q "Mode:      smart" "$OUTPUT"
           grep -q "Decision:  doctor" "$OUTPUT"
           grep -q "already installed" "$OUTPUT"
+
+      - name: Test update detects Graphify and refreshes canonical loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          mkdir -p "$SAMPLE/graphify-out"
+          echo '{"nodes": [], "edges": []}' > "$SAMPLE/graphify-out/graph.json"
+          cat > "$SAMPLE/.mcp.json" <<'JSON'
+          {
+            "mcpServers": {
+              "graphify": {
+                "command": "python",
+                "args": ["-m", "graphify.serve", "graphify-out/graph.json"]
+              }
+            }
+          }
+          JSON
+
+          npx --yes "./${{ steps.pack.outputs.tarball }}" update \
+            --ref main \
+            --project "$SAMPLE"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample"
+          profile = json.loads((sample / ".agent-core/index/project-profile.json").read_text())
+          config = json.loads((sample / ".agent-kit.json").read_text())
+          graphify = profile["capabilities"]["graphify"]
+          assert graphify["detected"] is True
+          assert graphify["graph_ready"] is True
+          assert graphify["local_mcp_configured"] is True
+          assert graphify["routing_mode"] == "graphify-assisted"
+          assert config["capabilities"]["graphify"]["routing_mode"] == "graphify-assisted"
+          PY
+
+          grep -q "Routing mode.*graphify-assisted" "$SAMPLE/AGENTS.md"
+          grep -q "Graphify-assisted branch" "$SAMPLE/.agent-core/rules/workflow.md"
+          grep -q "Graphify-assisted mode" "$SAMPLE/.agent-core/agents/context-router.md"
 
       - name: Test no silent downgrade for newer project
         shell: bash
