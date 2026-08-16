@@ -1,35 +1,69 @@
 # Install the Web Development Agent Kit From a Link
 
-Put this kit in a GitHub repository and create a version tag such as `v1.1.0`.
+The canonical workflow update is versioned as `1.1.1` on `main`.
 
-## Linux / macOS / WSL
+Until the `v1.1.1` tag is created, use the current `main` command below. After tagging, prefer the pinned release command for reproducible installs.
+
+## Current main — works immediately
+
+### Linux / macOS / WSL
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/web-dev-agent-kit/v1.1.0/bootstrap/install.sh \
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
   | bash -s -- \
-      --repo OWNER/web-dev-agent-kit \
-      --ref v1.1.0 \
+      --repo iHGEN/Web-Development-Agent-Kit \
+      --ref main \
       --project .
 ```
 
-## Windows PowerShell
+### Windows PowerShell
 
 ```powershell
 $installer="$env:TEMP\web-agent-kit-install.ps1"
 
 Invoke-WebRequest `
-  "https://raw.githubusercontent.com/OWNER/web-dev-agent-kit/v1.1.0/bootstrap/install.ps1" `
+  "https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.ps1" `
   -OutFile $installer
 
-& $installer -Repo "OWNER/web-dev-agent-kit" -Ref "v1.1.0" -Project "."
+& $installer `
+  -Repo "iHGEN/Web-Development-Agent-Kit" `
+  -Ref "main" `
+  -Project "."
+```
+
+## Recommended stable install after creating tag `v1.1.1`
+
+### Linux / macOS / WSL
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.1/bootstrap/install.sh \
+  | bash -s -- \
+      --repo iHGEN/Web-Development-Agent-Kit \
+      --ref v1.1.1 \
+      --project .
+```
+
+### Windows PowerShell
+
+```powershell
+$installer="$env:TEMP\web-agent-kit-install.ps1"
+
+Invoke-WebRequest `
+  "https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.1/bootstrap/install.ps1" `
+  -OutFile $installer
+
+& $installer `
+  -Repo "iHGEN/Web-Development-Agent-Kit" `
+  -Ref "v1.1.1" `
+  -Project "."
 ```
 
 ## Direct ZIP URL
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/web-dev-agent-kit/v1.1.0/bootstrap/install.sh \
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
   | bash -s -- \
-      --source https://your-host/web-dev-agent-kit-v1.1.0.zip \
+      --source https://your-host/web-dev-agent-kit-v1.1.1.zip \
       --project .
 ```
 
@@ -41,19 +75,19 @@ A remote install records `.agent-kit-source.json` and installs:
 .agent-core/bin/remote-install.py
 ```
 
-Run later:
+Run later using the remembered source/ref:
 
 ```bash
 python .agent-core/bin/remote-install.py --project .
 ```
 
-To change the pinned version:
+To intentionally move to the next pinned version:
 
 ```bash
 python .agent-core/bin/remote-install.py \
-  --repo OWNER/web-dev-agent-kit \
-  --ref v1.2.0 \
+  --repo iHGEN/Web-Development-Agent-Kit \
+  --ref v1.1.1 \
   --project .
 ```
 
-For important projects, pin a release tag or commit and optionally verify a published SHA-256.
+For important projects, pin a release tag or commit instead of `main`, and optionally verify a published SHA-256 checksum.
