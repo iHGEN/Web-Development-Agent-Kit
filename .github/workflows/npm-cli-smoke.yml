@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "package.json"
+      - "VERSION"
       - "bin/**"
       - "bootstrap/**"
       - "scripts/**"
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - "package.json"
+      - "VERSION"
       - "bin/**"
       - "bootstrap/**"
       - "scripts/**"
@@ -46,6 +48,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Validate release version consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          FILE_VERSION="$(tr -d '\r\n' < VERSION)"
+          test "$PACKAGE_VERSION" = "$FILE_VERSION"
+          echo "Release version: $PACKAGE_VERSION"
 
       - name: Validate npm package contents
         run: npm pack --dry-run
@@ -213,9 +224,11 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
+          root = Path.cwd()
           p = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample" / ".agent-kit.json"
           data = json.loads(p.read_text())
-          data["version"] = "1.1.5"
+          package = json.loads((root / "package.json").read_text())
+          data["version"] = package["version"]
           p.write_text(json.dumps(data, indent=2))
           PY
 
