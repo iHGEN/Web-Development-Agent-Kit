@@ -1,15 +1,41 @@
 {
-  "version": 1,
+  "version": 2,
   "mode": "strict-routed-context",
   "principles": {
     "default_deny_repository_reads": true,
     "lazy_load_skills": true,
     "lazy_expand_code_context": true,
     "prefer_index_before_source": true,
+    "prefer_graphify_when_project_graph_ready": true,
+    "graphify_is_navigation_not_behavior_authority": true,
+    "graphify_fallback_to_standard": true,
+    "never_load_full_graphify_graph_into_context": true,
     "prefer_symbol_or_range_reads": true,
     "prefer_diff_after_implementation": true,
     "handoff_uses_summary_not_full_history": true,
     "original_prompt_always_available_to_captain": true
+  },
+  "repository_navigation": {
+    "capability_source": ".agent-core/index/project-profile.json",
+    "standard": [
+      "project-profile",
+      "repository-index",
+      "targeted-search",
+      "symbol-or-range",
+      "full-file-only-when-needed",
+      "evidence-backed-expansion"
+    ],
+    "graphify-assisted": [
+      "project-profile",
+      "narrow-graphify-query-path-or-neighbors",
+      "small-candidate-symbol-set",
+      "verify-exact-source-symbol-or-range",
+      "targeted-search-for-gaps",
+      "full-file-only-when-needed",
+      "evidence-backed-expansion"
+    ],
+    "graphify_runtime_rule": "Use graphify-assisted only when the project profile reports a ready graph and the current runtime can actually query it. On failure, stale/incomplete evidence, or conflict with source, fall back to standard routing for the task.",
+    "source_authority_rule": "Graphify narrows where to read. Current repository source, current diff, tests, and runtime evidence remain authoritative."
   },
   "task_sizes": {
     "small": {
@@ -35,10 +61,10 @@
     }
   },
   "expansion_rules": [
-    "Expand context only when a currently-read file references a new dependency, symbol, contract, test, configuration, or ownership boundary that is necessary to complete or validate the task.",
+    "Expand context only when current source or a task-relevant Graphify relationship identifies a dependency, symbol, contract, test, configuration, or ownership boundary that is necessary to complete or validate the task.",
     "Every expansion must record why the additional file/symbol is needed.",
-    "Do not recursively read every import/dependency.",
-    "Do not read generated, vendor, build, coverage, dependency-cache, or binary output unless the task explicitly targets it.",
+    "Do not recursively read every import/dependency or expand every graph neighbor.",
+    "Do not read generated, vendor, build, coverage, dependency-cache, Graphify output, or binary output unless the task explicitly targets it.",
     "If the hard candidate-file cap would be exceeded, return to the Captain for a scope/context review before reading more."
   ],
   "excluded_paths": [
@@ -53,6 +79,7 @@
     "coverage/**",
     ".cache/**",
     ".idea/**",
-    ".vscode/**"
+    ".vscode/**",
+    "graphify-out/**"
   ]
 }
