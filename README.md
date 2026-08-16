@@ -267,13 +267,23 @@ small active skill subset for one agent
 
 ## Remote installation
 
-From the public repository/tag:
+### Current `main` — includes the canonical workflow update now
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.0/bootstrap/install.sh \
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
   | bash -s -- \
       --repo iHGEN/Web-Development-Agent-Kit \
-      --ref v1.1.0 \
+      --ref main \
+      --project .
+```
+
+### Recommended stable command after you create tag `v1.1.1`
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.1/bootstrap/install.sh \
+  | bash -s -- \
+      --repo iHGEN/Web-Development-Agent-Kit \
+      --ref v1.1.1 \
       --project .
 ```
 
