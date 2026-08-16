@@ -1,10 +1,10 @@
 # Web Development Agent Kit
 
-A web-only multi-agent engineering kit with project discovery, project-aware `AGENTS.md` generation, strict context/token routing, independent plan/handoff validation, maintainability review, security/testing gates, and routed DevOps agents.
+A web-only multi-agent engineering kit with project discovery, project-aware `AGENTS.md` generation, strict context/token routing, independent plan/handoff validation, maintainability review, security/testing gates, routed DevOps agents, and optional Graphify-assisted repository navigation.
 
 ## Quick start
 
-After publishing `@ihgen/web-kit@1.1.5` and creating GitHub tag `v1.1.5`:
+After publishing the current release and creating the matching GitHub tag:
 
 ```bash
 npx @ihgen/web-kit
@@ -52,35 +52,7 @@ A project may have many skills available, but each task receives only the agents
 
 Installation discovers the target project before finalizing agent instructions.
 
-Generated project context includes:
-- project name and directory;
-- detected technology groups;
-- shallow repository structure;
-- manifests/build files;
-- important configuration;
-- test roots;
-- migration/data roots.
-
-The top of the generated `AGENTS.md` looks conceptually like:
-
-```text
-Project Agent Context — <project name>
-├── Project Identity
-├── Detected Technology Stack
-├── Shallow Project Structure
-├── Manifests / Configuration
-├── Test Roots
-├── Migration / Data Roots
-└── Project-aware Routing Rules
-
-Web Development Agent Kit
-├── Canonical Workflow
-├── Context / Token Rules
-├── Maintainability Contract
-├── Web Agent Team
-├── DevOps Agent Team
-└── Skill Policy
-```
+Generated project context includes project identity, detected technologies, shallow repository structure, manifests/configuration, test roots, migration/data roots, and optional repository-navigation capability such as Graphify readiness.
 
 The machine-readable copy is stored at:
 
@@ -90,75 +62,116 @@ The machine-readable copy is stored at:
 
 The structure map is routing metadata only. It never gives agents permission to read the whole repository.
 
+## Conditional Graphify routing
+
+Web Kit has two repository-navigation modes:
+
+```text
+Graphify absent/not ready
+  -> standard routing
+
+Graphify graph ready
+  -> freshness gate
+  -> Graphify-assisted routing when fresh
+  -> standard fallback on refresh/query failure
+```
+
+Graphify is used to narrow repository exploration, not as behavioral authority. Exact source, current diffs, tests, and runtime evidence remain authoritative.
+
+### Graph Refresh Gate
+
+Starting with **v1.1.8**, Web Kit keeps the graph fresh at agent handoff boundaries.
+
+Before the first Graphify query in a task, and once after each completed code-changing agent step, the workflow runs:
+
+```bash
+python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+```
+
+The gate stores state at:
+
+```text
+.agent-core/state/graphify.json
+```
+
+Behavior:
+
+```text
+repository unchanged since last successful refresh
+  -> skip Graphify update
+
+repository changed
+  -> one incremental `graphify update .`
+
+refresh succeeds
+  -> fresh Graphify-assisted routing
+
+refresh unavailable / failed / timed out
+  -> standard routing for the task
+  -> workflow continues
+```
+
+The gate deliberately runs once per completed changed state, not after every file write.
+
 ## Canonical workflow
 
-`pack/rules/workflow.md` is the single authoritative lifecycle.
+`pack/rules/workflow.md` is the source-pack canonical lifecycle. Installed projects follow `.agent-core/rules/workflow.md`.
 
 ```text
 USER
   ↓
 CAPTAIN
   ↓
-Record original prompt verbatim
+Record original prompt + classify task
   ↓
-Classify Small / Medium / Large
+Project Profile + Repository Index
   ↓
-Read Project Profile
+Graphify ready?
+  ├─ NO -> Standard routing
+  └─ YES -> Graph Refresh Gate -> fresh Graphify-assisted routing or standard fallback
   ↓
-Repository Indexer
-  ↓
-Context Router / Token Governor
+Context Router
   ↓
 Intent Contract + Read-only Discovery
   ↓
-Impact Map
-  ↓
-Implementation Design
+Impact Map + Implementation Design
   ↓
 Execution Registry
   ↓
 Plan Validator
   ├─ FAIL -> revise -> validate again
-  └─ PASS
-       ↓
-    LOCK PLAN
-       ↓
-Context Router again
-       ↓
-One approved step + one selected worker + relevant skills only
-       ↓
-Implement step
-       ↓
+  └─ PASS -> LOCK PLAN
+  ↓
+Context Router -> one approved step
+  ↓
+Worker implements + local checks
+  ↓
+Graph Refresh Gate
+  ↓
 Handoff Validator
-  ├─ FAIL -> responsible worker -> revalidate
-  └─ PASS -> next registered step
-       ↓
+  ├─ FAIL -> worker fix -> refresh gate -> revalidate
+  └─ PASS -> next step
+  ↓
 Repeat every approved step
-       ↓
-All plan steps pass
-       ↓
-Code Simplifier
-       ↓
-Run affected tests again
-       ↓
+  ↓
+Code Simplifier -> refresh if code changed
+  ↓
+Affected tests
+  ↓
 Relevant specialist validation
-       ↓
+  ↓
 Final Integration Validator
-  ├─ FAIL -> owning agent -> fix -> handoff validation -> affected reviews
+  ├─ FAIL -> owning agent -> fix -> refresh -> handoff -> affected reviews
   └─ PASS
-       ↓
-CAPTAIN
-       ↓
-DONE
+  ↓
+CAPTAIN -> DONE
 ```
 
 If new repository evidence invalidates the locked plan, the affected step stops and a Plan Delta must pass independent validation before work continues. No silent improvisation.
 
 ## Continuous context/token routing
 
-The Context Router / Token Governor runs throughout the lifecycle.
-
-Preferred read progression:
+Standard progression:
 
 ```text
 project profile
@@ -166,12 +179,26 @@ project profile
   -> targeted search
   -> symbol/range
   -> full file only when needed
-  -> evidence-backed dependency expansion
+  -> evidence-backed expansion
+```
+
+Graphify-assisted progression when fresh:
+
+```text
+project profile
+  -> Graph Refresh Gate
+  -> narrow Graphify query/path/neighbors
+  -> small candidate symbol set
+  -> exact source symbol/range
+  -> targeted search for gaps
+  -> full file only when needed
 ```
 
 Rules:
 - no unrestricted repository reads by default;
 - installed skill does not mean active skill;
+- never load the complete Graphify graph into model context;
+- Graphify readiness does not imply freshness;
 - compact evidence-linked findings instead of full transcripts;
 - fresh context packet per approved implementation step;
 - diff-first handoff/review validation;
@@ -239,17 +266,7 @@ python scripts/agent-kit.py catalog
 python scripts/agent-kit.py add-skill /path/to/project <skill-name>
 ```
 
-## Remote shell install
-
-Pinned release after creating tag `v1.1.5`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.5/bootstrap/install.sh \
-  | bash -s -- \
-      --repo iHGEN/Web-Development-Agent-Kit \
-      --ref v1.1.5 \
-      --project .
-```
+## Remote / npm install
 
 For npm users, prefer:
 
@@ -257,14 +274,20 @@ For npm users, prefer:
 npx @ihgen/web-kit
 ```
 
+Pinned `v1.1.8` after the tag and npm release exist:
+
+```bash
+npx @ihgen/web-kit@1.1.8
+```
+
 ## Release mapping
 
 The npm package version maps directly to the GitHub tag:
 
 ```text
-@ihgen/web-kit@1.1.5
+@ihgen/web-kit@1.1.8
         ↓
-iHGEN/Web-Development-Agent-Kit@v1.1.5
+iHGEN/Web-Development-Agent-Kit@v1.1.8
 ```
 
 Create the matching GitHub tag before publishing the npm release.
