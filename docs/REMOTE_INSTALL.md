@@ -1,8 +1,10 @@
 # Install the Web Development Agent Kit From a Link
 
-The canonical workflow update is versioned as `1.1.1` on `main`.
+Project-aware `AGENTS.md` generation is versioned as `1.1.2` on `main`.
 
-Until the `v1.1.1` tag is created, use the current `main` command below. After tagging, prefer the pinned release command for reproducible installs.
+Installation now discovers the target project's name, detected stack, shallow structure, manifests/configuration, test roots, and migration/data roots before finalizing agent instructions. The generated project context is placed at the top of `AGENTS.md`, with the canonical Web-Kit workflow and roles underneath it.
+
+Until the `v1.1.2` tag is created, use `main`. After tagging, prefer the pinned release command for reproducible installs.
 
 ## Current main — works immediately
 
@@ -31,15 +33,15 @@ Invoke-WebRequest `
   -Project "."
 ```
 
-## Recommended stable install after creating tag `v1.1.1`
+## Recommended stable install after creating tag `v1.1.2`
 
 ### Linux / macOS / WSL
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.1/bootstrap/install.sh \
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.2/bootstrap/install.sh \
   | bash -s -- \
       --repo iHGEN/Web-Development-Agent-Kit \
-      --ref v1.1.1 \
+      --ref v1.1.2 \
       --project .
 ```
 
@@ -49,21 +51,43 @@ curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.
 $installer="$env:TEMP\web-agent-kit-install.ps1"
 
 Invoke-WebRequest `
-  "https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.1/bootstrap/install.ps1" `
+  "https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.2/bootstrap/install.ps1" `
   -OutFile $installer
 
 & $installer `
   -Repo "iHGEN/Web-Development-Agent-Kit" `
-  -Ref "v1.1.1" `
+  -Ref "v1.1.2" `
   -Project "."
 ```
+
+## What gets generated in the target project
+
+```text
+AGENTS.md
+.agent-kit.json
+.agent-kit-source.json
+.agent-core/
+├── agents/
+├── rules/
+├── contracts/
+├── registry/
+├── routing/
+├── catalog/
+└── index/
+    ├── project-index.json
+    └── project-profile.json
+.agents/
+└── skills/
+```
+
+`project-profile.json` is the machine-readable copy used for routing. The generated project context at the top of `AGENTS.md` is the human/agent-readable copy.
 
 ## Direct ZIP URL
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
   | bash -s -- \
-      --source https://your-host/web-dev-agent-kit-v1.1.1.zip \
+      --source https://your-host/web-dev-agent-kit-v1.1.2.zip \
       --project .
 ```
 
@@ -81,12 +105,14 @@ Run later using the remembered source/ref:
 python .agent-core/bin/remote-install.py --project .
 ```
 
+Updating also regenerates the project-aware profile and managed `AGENTS.md` so material stack/structure changes can be reflected.
+
 To intentionally move to the next pinned version:
 
 ```bash
 python .agent-core/bin/remote-install.py \
   --repo iHGEN/Web-Development-Agent-Kit \
-  --ref v1.1.1 \
+  --ref v1.1.2 \
   --project .
 ```
 
