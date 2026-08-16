@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import argparse, json, shutil, sys, re
+import argparse, json, os, shutil, sys, re
 from project_profile import apply_project_profile
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -9,20 +9,24 @@ VERSION = (KIT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 IGNORE_DIRS = {
     ".git", ".agents", ".agent-core", "node_modules", "vendor", "bin", "obj",
-    ".next", "dist", "build", "coverage", ".idea", ".vscode"
+    ".next", "dist", "build", "coverage", ".idea", ".vscode", ".cache",
+    "graphify-out"
 }
 
+
 def walk_files(project):
-    for p in project.rglob("*"):
-        if not p.is_file():
-            continue
+    project = project.resolve()
+    for current_root, dirnames, filenames in os.walk(project):
+        current = Path(current_root)
+        dirnames[:] = [name for name in dirnames if name not in IGNORE_DIRS]
         try:
-            rel = p.relative_to(project)
+            rel_root = current.relative_to(project)
         except ValueError:
             continue
-        if any(part in IGNORE_DIRS for part in rel.parts):
-            continue
-        yield p, rel
+        for filename in filenames:
+            p = current / filename
+            rel = (rel_root / filename) if rel_root != Path(".") else Path(filename)
+            yield p, rel
 
 
 def build_project_index(project):
@@ -76,11 +80,13 @@ def build_project_index(project):
         "note": "Structural routing index only; source contents are intentionally not embedded."
     }
 
+
 def load_json(path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
 
 def npm_packages(project_files):
     out = set()
@@ -94,6 +100,7 @@ def npm_packages(project_files):
                 out.update(values.keys())
     return out
 
+
 def composer_packages(project_files):
     out = set()
     for p, rel in project_files:
@@ -105,6 +112,7 @@ def composer_packages(project_files):
             if isinstance(values, dict):
                 out.update(values.keys())
     return out
+
 
 def file_matches(rel, pattern):
     # Supports root/simple names and **/name style used by our manifest.
@@ -132,6 +140,7 @@ def matching_file_contains(project_files, mapping):
                     hits.append(f"{rel.as_posix()}: {needle}")
     return hits
 
+
 def csproj_text(project_files):
     chunks = []
     for p, rel in project_files:
@@ -141,6 +150,7 @@ def csproj_text(project_files):
             except Exception:
                 pass
     return "\n".join(chunks)
+
 
 def compose_text(project_files):
     chunks = []
@@ -152,6 +162,7 @@ def compose_text(project_files):
             except Exception:
                 pass
     return "\n".join(chunks).lower()
+
 
 def detect(project):
     project = project.resolve()
@@ -204,6 +215,7 @@ def detect(project):
 
     return sorted(detected), evidence
 
+
 def copy_tree(src, dst):
     if not src.exists():
         return
@@ -216,6 +228,7 @@ def copy_tree(src, dst):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, target)
 
+
 def render_config(skills, evidence):
     return {
         "kit": "web-dev-agent-kit",
@@ -224,6 +237,7 @@ def render_config(skills, evidence):
         "detected_skills": skills,
         "evidence": evidence
     }
+
 
 def install(project, force_agents=False):
     project = project.resolve()
@@ -287,6 +301,7 @@ def install(project, force_agents=False):
     print("Skills: " + ", ".join(skills))
     print("AGENTS: " + agents_note)
 
+
 def doctor(project):
     project = project.resolve()
     expected, evidence = detect(project)
@@ -319,6 +334,7 @@ def doctor(project):
     print("Status: NEEDS ATTENTION")
     return 1
 
+
 def scan(project):
     project = project.resolve()
     skills, evidence = detect(project)
@@ -333,6 +349,7 @@ def show_catalog():
     for category, names in sorted(catalog.get("categories", {}).items()):
         print(f"\n[{category}] {len(names)}")
         print("  " + ", ".join(names))
+
 
 def add_skill(project, skill):
     project = project.resolve()
@@ -351,6 +368,7 @@ def add_skill(project, skill):
         cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     print(f"Activated skill: {skill}")
     return 0
+
 
 def main():
     parser = argparse.ArgumentParser(description="Web Development Agent Kit")
@@ -385,6 +403,7 @@ def main():
         show_catalog()
     elif args.command == "add-skill":
         raise SystemExit(add_skill(project, args.skill))
+
 
 if __name__ == "__main__":
     main()
