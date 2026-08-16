@@ -28,14 +28,28 @@ def fetch(url, out):
 
 def source_for(args, project):
     saved = read_json(project / ".agent-kit-source.json")
-    repo = args.repo or saved.get("repo")
-    ref = args.ref or saved.get("ref") or "main"
-    src = args.source or saved.get("source")
 
-    if src:
-        return src, repo, ref
-    if repo:
+    # An explicitly supplied ZIP source always wins.
+    if args.source:
+        return args.source, args.repo or saved.get("repo"), args.ref or saved.get("ref") or "main"
+
+    # An explicitly supplied repo/ref means the caller intentionally selected a version.
+    # This is what lets `npx @ihgen/web-kit@X.Y.Z update` move a project from an older tag.
+    if args.repo or args.ref:
+        repo = args.repo or saved.get("repo")
+        ref = args.ref or saved.get("ref") or "main"
+        if not repo:
+            raise SystemExit("A GitHub --ref requires --repo or a previously saved repository.")
         return f"https://codeload.github.com/{repo}/zip/{ref}", repo, ref
+
+    # Otherwise reuse the project's remembered source exactly.
+    saved_source = saved.get("source")
+    saved_repo = saved.get("repo")
+    saved_ref = saved.get("ref") or "main"
+    if saved_source:
+        return saved_source, saved_repo, saved_ref
+    if saved_repo:
+        return f"https://codeload.github.com/{saved_repo}/zip/{saved_ref}", saved_repo, saved_ref
 
     raise SystemExit(
         "Use --repo OWNER/REPO or --source ZIP_URL for the first remote action."
@@ -83,7 +97,14 @@ def main():
             shutil.copy2(Path(urllib.parse.urlparse(src).path), archive)
         else:
             print(f"Downloading {src}")
-            fetch(src, archive)
+            try:
+                fetch(src, archive)
+            except Exception as exc:
+                raise SystemExit(
+                    f"Failed to download Web Kit source: {src}\n"
+                    f"If this is an npm release, make sure the matching GitHub tag exists before publishing.\n"
+                    f"Details: {exc}"
+                )
 
         sha = digest(archive)
         if args.sha256 and sha.lower() != args.sha256.lower():
