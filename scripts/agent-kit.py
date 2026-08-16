@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import argparse, json, shutil, sys, re
+from project_profile import apply_project_profile
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 PACK = KIT_ROOT / "pack"
@@ -239,6 +240,8 @@ def install(project, force_agents=False):
     for skill in skills:
         copy_tree(PACK / "skills" / skill, skill_root / skill)
 
+    # Write the canonical template first. Project-aware context is generated after
+    # the structural index is available.
     agents_template = (KIT_ROOT / "AGENTS.template.md").read_text(encoding="utf-8")
     agents_path = project / "AGENTS.md"
     if agents_path.exists() and not force_agents:
@@ -269,8 +272,17 @@ def install(project, force_agents=False):
     catalog_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(PACK / "router" / "skill-catalog.json", catalog_dir / "skill-catalog.json")
 
+    profile_result = apply_project_profile(
+        project,
+        kit_root=KIT_ROOT,
+        version=VERSION,
+        force_agents=force_agents
+    )
+    agents_note = profile_result["action"]
+
     print(f"Web Agent Kit {VERSION} installed")
-    print(f"Project: {project}")
+    print(f"Project: {profile_result['profile']['name']}")
+    print(f"Project directory: {project}")
     print(f"Agents: {len(list((core / 'agents').glob('*.md')))}")
     print("Skills: " + ", ".join(skills))
     print("AGENTS: " + agents_note)
@@ -294,13 +306,14 @@ def doctor(project):
     print(f"Agent definitions: {len(agent_files)}")
     print(f"Config: {'OK' if cfg else 'MISSING'}")
     print(f"Project index: {'OK' if (project/'.agent-core/index/project-index.json').exists() else 'MISSING'}")
+    print(f"Project profile: {'OK' if (project/'.agent-core/index/project-profile.json').exists() else 'MISSING'}")
     print(f"Routing policy: {'OK' if (project/'.agent-core/routing/context-policy.json').exists() else 'MISSING'}")
     print(f"Root instructions: {'OK' if (project/'AGENTS.md').exists() or (project/'AGENTS.web-kit.md').exists() else 'MISSING'}")
     if missing:
         print("Missing skills: " + ", ".join(missing))
     if stale:
         print("Installed but no longer detected: " + ", ".join(stale))
-    if not missing and agent_files and cfg:
+    if not missing and agent_files and cfg and (project/'.agent-core/index/project-profile.json').exists():
         print("Status: HEALTHY")
         return 0
     print("Status: NEEDS ATTENTION")
