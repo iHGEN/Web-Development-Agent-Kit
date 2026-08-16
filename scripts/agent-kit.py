@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import argparse, json, os, shutil, sys, re
+import argparse, json, os, shutil, subprocess, sys, re
 from project_profile import apply_project_profile
+from ai_compat import apply_ai_compatibility
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 PACK = KIT_ROOT / "pack"
@@ -115,7 +116,6 @@ def composer_packages(project_files):
 
 
 def file_matches(rel, pattern):
-    # Supports root/simple names and **/name style used by our manifest.
     posix = rel.as_posix()
     if pattern.startswith("**/"):
         tail = pattern[3:]
@@ -208,7 +208,6 @@ def detect(project):
         if file_contains_hits:
             reasons.append("file content: " + ", ".join(file_contains_hits[:5]))
 
-        # A rule is intentionally OR-based: any strong signal activates the skill.
         if reasons:
             detected.add(skill)
             evidence[skill] = reasons
@@ -254,8 +253,6 @@ def install(project, force_agents=False):
     for skill in skills:
         copy_tree(PACK / "skills" / skill, skill_root / skill)
 
-    # Write the canonical template first. Project-aware context is generated after
-    # the structural index is available.
     agents_template = (KIT_ROOT / "AGENTS.template.md").read_text(encoding="utf-8")
     agents_path = project / "AGENTS.md"
     if agents_path.exists() and not force_agents:
@@ -293,6 +290,7 @@ def install(project, force_agents=False):
         force_agents=force_agents
     )
     agents_note = profile_result["action"]
+    compatibility = apply_ai_compatibility(project, profile_result["path"])
 
     print(f"Web Agent Kit {VERSION} installed")
     print(f"Project: {profile_result['profile']['name']}")
@@ -300,6 +298,8 @@ def install(project, force_agents=False):
     print(f"Agents: {len(list((core / 'agents').glob('*.md')))}")
     print("Skills: " + ", ".join(skills))
     print("AGENTS: " + agents_note)
+    print("AI compatibility: Codex/Kimi native AGENTS + Claude/Gemini/Cursor/Copilot bridges")
+    print("Canonical instructions: " + compatibility["canonical_instructions"])
 
 
 def doctor(project):
@@ -314,6 +314,13 @@ def doctor(project):
     missing = sorted(set(expected) - set(installed))
     stale = sorted(set(installed) - set(expected))
     agent_files = list((project / ".agent-core" / "agents").glob("*.md")) if (project / ".agent-core" / "agents").exists() else []
+    bridge_paths = [
+        project / "CLAUDE.md",
+        project / "GEMINI.md",
+        project / ".github" / "copilot-instructions.md",
+        project / ".cursor" / "rules" / "ihgen-web-kit.mdc",
+    ]
+    bridges_ok = all(path.exists() for path in bridge_paths)
 
     print(f"Web Agent Kit Doctor — {project}")
     print(f"Detected skills: {', '.join(expected)}")
@@ -324,11 +331,12 @@ def doctor(project):
     print(f"Project profile: {'OK' if (project/'.agent-core/index/project-profile.json').exists() else 'MISSING'}")
     print(f"Routing policy: {'OK' if (project/'.agent-core/routing/context-policy.json').exists() else 'MISSING'}")
     print(f"Root instructions: {'OK' if (project/'AGENTS.md').exists() or (project/'AGENTS.web-kit.md').exists() else 'MISSING'}")
+    print(f"Cross-AI bridges: {'OK' if bridges_ok else 'MISSING'}")
     if missing:
         print("Missing skills: " + ", ".join(missing))
     if stale:
         print("Installed but no longer detected: " + ", ".join(stale))
-    if not missing and agent_files and cfg and (project/'.agent-core/index/project-profile.json').exists():
+    if not missing and agent_files and cfg and bridges_ok and (project/'.agent-core/index/project-profile.json').exists():
         print("Status: HEALTHY")
         return 0
     print("Status: NEEDS ATTENTION")
@@ -370,6 +378,13 @@ def add_skill(project, skill):
     return 0
 
 
+def setup_graphify(project):
+    script = PACK / "rules" / "graphify-setup.py"
+    return subprocess.run([
+        sys.executable, str(script), "--project", str(Path(project).resolve()), "--yes"
+    ], check=False).returncode
+
+
 def main():
     parser = argparse.ArgumentParser(description="Web Development Agent Kit")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -382,6 +397,9 @@ def main():
     p.add_argument("project", nargs="?", default=".")
     p.add_argument("--force-agents", action="store_true",
                    help="Overwrite existing AGENTS.md instead of writing AGENTS.web-kit.md")
+
+    p = sub.add_parser("graphify")
+    p.add_argument("project", nargs="?", default=".")
 
     sub.add_parser("catalog")
     p = sub.add_parser("add-skill")
@@ -399,6 +417,8 @@ def main():
         install(project, False)
     elif args.command == "doctor":
         raise SystemExit(doctor(project))
+    elif args.command == "graphify":
+        raise SystemExit(setup_graphify(project))
     elif args.command == "catalog":
         show_catalog()
     elif args.command == "add-skill":
