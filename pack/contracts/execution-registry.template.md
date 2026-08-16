@@ -1,11 +1,15 @@
 # Execution Registry
 
-Plan status: DRAFT
-Plan version: 1
+**Plan status:** DRAFT | APPROVED | LOCKED | REVISION_REQUIRED  
+**Plan version:** 1  
+**Original task ID:** ...  
+**Intent Contract:** path/reference ...
+
+No application/infrastructure implementation may begin until every required step is approved and the plan status is `LOCKED`.
 
 ## STEP-001
 
-**Action:**  
+**Action / objective:**  
 ...
 
 **Repository evidence:**  
@@ -14,7 +18,7 @@ Plan version: 1
 **Why needed:**  
 ...
 
-**Expected files/components:**  
+**Expected files/components/symbols:**  
 - ...
 
 **Dependencies:**  
@@ -25,7 +29,40 @@ Plan version: 1
 
 **Risk:** LOW | MEDIUM | HIGH
 
-**Validation:**  
+**Validation required:**  
 - ...
 
-**Plan Validator:** PENDING
+**Expected downstream handoff / contract:**  
+- ...
+
+**Plan Validator status:** PENDING | APPROVED | REVISE | REJECTED | UNNECESSARY | MISSING_DEPENDENCY
+
+**Handoff Validator status:** NOT_STARTED | PENDING | PASS | FAIL
+
+---
+
+## Plan Lock
+
+**Locked plan version:** ...  
+**Locked by Captain after Plan Validator approval:** YES | NO  
+**Lock notes:** ...
+
+---
+
+## Plan Delta Template
+
+Use this section only when new repository evidence materially invalidates the locked plan.
+
+**Delta ID:** DELTA-001  
+**Base plan version:** ...  
+**New evidence:**  
+- `path/symbol` — ...
+
+**Affected step(s):**  
+- ...
+
+**Requested change:** ADD | MODIFY | REMOVE  
+**Reason:** ...  
+**New/changed validation:** ...  
+**Plan Validator status:** PENDING | APPROVED | REVISE | REJECTED  
+**New locked plan version after approval:** ...
