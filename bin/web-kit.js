@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,33 +14,41 @@ const VERSION = packageJson.version;
 const DEFAULT_REPO = "iHGEN/Web-Development-Agent-Kit";
 const DEFAULT_REF = `v${VERSION}`;
 const bootstrap = join(__dirname, "..", "bootstrap", "remote-install.py");
-const rawArgs = process.argv.slice(2);
-
-const ACTIONS = new Set(["install", "update", "doctor", "scan"]);
+const COMMANDS = new Set(["install", "update", "doctor", "scan"]);
 
 function printHelp() {
   console.log(`
 iHGEN Web Development Agent Kit
 
-Usage:
+Smart usage:
   npx @ihgen/web-kit
+
+Bare execution is idempotent:
+  - not installed  -> install
+  - older version  -> update
+  - same version   -> doctor / health check
+  - newer version  -> never downgrade; doctor the installed kit
+
+Explicit commands:
   npx @ihgen/web-kit install
   npx @ihgen/web-kit update
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan
 
-Options passed through to the remote runner:
+Options:
   --project <path>       Target project. Defaults to current directory.
   --ref <git-ref>        Override GitHub tag/branch/commit.
   --repo <owner/repo>    Override source repository.
   --source <zip-url>     Use a direct ZIP source instead of GitHub.
   --sha256 <hash>        Verify downloaded archive.
-  --force-agents         Replace an existing non-managed AGENTS.md during install.
+  --force-agents         Replace a non-managed AGENTS.md during explicit install.
+  --allow-downgrade      Explicitly permit install/update to an older semantic version.
 
 Examples:
   npx @ihgen/web-kit
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan --project ../my-app
+  npx @ihgen/web-kit update
   npx @ihgen/web-kit install --ref main
 
 Package version: ${VERSION}
@@ -48,8 +56,54 @@ Default GitHub ref: ${DEFAULT_REF}
 `);
 }
 
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function getOption(args, name) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === name) {
+      return args[i + 1] ?? null;
+    }
+    if (arg.startsWith(`${name}=`)) {
+      return arg.slice(name.length + 1);
+    }
+  }
+  return null;
+}
+
 function hasOption(args, name) {
-  return args.some((arg, i) => arg === name || arg.startsWith(`${name}=`));
+  return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+function removeFlag(args, name) {
+  return args.filter((arg) => arg !== name);
+}
+
+function parseSemver(value) {
+  const match = String(value ?? "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(a, b) {
+  const av = parseSemver(a);
+  const bv = parseSemver(b);
+  if (!av || !bv) return null;
+  for (let i = 0; i < 3; i += 1) {
+    if (av[i] < bv[i]) return -1;
+    if (av[i] > bv[i]) return 1;
+  }
+  return 0;
+}
+
+function versionFromRef(ref) {
+  return parseSemver(ref) ? String(ref).replace(/^v/, "") : null;
 }
 
 function findPython() {
@@ -68,14 +122,14 @@ function findPython() {
     const result = spawnSync(command, [...prefix, "--version"], {
       stdio: "ignore"
     });
-
     if (!result.error && result.status === 0) {
       return { command, prefix };
     }
   }
-
   return null;
 }
+
+const rawArgs = process.argv.slice(2);
 
 if (rawArgs.includes("--help") || rawArgs.includes("-h") || rawArgs[0] === "help") {
   printHelp();
@@ -87,24 +141,128 @@ if (rawArgs.includes("--version") || rawArgs.includes("-v")) {
   process.exit(0);
 }
 
-const args = [...rawArgs];
-let action = "install";
-if (args.length > 0 && ACTIONS.has(args[0])) {
-  action = args.shift();
+let args = [...rawArgs];
+let explicitAction = null;
+if (args.length > 0 && COMMANDS.has(args[0])) {
+  explicitAction = args.shift();
 }
 
-if (args.length > 0 && !args[0].startsWith("-") && !ACTIONS.has(args[0])) {
+if (args.length > 0 && !args[0].startsWith("-") && !COMMANDS.has(args[0])) {
   console.error(`Unknown command: ${args[0]}`);
   printHelp();
   process.exit(2);
 }
 
+const allowDowngrade = hasOption(args, "--allow-downgrade");
+args = removeFlag(args, "--allow-downgrade");
+
+const projectOption = getOption(args, "--project");
+const projectPath = resolve(projectOption || process.cwd());
+const configPath = join(projectPath, ".agent-kit.json");
+const sourcePath = join(projectPath, ".agent-kit-source.json");
+const projectConfig = existsSync(configPath) ? readJson(configPath) : {};
+const sourceConfig = existsSync(sourcePath) ? readJson(sourcePath) : {};
+
+const installed = projectConfig.kit === "web-dev-agent-kit";
+const installedVersion = installed && typeof projectConfig.version === "string"
+  ? projectConfig.version
+  : null;
+
+const customRef = getOption(args, "--ref");
+const customRepo = getOption(args, "--repo");
+const customSource = getOption(args, "--source");
+const customSelection = Boolean(customRef || customRepo || customSource);
+const requestedVersion = customSource
+  ? null
+  : versionFromRef(customRef || DEFAULT_REF);
+
+let action = explicitAction;
+let smartReason = "Explicit command requested.";
+let useSavedSource = false;
+let newerProjectWarning = false;
+
+if (!action) {
+  if (!installed) {
+    action = "install";
+    smartReason = "Web Kit is not installed in this project.";
+  } else if (customSelection) {
+    const comparison = requestedVersion && installedVersion
+      ? compareSemver(installedVersion, requestedVersion)
+      : null;
+
+    if (comparison !== null && comparison > 0 && !allowDowngrade) {
+      console.error(`\nRefusing downgrade.\nInstalled Web Kit: ${installedVersion}\nRequested Web Kit: ${requestedVersion}\n\nUse --allow-downgrade only if you intentionally want to downgrade.\n`);
+      process.exit(3);
+    }
+
+    if (comparison === 0) {
+      action = "doctor";
+      smartReason = "Selected version is already installed; running health check.";
+    } else {
+      action = "update";
+      smartReason = "Custom source/ref selected for an existing installation; refreshing the managed kit.";
+    }
+  } else if (installedVersion) {
+    const comparison = compareSemver(installedVersion, VERSION);
+
+    if (comparison === -1) {
+      action = "update";
+      smartReason = `Installed Web Kit ${installedVersion} is older than npm CLI ${VERSION}.`;
+    } else if (comparison === 0) {
+      action = "doctor";
+      useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
+      smartReason = `Web Kit ${VERSION} is already installed; running health check.`;
+    } else if (comparison === 1) {
+      action = "doctor";
+      useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
+      newerProjectWarning = true;
+      smartReason = `Project Web Kit ${installedVersion} is newer than npm CLI ${VERSION}; no downgrade will be performed.`;
+    } else {
+      action = "doctor";
+      useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
+      smartReason = "Installed Web Kit version could not be compared safely; running health check without changing it.";
+    }
+  } else {
+    action = "doctor";
+    useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
+    smartReason = "Web Kit markers exist but the installed version is unknown; running health check without changing it.";
+  }
+}
+
+// Protect explicit install/update from accidental semantic-version downgrades too.
+if (
+  installed &&
+  installedVersion &&
+  (action === "install" || action === "update") &&
+  requestedVersion
+) {
+  const comparison = compareSemver(installedVersion, requestedVersion);
+  if (comparison !== null && comparison > 0 && !allowDowngrade) {
+    console.error(`\nRefusing downgrade.\nInstalled Web Kit: ${installedVersion}\nRequested Web Kit: ${requestedVersion}\n\nUse --allow-downgrade only if you intentionally want to downgrade.\n`);
+    process.exit(3);
+  }
+}
+
+if (newerProjectWarning && !useSavedSource) {
+  console.log(`\n⚠ Project Web Kit ${installedVersion} is newer than this npm CLI (${VERSION}).\nNo downgrade was performed. The project has no remembered Web Kit source, so an automatic doctor run cannot safely load the newer kit.\n`);
+  process.exit(0);
+}
+
+// Explicit doctor/scan on an installed project should normally inspect the installed kit version,
+// unless the caller selected a source/ref deliberately.
+if (
+  explicitAction &&
+  installed &&
+  !customSelection &&
+  (action === "doctor" || action === "scan") &&
+  (sourceConfig.source || sourceConfig.repo)
+) {
+  useSavedSource = true;
+}
+
 const python = findPython();
 if (!python) {
-  console.error(`
-Python 3 is required by the Web Development Agent Kit bootstrapper.
-Install Python 3 and run the command again.
-`);
+  console.error(`\nPython 3 is required by the Web Development Agent Kit bootstrapper.\nInstall Python 3 and run the command again.\n`);
   process.exit(1);
 }
 
@@ -115,30 +273,29 @@ const runnerArgs = [
   action
 ];
 
-if (!hasOption(args, "--repo") && !hasOption(args, "--source")) {
-  runnerArgs.push("--repo", DEFAULT_REPO);
-}
+if (!useSavedSource) {
+  if (!hasOption(args, "--repo") && !hasOption(args, "--source")) {
+    runnerArgs.push("--repo", DEFAULT_REPO);
+  }
 
-if (!hasOption(args, "--ref") && !hasOption(args, "--source")) {
-  runnerArgs.push("--ref", DEFAULT_REF);
+  if (!hasOption(args, "--ref") && !hasOption(args, "--source")) {
+    runnerArgs.push("--ref", DEFAULT_REF);
+  }
 }
 
 if (!hasOption(args, "--project")) {
-  runnerArgs.push("--project", process.cwd());
+  runnerArgs.push("--project", projectPath);
 }
 
 runnerArgs.push(...args);
 
-console.log(`
-╔════════════════════════════════════════╗
-║     iHGEN Web Development Agent Kit   ║
-╚════════════════════════════════════════╝
+const sourceLabel = useSavedSource
+  ? `remembered project source (${sourceConfig.ref || sourceConfig.source || sourceConfig.repo || "installed version"})`
+  : customSource
+    ? "custom ZIP source"
+    : `${customRepo || DEFAULT_REPO}@${customRef || DEFAULT_REF}`;
 
-Action:  ${action}
-Version: ${VERSION}
-Project: ${hasOption(args, "--project") ? "custom --project path" : process.cwd()}
-Source:  ${hasOption(args, "--source") ? "custom ZIP source" : `${DEFAULT_REPO}@${hasOption(args, "--ref") ? "custom ref" : DEFAULT_REF}`}
-`);
+console.log(`\n╔════════════════════════════════════════╗\n║     iHGEN Web Development Agent Kit   ║\n╚════════════════════════════════════════╝\n\nMode:      ${explicitAction ? "explicit" : "smart"}\nDecision:  ${action}\nReason:    ${smartReason}\nCLI:       ${VERSION}\nInstalled: ${installedVersion || "not installed"}\nProject:   ${projectPath}\nSource:    ${sourceLabel}\n`);
 
 const result = spawnSync(python.command, runnerArgs, {
   stdio: "inherit"
@@ -153,10 +310,10 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-if (action === "install" || action === "update") {
-  console.log(`
-✓ Web Development Agent Kit ${action === "install" ? "installed" : "updated"}.
-✓ Project-aware AGENTS context generated.
-✓ Agents, routing, validators, and detected skills are ready.
-`);
+if (action === "install") {
+  console.log(`\n✓ Web Development Agent Kit installed.\n✓ Project-aware AGENTS context generated.\n✓ Agents, routing, validators, and detected skills are ready.\n`);
+} else if (action === "update") {
+  console.log(`\n✓ Web Development Agent Kit updated/refreshed.\n✓ Project discovery and managed AGENTS context regenerated.\n✓ Detected skills and managed agent files are synchronized.\n`);
+} else if (action === "doctor") {
+  console.log(`\n✓ Web Development Agent Kit health check completed.\n✓ No automatic downgrade was performed.\n`);
 }
