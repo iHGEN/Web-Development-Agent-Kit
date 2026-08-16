@@ -45,12 +45,6 @@ with tempfile.TemporaryDirectory(prefix="web-kit-extract-") as td:
     if force: cmd.append(force)
     subprocess.check_call(cmd)
 
-    profile=kit/"scripts"/"project_profile.py"
-    if not profile.exists(): raise SystemExit("project_profile.py not found")
-    profile_cmd=[sys.executable,str(profile),str(project)]
-    if force: profile_cmd.append("--force-agents")
-    subprocess.check_call(profile_cmd)
-
     (project/".agent-kit-source.json").write_text(json.dumps({"repo":repo or None,"ref":ref or None,"source":url},indent=2),encoding="utf-8")
     remote=kit/"bootstrap"/"remote-install.py"
     if remote.exists():
