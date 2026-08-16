@@ -4,6 +4,21 @@
 
 Deliver the user's requested web change correctly with the **smallest necessary scope, team, context, and technology knowledge**.
 
+## Generated project context
+
+On installation, the Web Kit prepends a generated **Project Agent Context** above this canonical template.
+
+The Captain and routing agents MUST read that generated project context first. It contains the project name, detected technology groups, shallow repository structure, important manifests/configuration, test roots, and migration/data roots.
+
+Rules:
+
+- Treat the generated project context as a lightweight routing map, not as permission to read the whole repository.
+- Use it to choose likely agents, skills, and feature entry points before targeted discovery.
+- Verify exact ownership and behavior from repository evidence before implementation.
+- Prefer project-specific conventions discovered from the code over generic framework assumptions.
+- The machine-readable profile is stored at `.agent-core/index/project-profile.json`.
+- If the project structure or stack changes materially, regenerate/update the Web Kit project profile.
+
 ## Canonical workflow authority
 
 `pack/rules/workflow.md` is the single authoritative lifecycle for this kit.
