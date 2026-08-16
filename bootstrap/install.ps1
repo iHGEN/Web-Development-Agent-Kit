@@ -32,17 +32,10 @@ try {
   & python @args
   if ($LASTEXITCODE -ne 0) { throw "Agent Kit installer failed" }
 
-  $kitRoot=Split-Path -Parent (Split-Path -Parent $cli.FullName)
-  $profile=Join-Path $kitRoot "scripts\project_profile.py"
-  if (-not (Test-Path $profile)) { throw "project_profile.py not found" }
-  $profileArgs=@($profile,$target)
-  if ($ForceAgents) {$profileArgs+="--force-agents"}
-  & python @profileArgs
-  if ($LASTEXITCODE -ne 0) { throw "Project profile generation failed" }
-
   @{repo=$Repo;ref=$Ref;source=$Source} | ConvertTo-Json |
     Set-Content -Encoding UTF8 (Join-Path $target ".agent-kit-source.json")
 
+  $kitRoot=Split-Path -Parent (Split-Path -Parent $cli.FullName)
   $remote=Join-Path $kitRoot "bootstrap\remote-install.py"
   if (Test-Path $remote) {
     $bin=Join-Path $target ".agent-core\bin"
