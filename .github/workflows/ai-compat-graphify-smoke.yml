@@ -1,0 +1,136 @@
+name: AI Compatibility + Graphify Smoke
+
+on:
+  push:
+    paths:
+      - "bin/**"
+      - "scripts/**"
+      - "pack/rules/**"
+      - "AGENTS.template.md"
+      - ".github/workflows/ai-compat-graphify-smoke.yml"
+  pull_request:
+    paths:
+      - "bin/**"
+      - "scripts/**"
+      - "pack/rules/**"
+      - "AGENTS.template.md"
+      - ".github/workflows/ai-compat-graphify-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create sample project with existing assistant instructions
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          mkdir -p "$SAMPLE/src"
+          cat > "$SAMPLE/package.json" <<'JSON'
+          {"name":"web-kit-ai-sample","dependencies":{"react":"^19.0.0"}}
+          JSON
+          echo 'export const value = 1;' > "$SAMPLE/src/index.ts"
+          echo '# Existing Claude instructions' > "$SAMPLE/CLAUDE.md"
+          echo '# Existing Gemini instructions' > "$SAMPLE/GEMINI.md"
+
+      - name: Install Web Kit and verify cross-AI bridges
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          python scripts/agent-kit.py install "$SAMPLE"
+
+          test -f "$SAMPLE/AGENTS.md"
+          test -f "$SAMPLE/CLAUDE.md"
+          test -f "$SAMPLE/GEMINI.md"
+          test -f "$SAMPLE/.github/copilot-instructions.md"
+          test -f "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
+          test -f "$SAMPLE/.agent-core/rules/ai-compatibility.md"
+          test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
+
+          grep -q 'Existing Claude instructions' "$SAMPLE/CLAUDE.md"
+          grep -q 'Existing Gemini instructions' "$SAMPLE/GEMINI.md"
+          grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/CLAUDE.md"
+          grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/GEMINI.md"
+          grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/.github/copilot-instructions.md"
+          grep -q 'alwaysApply: true' "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          cfg = json.loads((sample / '.agent-kit.json').read_text())
+          compat = cfg['ai_compatibility']
+          assert 'codex' in compat['native_agents_md']
+          assert 'kimi' in compat['native_agents_md']
+          assert compat['managed_bridges']['claude'] == 'CLAUDE.md'
+          assert compat['managed_bridges']['gemini'] == 'GEMINI.md'
+          PY
+
+      - name: Verify Graphify setup is opt-in and project-local
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          MOCKBIN="$RUNNER_TEMP/mockbin"
+          LOG="$RUNNER_TEMP/graphify.log"
+          mkdir -p "$MOCKBIN"
+          cat > "$MOCKBIN/graphify" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "$*" >> "$GRAPHIFY_TEST_LOG"
+          if [[ "${1:-}" == "--version" ]]; then
+            echo 'graphify test'
+          fi
+          exit 0
+          SH
+          chmod +x "$MOCKBIN/graphify"
+
+          export PATH="$MOCKBIN:$PATH"
+          export GRAPHIFY_TEST_LOG="$LOG"
+
+          python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --yes
+          grep -q '^install --project$' "$LOG"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          state = json.loads((sample / '.agent-core/state/graphify-install.json').read_text())
+          assert state['installed'] is True
+          assert state['configured'] is True
+          assert state['initial_graph_required'] is True
+          PY
+
+      - name: Verify npm graphify command routes through Web Kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          MOCKBIN="$RUNNER_TEMP/mockbin"
+          LOG="$RUNNER_TEMP/graphify-npx.log"
+          export PATH="$MOCKBIN:$PATH"
+          export GRAPHIFY_TEST_LOG="$LOG"
+          : > "$LOG"
+
+          node bin/web-kit.js graphify --ref main --project "$SAMPLE"
+          grep -q '^install --project$' "$LOG"
