@@ -1,0 +1,108 @@
+name: npm CLI Smoke
+
+on:
+  push:
+    paths:
+      - "package.json"
+      - "bin/**"
+      - "bootstrap/**"
+      - "scripts/**"
+      - "pack/router/**"
+      - "AGENTS.template.md"
+      - ".github/workflows/npm-cli-smoke.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "bin/**"
+      - "bootstrap/**"
+      - "scripts/**"
+      - "pack/router/**"
+      - "AGENTS.template.md"
+      - ".github/workflows/npm-cli-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate npm package contents
+        run: npm pack --dry-run
+
+      - name: Build npm tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARBALL="$(npm pack --silent)"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "Packed $TARBALL"
+
+      - name: Create sample web project
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          mkdir -p "$SAMPLE/src"
+          cat > "$SAMPLE/package.json" <<'JSON'
+          {
+            "name": "web-kit-smoke-app",
+            "dependencies": {
+              "react": "^19.0.0"
+            },
+            "devDependencies": {
+              "typescript": "^5.0.0"
+            }
+          }
+          JSON
+          echo '{}' > "$SAMPLE/tsconfig.json"
+          echo 'export const App = () => null;' > "$SAMPLE/src/App.tsx"
+
+      - name: Test packaged CLI scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes "./${{ steps.pack.outputs.tarball }}" scan \
+            --ref main \
+            --project "$RUNNER_TEMP/web-kit-sample"
+
+      - name: Test packaged CLI install
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes "./${{ steps.pack.outputs.tarball }}" install \
+            --ref main \
+            --project "$RUNNER_TEMP/web-kit-sample"
+
+          test -f "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+          test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit.json"
+          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/index/project-profile.json"
+          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/bin/remote-install.py"
+
+          grep -q "web-kit-smoke-app" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+          grep -q "Project Agent Context" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+
+      - name: Test packaged CLI doctor
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes "./${{ steps.pack.outputs.tarball }}" doctor \
+            --ref main \
+            --project "$RUNNER_TEMP/web-kit-sample"
