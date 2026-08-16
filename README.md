@@ -1,143 +1,125 @@
 # Web Development Agent Kit
 
-A web-only multi-agent engineering kit with strict intent preservation, targeted discovery, independent plan/handoff validation, automatic project skill detection, on-demand skill activation, DevOps routing, and context/token optimization.
+A web-only multi-agent engineering kit with strict intent preservation, targeted discovery, independent plan/handoff validation, automatic project skill detection, project-aware `AGENTS.md` generation, DevOps routing, and context/token optimization.
 
 ## Core principle
 
 The agent team is stable. Technology/framework/database/DevOps expertise lives in skills.
 
-A large catalog is safe because **available != installed != active**. Each task receives only the agents, skills, files, symbols, contracts, and validation context it actually needs.
+A large catalog is safe because:
+
+```text
+available != installed != active
+```
+
+Each task receives only the agents, skills, files, symbols, contracts, and validation context it actually needs.
+
+## Project-aware installation
+
+Starting with `v1.1.2`, installation discovers the target project before finalizing `AGENTS.md`.
+
+The installer generates a lightweight project profile containing:
+
+- project name;
+- project directory;
+- detected technology groups;
+- shallow repository structure;
+- important manifests/build files;
+- important configuration files;
+- test roots;
+- migration/data-change roots.
+
+The resulting `AGENTS.md` is organized like this:
+
+```text
+Project Agent Context — <project name>
+├── Project Identity
+├── Detected Technology Stack
+├── Shallow Project Structure
+├── Manifests / Configuration
+├── Test Roots
+├── Migration / Data Roots
+└── Project-aware Routing Rules
+
+Web Development Agent Kit
+├── Canonical Workflow
+├── Context / Token Rules
+├── Maintainability Contract
+├── Web Agent Team
+├── DevOps Agent Team
+└── Skill Policy
+```
+
+The machine-readable copy is stored at:
+
+```text
+.agent-core/index/project-profile.json
+```
+
+The generated structure is routing metadata only. It never gives agents permission to read the whole repository.
+
+See `docs/PROJECT_AWARE_AGENTS.md`.
 
 ## Canonical workflow
 
 `pack/rules/workflow.md` is the single authoritative lifecycle.
 
 ```text
-                           USER
-                            │
-                            ▼
-                ┌─────────────────────┐
-                │ WEB ORCHESTRATOR    │
-                │      CAPTAIN        │
-                └──────────┬──────────┘
-                           │
-              Record original prompt verbatim
-                           │
-                           ▼
-                    CLASSIFY TASK
-                Small / Medium / Large
-                           │
-                           ▼
-                ┌─────────────────────┐
-                │ REPOSITORY INDEXER  │
-                └──────────┬──────────┘
-                           │
-                  Structure only first
-                           │
-                           ▼
-                ┌─────────────────────┐
-                │ CONTEXT ROUTER      │
-                │ TOKEN GOVERNOR      │
-                └──────────┬──────────┘
-                           │
-                 Minimal discovery context
-                           │
-                           ▼
-                ┌─────────────────────┐
-                │ INTENT + DISCOVERY  │
-                └──────────┬──────────┘
-                           │
-             Clarify WITHOUT changing meaning
-                           │
-                           ▼
-                    INTENT CONTRACT
-                           │
-                           ▼
-                  READ-ONLY DISCOVERY
-                           │
-              Existing code / dependencies /
-             tests / APIs / ownership / config /
-                framework-native capabilities
-                           │
-                           ▼
-                     IMPACT MAP
-                           │
-                           ▼
-                IMPLEMENTATION DESIGN
-                           │
-                           ▼
-                ┌─────────────────────┐
-                │ EXECUTION REGISTRY  │
-                └──────────┬──────────┘
-                           │
-              Register every planned code step
-                           │
-                           ▼
-                ┌─────────────────────┐
-                │   PLAN VALIDATOR    │
-                └──────────┬──────────┘
-                           │
-             ┌─────────────┴─────────────┐
-             │                           │
-           FAIL                         PASS
-             │                           │
-             ▼                           ▼
-       Revise the plan                LOCK PLAN
-             │                           │
-             └──────────────►────────────┘
-                                         │
-                                         ▼
-                              CONTEXT ROUTER AGAIN
-                                         │
-                         One approved step + one worker
-                         + relevant skills/context only
-                                         │
-                                         ▼
-                               IMPLEMENT STEP 1
-                                         │
-                                         ▼
-                              HANDOFF VALIDATOR
-                                         │
-                      ┌──────────────────┴─────────────┐
-                      │                                │
-                    FAIL                              PASS
-                      │                                │
-                      ▼                                ▼
-              Return to worker                 ROUTE NEXT STEP
-                      │                                │
-                      └──────────────►─────────────────┘
-                                                       │
-                                             repeat every step
-                                                       │
-                                                       ▼
-                                           ALL PLAN STEPS PASS
-                                                       │
-                                                       ▼
-                                          ┌──────────────────┐
-                                          │ CODE SIMPLIFIER  │
-                                          └────────┬─────────┘
-                                                   │
-                                                   ▼
-                                            RUN TESTS AGAIN
-                                                   │
-                                                   ▼
-                                      SPECIALIZED VALIDATION
-                                                   │
-                 Test / Security / Code / Performance / Accessibility /
-                   Bug Hunter / API Contract / DevSecOps / SRE as relevant
-                                                   │
-                                                   ▼
-                                   FINAL INTEGRATION VALIDATOR
-                                                   │
-                                    ┌──────────────┴──────────────┐
-                                    │                             │
-                                  FAIL                           PASS
-                                    │                             │
-                                    ▼                             ▼
-                       Route failure to owning agent          CAPTAIN
-                       → fix → Handoff Validator                  │
-                       → affected reviews only                    ▼
-                       → Final Validator again                   DONE
+USER
+  ↓
+CAPTAIN
+  ↓
+Record original prompt verbatim
+  ↓
+Classify Small / Medium / Large
+  ↓
+Read generated Project Profile
+  ↓
+Repository Indexer
+  ↓
+Context Router / Token Governor
+  ↓
+Intent Contract + Read-only Discovery
+  ↓
+Impact Map
+  ↓
+Implementation Design
+  ↓
+Execution Registry
+  ↓
+Plan Validator
+  ├─ FAIL → revise → validate again
+  └─ PASS
+       ↓
+    LOCK PLAN
+       ↓
+Context Router again
+       ↓
+One approved step + one selected worker + relevant skills only
+       ↓
+Implement step
+       ↓
+Handoff Validator
+  ├─ FAIL → responsible worker → revalidate
+  └─ PASS → next registered step
+       ↓
+Repeat every approved step
+       ↓
+All plan steps pass
+       ↓
+Code Simplifier
+       ↓
+Run affected tests again
+       ↓
+Relevant specialist validation
+       ↓
+Final Integration Validator
+  ├─ FAIL → owning agent → fix → handoff validation → affected reviews
+  └─ PASS
+       ↓
+CAPTAIN
+       ↓
+DONE
 ```
 
 ### Plan Delta rule
@@ -146,45 +128,40 @@ If implementation discovers evidence that materially invalidates the locked plan
 
 ```text
 STOP affected step
-  -> record new evidence
-  -> propose Plan Delta
-  -> independent Plan Validator
-  -> relock new plan version
-  -> route fresh context
-  -> continue
+  → record new evidence
+  → propose Plan Delta
+  → independent Plan Validator
+  → relock new plan version
+  → route fresh context
+  → continue
 ```
 
 No silent improvisation outside the locked plan.
 
 ## Continuous context/token routing
 
-The Context Router / Token Governor runs throughout the lifecycle, not just once.
+The Context Router / Token Governor runs throughout the lifecycle.
 
-- Before discovery: route only index facts, likely entry points, and discovery skills.
-- Before each implementation step: route only that approved step, relevant symbols/contracts, and relevant skills.
-- On context expansion: require the exact path/symbol/contract and the decision it will unblock.
-- After implementation: validators work diff-first.
-- During failure recovery: route only failure-specific context.
-- Reuse compact evidence-linked summaries instead of repeatedly rereading unchanged source.
-
-Preferred read order:
+Preferred read progression:
 
 ```text
-index -> targeted search -> symbol/range -> full file only when needed -> evidence-backed expansion
+project profile
+  → repository index
+  → targeted search
+  → symbol/range
+  → full file only when needed
+  → evidence-backed dependency expansion
 ```
 
-Token optimization never overrides correctness, security, or user intent.
+Rules:
 
-## What gets installed
-
-On installation the kit copies only:
-- baseline web skills;
-- strong statically detected project skills;
-- complete skill catalog metadata, not every skill body;
-- the agent team;
-- routing, context, workflow, contracts, and validation rules.
-
-Additional catalog skills can be activated on demand.
+- no unrestricted repository reads by default;
+- installed skill does not mean active skill;
+- compact evidence-linked findings instead of full prior transcripts;
+- fresh context packet per approved implementation step;
+- diff-first handoff/review validation;
+- failure-specific context during recovery;
+- token optimization never overrides correctness, security, or user intent.
 
 ## Main commands
 
@@ -196,6 +173,8 @@ python scripts/agent-kit.py update /path/to/project
 python scripts/agent-kit.py catalog
 python scripts/agent-kit.py add-skill /path/to/project <skill-name>
 ```
+
+Install/update regenerates the managed project profile and project-aware `AGENTS.md`.
 
 ## Agent groups
 
@@ -247,27 +226,27 @@ python scripts/agent-kit.py add-skill /path/to/project <skill-name>
 
 ## Skill library
 
-The central catalog covers web core, languages, frontend/backend frameworks, APIs/realtime, authentication/authorization, security, databases/ORMs, distributed systems/jobs, storage/media, testing, observability/performance, DevOps/delivery, package management, architecture patterns, and external integrations.
+The central catalog covers:
 
-The key rule remains:
+- web core and maintainability;
+- TypeScript/JavaScript/C#/PHP and other languages;
+- React/Next/Vue and frontend engineering;
+- ASP.NET Core/Laravel and backend frameworks;
+- APIs/realtime;
+- auth/security;
+- databases/ORMs;
+- distributed systems/jobs;
+- storage/media;
+- testing;
+- performance/observability;
+- Docker/CI/CD/cloud/Kubernetes/IaC/SRE/DevSecOps;
+- packages, architecture patterns, and integrations.
 
-```text
-large central catalog
-        ↓
-project detection
-        ↓
-small installed project subset
-        ↓
-current task
-        ↓
-Context Router
-        ↓
-small active skill subset for one agent
-```
+The skill router installs and activates only the relevant subset.
 
 ## Remote installation
 
-### Current `main` — includes the canonical workflow update now
+### Current main
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
@@ -277,13 +256,13 @@ curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/mai
       --project .
 ```
 
-### Recommended stable command after you create tag `v1.1.1`
+### Recommended stable install after creating `v1.1.2`
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.1/bootstrap/install.sh \
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.2/bootstrap/install.sh \
   | bash -s -- \
       --repo iHGEN/Web-Development-Agent-Kit \
-      --ref v1.1.1 \
+      --ref v1.1.2 \
       --project .
 ```
 
