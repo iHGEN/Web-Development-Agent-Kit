@@ -111,11 +111,13 @@ jobs:
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit-source.json"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/index/project-profile.json"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/rules/workflow.md"
+          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/rules/graphify-refresh.py"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/bin/remote-install.py"
 
           grep -q "web-kit-smoke-app" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
           grep -q "Project Agent Context" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
           grep -q ".agent-core/rules/workflow.md" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+          grep -q "Graph Refresh Gate" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
 
           python - <<'PY'
           import json, os
@@ -178,7 +180,65 @@ jobs:
 
           grep -q "Routing mode.*graphify-assisted" "$SAMPLE/AGENTS.md"
           grep -q "Graphify-assisted branch" "$SAMPLE/.agent-core/rules/workflow.md"
-          grep -q "Graphify-assisted mode" "$SAMPLE/.agent-core/agents/context-router.md"
+          grep -q "Graph Refresh Gate" "$SAMPLE/.agent-core/rules/workflow.md"
+          grep -q "Post-step Graph Refresh Gate" "$SAMPLE/.agent-core/agents/context-router.md"
+
+      - name: Test Graphify freshness gate refreshes once per changed state
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          MOCK_BIN="$RUNNER_TEMP/mock-bin"
+          LOG="$RUNNER_TEMP/graphify-calls.log"
+          mkdir -p "$MOCK_BIN"
+          : > "$LOG"
+
+          cat > "$MOCK_BIN/graphify" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "$*" >> "$GRAPHIFY_TEST_LOG"
+          if [ "${GRAPHIFY_MOCK_FAIL:-0}" = "1" ]; then
+            exit 9
+          fi
+          exit 0
+          SH
+          chmod +x "$MOCK_BIN/graphify"
+
+          GATE="$SAMPLE/.agent-core/rules/graphify-refresh.py"
+
+          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
+            python "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(wc -l < "$LOG")" -eq 1
+          grep -q '^update \.$' "$LOG"
+
+          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
+            python "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(wc -l < "$LOG")" -eq 1
+
+          echo 'export const App = () => "changed";' > "$SAMPLE/src/App.tsx"
+          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
+            python "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(wc -l < "$LOG")" -eq 2
+
+          echo 'export const App = () => "changed-again";' > "$SAMPLE/src/App.tsx"
+          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" GRAPHIFY_MOCK_FAIL=1 \
+            python "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(wc -l < "$LOG")" -eq 3
+
+          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
+            python "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(wc -l < "$LOG")" -eq 3
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample"
+          state = json.loads((sample / ".agent-core/state/graphify.json").read_text())
+          assert state["routing_mode"] == "standard"
+          assert state["fallback_for_task"] is True
+          assert state["fallback_task_id"] == "task-1"
+          assert state["dirty"] is True
+          PY
 
       - name: Test no silent downgrade for newer project
         shell: bash
