@@ -34,6 +34,7 @@ Explicit commands:
   npx @ihgen/web-kit update
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan
+  npx @ihgen/web-kit graphify
 
 Options:
   --project <path>       Target project. Defaults to current directory.
@@ -43,12 +44,17 @@ Options:
   --sha256 <hash>        Verify downloaded archive.
   --force-agents         Replace a non-managed AGENTS.md during explicit install.
   --allow-downgrade      Explicitly permit install/update to an older semantic version.
+  --install-graphify     After Web-Kit setup, install/register optional Graphify support.
+
+Graphify is optional. Without it, Web Kit uses the normal routed-context loop.
+With it and a ready graph, Web Kit uses the Graphify-assisted loop to reduce broad repository reads.
 
 Examples:
   npx @ihgen/web-kit
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan --project ../my-app
-  npx @ihgen/web-kit update
+  npx @ihgen/web-kit update --install-graphify
+  npx @ihgen/web-kit graphify
   npx @ihgen/web-kit install --ref main
 
 Package version: ${VERSION}
@@ -67,12 +73,8 @@ function readJson(path) {
 function getOption(args, name) {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === name) {
-      return args[i + 1] ?? null;
-    }
-    if (arg.startsWith(`${name}=`)) {
-      return arg.slice(name.length + 1);
-    }
+    if (arg === name) return args[i + 1] ?? null;
+    if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1);
   }
   return null;
 }
@@ -108,25 +110,40 @@ function versionFromRef(ref) {
 
 function findPython() {
   const candidates = process.platform === "win32"
-    ? [
-        ["py", ["-3"]],
-        ["python", []],
-        ["python3", []]
-      ]
-    : [
-        ["python3", []],
-        ["python", []]
-      ];
+    ? [["py", ["-3"]], ["python", []], ["python3", []]]
+    : [["python3", []], ["python", []]];
 
   for (const [command, prefix] of candidates) {
-    const result = spawnSync(command, [...prefix, "--version"], {
-      stdio: "ignore"
-    });
-    if (!result.error && result.status === 0) {
-      return { command, prefix };
-    }
+    const result = spawnSync(command, [...prefix, "--version"], { stdio: "ignore" });
+    if (!result.error && result.status === 0) return { command, prefix };
   }
   return null;
+}
+
+function graphifyOnPath() {
+  const result = spawnSync("graphify", ["--version"], { stdio: "ignore" });
+  return !result.error && result.status === 0;
+}
+
+function runGraphifySetup(python, projectPath) {
+  const setup = join(projectPath, ".agent-core", "rules", "graphify-setup.py");
+  if (!existsSync(setup)) {
+    console.error(`Graphify setup helper is missing: ${setup}`);
+    console.error("Run Web Kit update first, then retry `npx @ihgen/web-kit graphify`.");
+    return 1;
+  }
+
+  console.log(`\nOptional Graphify setup\nProject: ${projectPath}\n`);
+  const result = spawnSync(
+    python.command,
+    [...python.prefix, setup, "--project", projectPath, "--yes"],
+    { stdio: "inherit" }
+  );
+  if (result.error) {
+    console.error(`Failed to run Graphify setup: ${result.error.message}`);
+    return 1;
+  }
+  return result.status ?? 1;
 }
 
 const rawArgs = process.argv.slice(2);
@@ -142,6 +159,14 @@ if (rawArgs.includes("--version") || rawArgs.includes("-v")) {
 }
 
 let args = [...rawArgs];
+let graphifyRequested = hasOption(args, "--install-graphify");
+args = removeFlag(args, "--install-graphify");
+
+if (args[0] === "graphify") {
+  graphifyRequested = true;
+  args.shift();
+}
+
 let explicitAction = null;
 if (args.length > 0 && COMMANDS.has(args[0])) {
   explicitAction = args.shift();
@@ -172,19 +197,21 @@ const customRef = getOption(args, "--ref");
 const customRepo = getOption(args, "--repo");
 const customSource = getOption(args, "--source");
 const customSelection = Boolean(customRef || customRepo || customSource);
-const requestedVersion = customSource
-  ? null
-  : versionFromRef(customRef || DEFAULT_REF);
+const requestedVersion = customSource ? null : versionFromRef(customRef || DEFAULT_REF);
 
 let action = explicitAction;
-let smartReason = "Explicit command requested.";
+let smartReason = graphifyRequested
+  ? "Graphify setup requested; first ensuring the project Web Kit is current."
+  : "Explicit command requested.";
 let useSavedSource = false;
 let newerProjectWarning = false;
 
 if (!action) {
   if (!installed) {
     action = "install";
-    smartReason = "Web Kit is not installed in this project.";
+    smartReason = graphifyRequested
+      ? "Web Kit is not installed; installing it before Graphify setup."
+      : "Web Kit is not installed in this project.";
   } else if (customSelection) {
     const comparison = requestedVersion && installedVersion
       ? compareSemver(installedVersion, requestedVersion)
@@ -211,7 +238,9 @@ if (!action) {
     } else if (comparison === 0) {
       action = "doctor";
       useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
-      smartReason = `Web Kit ${VERSION} is already installed; running health check.`;
+      smartReason = graphifyRequested
+        ? `Web Kit ${VERSION} is already installed; checking it before Graphify setup.`
+        : `Web Kit ${VERSION} is already installed; running health check.`;
     } else if (comparison === 1) {
       action = "doctor";
       useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
@@ -229,12 +258,8 @@ if (!action) {
   }
 }
 
-// Protect explicit install/update from accidental semantic-version downgrades too.
 if (
-  installed &&
-  installedVersion &&
-  (action === "install" || action === "update") &&
-  requestedVersion
+  installed && installedVersion && (action === "install" || action === "update") && requestedVersion
 ) {
   const comparison = compareSemver(installedVersion, requestedVersion);
   if (comparison !== null && comparison > 0 && !allowDowngrade) {
@@ -248,12 +273,8 @@ if (newerProjectWarning && !useSavedSource) {
   process.exit(0);
 }
 
-// Explicit doctor/scan on an installed project should normally inspect the installed kit version,
-// unless the caller selected a source/ref deliberately.
 if (
-  explicitAction &&
-  installed &&
-  !customSelection &&
+  explicitAction && installed && !customSelection &&
   (action === "doctor" || action === "scan") &&
   (sourceConfig.source || sourceConfig.repo)
 ) {
@@ -266,27 +287,14 @@ if (!python) {
   process.exit(1);
 }
 
-const runnerArgs = [
-  ...python.prefix,
-  bootstrap,
-  "--action",
-  action
-];
+const runnerArgs = [...python.prefix, bootstrap, "--action", action];
 
 if (!useSavedSource) {
-  if (!hasOption(args, "--repo") && !hasOption(args, "--source")) {
-    runnerArgs.push("--repo", DEFAULT_REPO);
-  }
-
-  if (!hasOption(args, "--ref") && !hasOption(args, "--source")) {
-    runnerArgs.push("--ref", DEFAULT_REF);
-  }
+  if (!hasOption(args, "--repo") && !hasOption(args, "--source")) runnerArgs.push("--repo", DEFAULT_REPO);
+  if (!hasOption(args, "--ref") && !hasOption(args, "--source")) runnerArgs.push("--ref", DEFAULT_REF);
 }
 
-if (!hasOption(args, "--project")) {
-  runnerArgs.push("--project", projectPath);
-}
-
+if (!hasOption(args, "--project")) runnerArgs.push("--project", projectPath);
 runnerArgs.push(...args);
 
 const sourceLabel = useSavedSource
@@ -297,23 +305,25 @@ const sourceLabel = useSavedSource
 
 console.log(`\n╔════════════════════════════════════════╗\n║     iHGEN Web Development Agent Kit   ║\n╚════════════════════════════════════════╝\n\nMode:      ${explicitAction ? "explicit" : "smart"}\nDecision:  ${action}\nReason:    ${smartReason}\nCLI:       ${VERSION}\nInstalled: ${installedVersion || "not installed"}\nProject:   ${projectPath}\nSource:    ${sourceLabel}\n`);
 
-const result = spawnSync(python.command, runnerArgs, {
-  stdio: "inherit"
-});
+const result = spawnSync(python.command, runnerArgs, { stdio: "inherit" });
 
 if (result.error) {
   console.error(`Failed to run Web Kit: ${result.error.message}`);
   process.exit(1);
 }
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
-}
+if (result.status !== 0) process.exit(result.status ?? 1);
 
 if (action === "install") {
-  console.log(`\n✓ Web Development Agent Kit installed.\n✓ Project-aware AGENTS context generated.\n✓ Agents, routing, validators, and detected skills are ready.\n`);
+  console.log(`\n✓ Web Development Agent Kit installed.\n✓ Project-aware instructions and cross-AI bridges generated.\n✓ Agents, routing, validators, and detected skills are ready.\n`);
 } else if (action === "update") {
-  console.log(`\n✓ Web Development Agent Kit updated/refreshed.\n✓ Project discovery and managed AGENTS context regenerated.\n✓ Detected skills and managed agent files are synchronized.\n`);
+  console.log(`\n✓ Web Development Agent Kit updated/refreshed.\n✓ Project discovery, cross-AI bridges, and managed workflow regenerated.\n✓ Detected skills and managed agent files are synchronized.\n`);
 } else if (action === "doctor") {
   console.log(`\n✓ Web Development Agent Kit health check completed.\n✓ No automatic downgrade was performed.\n`);
+}
+
+if (graphifyRequested) {
+  const graphifyStatus = runGraphifySetup(python, projectPath);
+  if (graphifyStatus !== 0) process.exit(graphifyStatus);
+} else if (!graphifyOnPath()) {
+  console.log(`\nOptional token-saving repository graph:\n  Graphify is not installed on PATH. Web Kit will use the normal routed-context loop.\n  To install/register Graphify for this project, run:\n\n    npx @ihgen/web-kit@${VERSION} graphify\n\n  Or combine it with an update:\n\n    npx @ihgen/web-kit@${VERSION} update --install-graphify\n`);
 }
