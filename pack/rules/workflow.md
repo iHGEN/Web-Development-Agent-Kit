@@ -4,6 +4,12 @@ This file is the **single authoritative lifecycle** for the Web Development Agen
 
 Shorter checklists may summarize one phase, but they MUST NOT replace or bypass this workflow.
 
+The lifecycle has two repository-navigation modes:
+- `standard` — the normal lightweight index/search/symbol routing loop;
+- `graphify-assisted` — selected only when the generated project profile reports a ready Graphify project graph, with automatic fallback to `standard` if Graphify tools are unavailable or unsuitable at runtime.
+
+Graphify is a navigation and relationship aid. Current repository source, current diffs, tests, and runtime evidence remain authoritative.
+
 ## Phase 0 — User Intake
 
 **Owner:** Web Orchestrator / Captain
@@ -29,11 +35,13 @@ Classification controls:
 
 Classification does not change user scope.
 
-## Phase 2 — Repository Index
+## Phase 2 — Repository Navigation Mode and Index
 
 **Owner:** Repository Indexer
 
-Build or reuse a lightweight structural repository index.
+Read the generated project profile first, including `capabilities.graphify`.
+
+Always build or reuse the lightweight structural repository index so there is a cheap, deterministic fallback.
 
 Index structure and metadata first:
 - project/package roots;
@@ -47,6 +55,39 @@ Index structure and metadata first:
 
 Do not ingest the whole source tree into agent context.
 
+### Standard branch
+
+Use the standard branch when:
+- Graphify is not detected;
+- Graphify configuration exists but no ready project graph snapshot exists;
+- Graphify graph tools are not available in the current runtime;
+- Graphify fails, is stale/incomplete for the needed decision, or conflicts with source evidence.
+
+Preferred navigation:
+
+`project profile -> repository index -> targeted search -> exact symbol/range -> full file only when needed -> evidence-backed dependency expansion`
+
+### Graphify-assisted branch
+
+When `capabilities.graphify.routing_mode == graphify-assisted`, attempt a narrow Graphify graph call before broad code search.
+
+Use Graphify only to reduce repository exploration, for example to:
+- locate feature owners and likely entry symbols;
+- inspect direct callers/callees/neighbors;
+- trace a relationship path between relevant concepts;
+- identify a small affected relationship/community slice;
+- map changed symbols to nearby contracts during validation.
+
+Do not load the complete Graphify graph into context.
+
+Before planning, editing, or asserting behavior, verify the relevant exact source symbol/range. Graph relationships are routing evidence, not behavioral proof.
+
+If the first Graphify attempt for the task cannot run or cannot answer the routing question safely, record a task-local fallback and continue with the standard branch. Do not repeatedly retry a missing/broken Graphify capability.
+
+Preferred Graphify navigation:
+
+`project profile -> Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search for gaps -> full file only when needed -> evidence-backed expansion`
+
 ## Phase 3 — Initial Context Routing
 
 **Owner:** Context Router / Token Governor
@@ -55,12 +96,14 @@ Create the smallest discovery Context Packet needed to understand the request sa
 
 Route only:
 - relevant slice of the original user intent;
-- structural index facts;
+- selected repository-navigation mode;
+- structural index facts still needed;
+- compact Graphify findings when Graphify was actually used;
 - likely entry points/candidate symbols;
 - relevant detected project skills;
-- context budget and expansion policy.
+- context budget and expansion/fallback policy.
 
-No worker receives unrestricted repository context.
+No worker receives unrestricted repository context or the full Graphify graph.
 
 ## Phase 4 — Intent Clarification
 
@@ -87,7 +130,9 @@ Discovery is strictly read-only.
 
 Start from the requested feature entry points and expand only to dependencies that could realistically be touched or are necessary to understand/validate the feature.
 
-Search before creating anything new:
+In `graphify-assisted` mode, use narrow graph relationships to choose what source to inspect first. In `standard` mode, or when graph evidence is insufficient, use targeted repository search.
+
+Search/verify before creating anything new:
 - existing functions and utilities;
 - services;
 - routes/endpoints;
@@ -102,7 +147,7 @@ Search before creating anything new:
 - conventions and ownership boundaries;
 - framework-native capabilities.
 
-Record evidence using paths and symbols.
+Record evidence using current paths and symbols. If Graphify was used, distinguish graph-derived routing evidence from source-verified behavioral evidence.
 
 Do not edit files, install dependencies, refactor, rename, or generate implementation during discovery.
 
@@ -114,6 +159,8 @@ Separate and document:
 - **intentionally untouched** areas.
 
 For every proposed impact, record why repository evidence connects it to the user request.
+
+Graphify-assisted mode may be used to find likely callers, dependents, paths, or neighboring contracts, but every material impact that will drive implementation must be confirmed from current source/contracts/tests before becoming plan authority.
 
 ## Phase 7 — Implementation Design
 
@@ -144,6 +191,8 @@ Each step MUST contain:
 - intended downstream handoff when relevant.
 
 Plan status remains `DRAFT` until independently validated.
+
+Graphify-only conclusions are not sufficient repository evidence for a code-changing step; the relevant source/contract evidence must be verified.
 
 ## Phase 9 — Plan Validation Loop
 
@@ -187,12 +236,16 @@ Before every approved implementation step, the Context Router creates a **fresh 
 Packet includes only:
 - relevant original intent/acceptance criteria;
 - approved step;
+- selected repository-navigation mode;
 - exact candidate files/symbols/contracts;
 - compact verified discovery findings;
+- only relevant Graphify relationship evidence when useful;
 - relevant downstream contract;
 - active skills needed by the selected worker;
 - step validation requirements;
-- context budget.
+- context budget and fallback policy.
+
+In Graphify-assisted mode, a narrow graph query may be used to refresh the immediate relationship slice around the approved step, but the worker receives exact source context, not a broad graph dump.
 
 Do not forward the full discovery transcript or all installed skills.
 
@@ -220,6 +273,8 @@ After every code-changing step and every agent handoff, compare:
 - downstream interface/contract;
 - approved scope.
 
+In Graphify-assisted mode, the validator may query a small relationship slice around changed symbols to locate potentially affected callers/contracts, then verifies any material finding against current source/diff/tests.
+
 ### FAIL
 
 Return exact evidence to the responsible worker. The worker fixes the issue and resubmits the handoff.
@@ -238,6 +293,8 @@ For each remaining step:
 
 The next step begins only after its dependencies have passed handoff validation.
 
+Repository navigation remains conditional: Graphify-assisted when ready and useful, standard fallback otherwise.
+
 ## Phase 15 — Plan Delta Loop
 
 If implementation discovers new repository evidence that materially invalidates the locked plan:
@@ -251,6 +308,8 @@ If implementation discovers new repository evidence that materially invalidates 
 7. Route fresh context and continue.
 
 Never silently improvise outside the locked plan.
+
+A Graphify relationship that suggests new impact is a discovery lead; verify it from current source/contracts before using it as Plan Delta evidence.
 
 ## Phase 16 — All Registered Steps Pass
 
@@ -297,6 +356,8 @@ Possible gates include:
 
 Do not run every specialist for every trivial task.
 
+When Graphify-assisted mode is available, specialist reviewers may use narrow graph queries to discover relevant callers, boundaries, reachable components, or contracts around the final diff. For example, Security Reviewer may trace an auth/permission path from a changed endpoint to its authorization/data boundary. All findings that affect PASS/FAIL must still be verified against current source/diff/tests.
+
 ## Phase 20 — Final Integration Validation
 
 **Owner:** Final Integration Validator
@@ -314,6 +375,8 @@ Validate the feature as a whole against:
 - regression risks;
 - known limitations.
 
+Graphify may assist in locating cross-layer relationships, but final integration verdicts must be grounded in current repository evidence and test/build results.
+
 Individually passing components are not sufficient if the integrated result is inconsistent.
 
 ## Phase 21 — Final Failure Recovery Loop
@@ -328,6 +391,8 @@ If Final Integration Validation fails:
 6. Re-enter Final Integration Validation.
 
 Do not restart unrelated work from zero.
+
+Graphify-assisted navigation may be used to locate the responsible relationship path, with standard fallback always available.
 
 ## Phase 22 — Final Pass and Captain Closure
 
@@ -350,9 +415,23 @@ It is invoked:
 - before specialist validation when required;
 - during handoff/failure recovery when new context is necessary.
 
-Rules:
+### Standard routing progression
+
+`project profile -> repository index -> targeted search -> symbol/range -> full file only when needed -> evidence-backed dependency expansion`
+
+### Graphify-assisted routing progression
+
+Use only when the generated project profile selects `graphify-assisted` **and** the current runtime can actually query the project graph:
+
+`project profile -> narrow Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search for gaps -> full file only when needed -> evidence-backed expansion`
+
+### Continuous rules
+
 - default deny arbitrary repository reads;
-- prefer `index -> search -> symbol/range -> full file -> evidence-backed dependency expansion`;
+- Graphify available != Graphify authoritative;
+- never load the complete Graphify graph into model context;
+- verify behavior from current source before planning/editing;
+- Graphify failure/unavailability must fall back to standard routing, not block the task;
 - installed skill != active skill;
 - compact findings/handoffs instead of forwarding full transcripts;
 - reuse evidence-linked summaries when sufficient;
