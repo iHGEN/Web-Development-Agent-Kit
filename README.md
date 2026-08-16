@@ -1,35 +1,67 @@
 # Web Development Agent Kit
 
-A web-only multi-agent engineering kit with strict intent preservation, targeted discovery, independent plan/handoff validation, automatic project skill detection, project-aware `AGENTS.md` generation, DevOps routing, and context/token optimization.
+A web-only multi-agent engineering kit with project discovery, project-aware `AGENTS.md` generation, strict context/token routing, independent plan/handoff validation, maintainability review, security/testing gates, and routed DevOps agents.
+
+## Quick start
+
+After publishing `@ihgen/web-kit@1.1.5` and creating GitHub tag `v1.1.5`:
+
+```bash
+npx @ihgen/web-kit
+```
+
+The bare command is smart and idempotent:
+
+```text
+Web Kit missing
+  -> install
+
+Installed version < npm CLI version
+  -> update
+
+Installed version == npm CLI version
+  -> doctor / health check
+
+Installed version > npm CLI version
+  -> no downgrade
+  -> doctor the remembered installed source
+```
+
+Explicit commands remain available:
+
+```bash
+npx @ihgen/web-kit install
+npx @ihgen/web-kit update
+npx @ihgen/web-kit doctor
+npx @ihgen/web-kit scan
+```
+
+See `docs/NPM_CLI.md` for version/source overrides and downgrade protection.
 
 ## Core principle
 
 The agent team is stable. Technology/framework/database/DevOps expertise lives in skills.
 
-A large catalog is safe because:
-
 ```text
 available != installed != active
 ```
 
-Each task receives only the agents, skills, files, symbols, contracts, and validation context it actually needs.
+A project may have many skills available, but each task receives only the agents, skills, files, symbols, contracts, and validation context it needs.
 
 ## Project-aware installation
 
-Starting with `v1.1.2`, installation discovers the target project before finalizing `AGENTS.md`.
+Installation discovers the target project before finalizing agent instructions.
 
-The installer generates a lightweight project profile containing:
-
-- project name;
-- project directory;
+Generated project context includes:
+- project name and directory;
 - detected technology groups;
 - shallow repository structure;
-- important manifests/build files;
-- important configuration files;
+- manifests/build files;
+- important configuration;
 - test roots;
-- migration/data-change roots.
+- migration/data roots.
 
-The resulting `AGENTS.md` is organized like this:
+The top of the generated `AGENTS.md` looks conceptually like:
 
 ```text
 Project Agent Context — <project name>
@@ -56,9 +88,7 @@ The machine-readable copy is stored at:
 .agent-core/index/project-profile.json
 ```
 
-The generated structure is routing metadata only. It never gives agents permission to read the whole repository.
-
-See `docs/PROJECT_AWARE_AGENTS.md`.
+The structure map is routing metadata only. It never gives agents permission to read the whole repository.
 
 ## Canonical workflow
 
@@ -73,7 +103,7 @@ Record original prompt verbatim
   ↓
 Classify Small / Medium / Large
   ↓
-Read generated Project Profile
+Read Project Profile
   ↓
 Repository Indexer
   ↓
@@ -88,7 +118,7 @@ Implementation Design
 Execution Registry
   ↓
 Plan Validator
-  ├─ FAIL → revise → validate again
+  ├─ FAIL -> revise -> validate again
   └─ PASS
        ↓
     LOCK PLAN
@@ -100,8 +130,8 @@ One approved step + one selected worker + relevant skills only
 Implement step
        ↓
 Handoff Validator
-  ├─ FAIL → responsible worker → revalidate
-  └─ PASS → next registered step
+  ├─ FAIL -> responsible worker -> revalidate
+  └─ PASS -> next registered step
        ↓
 Repeat every approved step
        ↓
@@ -114,7 +144,7 @@ Run affected tests again
 Relevant specialist validation
        ↓
 Final Integration Validator
-  ├─ FAIL → owning agent → fix → handoff validation → affected reviews
+  ├─ FAIL -> owning agent -> fix -> handoff validation -> affected reviews
   └─ PASS
        ↓
 CAPTAIN
@@ -122,21 +152,7 @@ CAPTAIN
 DONE
 ```
 
-### Plan Delta rule
-
-If implementation discovers evidence that materially invalidates the locked plan:
-
-```text
-STOP affected step
-  → record new evidence
-  → propose Plan Delta
-  → independent Plan Validator
-  → relock new plan version
-  → route fresh context
-  → continue
-```
-
-No silent improvisation outside the locked plan.
+If new repository evidence invalidates the locked plan, the affected step stops and a Plan Delta must pass independent validation before work continues. No silent improvisation.
 
 ## Continuous context/token routing
 
@@ -146,24 +162,73 @@ Preferred read progression:
 
 ```text
 project profile
-  → repository index
-  → targeted search
-  → symbol/range
-  → full file only when needed
-  → evidence-backed dependency expansion
+  -> repository index
+  -> targeted search
+  -> symbol/range
+  -> full file only when needed
+  -> evidence-backed dependency expansion
 ```
 
 Rules:
-
 - no unrestricted repository reads by default;
 - installed skill does not mean active skill;
-- compact evidence-linked findings instead of full prior transcripts;
+- compact evidence-linked findings instead of full transcripts;
 - fresh context packet per approved implementation step;
 - diff-first handoff/review validation;
 - failure-specific context during recovery;
 - token optimization never overrides correctness, security, or user intent.
 
-## Main commands
+## Agent groups
+
+### Control / discovery
+- Web Orchestrator / Captain
+- Repository Indexer
+- Context Router / Token Governor
+- Intent & Discovery Agent
+- Web Architect
+
+### Implementation
+- Frontend Developer
+- Backend Developer
+- Database / Persistence Engineer
+- Realtime / Messaging Engineer
+- External Integration Engineer
+
+### Quality / validation
+- Plan Validator
+- Handoff Validator / Gatekeeper
+- Final Integration Validator
+- Code Simplifier / Maintainability Refactorer
+- Test / QA Engineer
+- Web Security Reviewer
+- Web Performance Reviewer
+- Web Code Reviewer
+- Accessibility Reviewer
+- API Contract Reviewer
+- Bug Hunter / Edge-Case Adversary
+- Technical Documentation Agent
+
+### DevOps / platform
+- DevOps / Release Engineer
+- Observability / Reliability Engineer
+- Docker / Container Engineer
+- DevOps / Platform Engineer
+- CI/CD Engineer
+- Cloud Infrastructure Engineer
+- Kubernetes Platform Engineer
+- Infrastructure as Code Engineer
+- DevSecOps Reviewer
+- SRE / Reliability Engineer
+- Release / Deployment Engineer
+- Linux Operations Engineer
+
+## Skill library
+
+The central catalog covers web core/maintainability, languages, frontend/backend frameworks, APIs/realtime, authentication/authorization, security, databases/ORMs, distributed systems/jobs, storage/media, testing, performance/observability, Docker/CI/CD/cloud/Kubernetes/IaC/SRE/DevSecOps, package management, architecture patterns, and external integrations.
+
+The project detector installs only the relevant subset, and the Context Router activates only the relevant skills for each task.
+
+## Local Python CLI
 
 ```bash
 python scripts/agent-kit.py scan /path/to/project
@@ -174,102 +239,32 @@ python scripts/agent-kit.py catalog
 python scripts/agent-kit.py add-skill /path/to/project <skill-name>
 ```
 
-Install/update regenerates the managed project profile and project-aware `AGENTS.md`.
+## Remote shell install
 
-## Agent groups
-
-### Control / discovery
-
-- Web Orchestrator / Captain (`web-orchestrator`)
-- Repository Indexer (`repository-indexer`)
-- Context Router / Token Governor (`context-router`)
-- Intent & Discovery Agent (`intent-discovery`)
-- Web Architect (`web-architect`)
-
-### Implementation
-
-- Frontend Developer (`frontend-developer`)
-- Backend Developer (`backend-developer`)
-- Database / Persistence Engineer (`database-engineer`)
-- Realtime / Messaging Engineer (`realtime-engineer`)
-- External Integration Engineer (`integration-engineer`)
-
-### Quality / independent validation
-
-- Plan Validator (`plan-validator`)
-- Handoff Validator / Gatekeeper (`handoff-validator`)
-- Final Integration Validator (`final-integration-validator`)
-- Code Simplifier / Maintainability Refactorer (`code-simplifier`)
-- Test / QA Engineer (`test-engineer`)
-- Web Security Reviewer (`security-reviewer`)
-- Web Performance Reviewer (`performance-reviewer`)
-- Web Code Reviewer (`code-reviewer`)
-- Accessibility Reviewer (`accessibility-reviewer`)
-- API Contract Reviewer (`api-contract-reviewer`)
-- Bug Hunter / Edge-Case Adversary (`bug-hunter`)
-- Technical Documentation Agent (`documentation-agent`)
-
-### DevOps / platform
-
-- DevOps / Release Engineer (`devops-release-engineer`)
-- Observability / Reliability Engineer (`observability-engineer`)
-- Docker / Container Engineer (`docker-container-engineer`)
-- DevOps / Platform Engineer (`devops-platform-engineer`)
-- CI/CD Engineer (`ci-cd-engineer`)
-- Cloud Infrastructure Engineer (`cloud-infrastructure-engineer`)
-- Kubernetes Platform Engineer (`kubernetes-platform-engineer`)
-- Infrastructure as Code Engineer (`infrastructure-as-code-engineer`)
-- DevSecOps Reviewer (`devsecops-reviewer`)
-- SRE / Reliability Engineer (`sre-reliability-engineer`)
-- Release / Deployment Engineer (`release-deployment-engineer`)
-- Linux Operations Engineer (`linux-operations-engineer`)
-
-## Skill library
-
-The central catalog covers:
-
-- web core and maintainability;
-- TypeScript/JavaScript/C#/PHP and other languages;
-- React/Next/Vue and frontend engineering;
-- ASP.NET Core/Laravel and backend frameworks;
-- APIs/realtime;
-- auth/security;
-- databases/ORMs;
-- distributed systems/jobs;
-- storage/media;
-- testing;
-- performance/observability;
-- Docker/CI/CD/cloud/Kubernetes/IaC/SRE/DevSecOps;
-- packages, architecture patterns, and integrations.
-
-The skill router installs and activates only the relevant subset.
-
-## Remote installation
-
-### Current main
+Pinned release after creating tag `v1.1.5`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
+curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.5/bootstrap/install.sh \
   | bash -s -- \
       --repo iHGEN/Web-Development-Agent-Kit \
-      --ref main \
+      --ref v1.1.5 \
       --project .
 ```
 
-### Recommended stable install after creating `v1.1.2`
+For npm users, prefer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.2/bootstrap/install.sh \
-  | bash -s -- \
-      --repo iHGEN/Web-Development-Agent-Kit \
-      --ref v1.1.2 \
-      --project .
+npx @ihgen/web-kit
 ```
 
-The project remembers its source and can later update with:
+## Release mapping
 
-```bash
-python .agent-core/bin/remote-install.py --project .
+The npm package version maps directly to the GitHub tag:
+
+```text
+@ihgen/web-kit@1.1.5
+        ↓
+iHGEN/Web-Development-Agent-Kit@v1.1.5
 ```
 
-See `docs/REMOTE_INSTALL.md`.
+Create the matching GitHub tag before publishing the npm release.
