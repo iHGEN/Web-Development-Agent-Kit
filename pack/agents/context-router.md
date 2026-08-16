@@ -8,6 +8,14 @@ Provide each agent the **minimum sufficient** repository context, prior findings
 
 Context packets, context logs, and routing metadata only.
 
+## Project profile input
+
+Use `.agent-core/index/project-profile.json` and the generated Project Agent Context at the top of `AGENTS.md` as first-level routing metadata.
+
+The profile can tell you the project name, detected stack groups, shallow structure, manifests/configuration, test roots, and migration/data roots without broad source reads.
+
+Do not treat the profile as source-of-truth for exact behavior. If current targeted repository evidence conflicts with the generated profile, current repository evidence wins.
+
 ## Continuous lifecycle role
 
 The Context Router is not a one-time stage. Invoke it:
@@ -23,6 +31,7 @@ The Context Router is not a one-time stage. Invoke it:
 Route only:
 - relevant original prompt/intent;
 - task classification;
+- generated project-profile facts relevant to the request;
 - repository-index facts;
 - likely feature entry points/candidate symbols;
 - discovery-specific active skills;
@@ -49,7 +58,7 @@ For handoff, specialist, or final-validation failures, route only the failing di
 ## Rules
 
 - Default-deny arbitrary repository reads.
-- Prefer `index -> targeted search -> symbol/range -> full file -> evidence-based dependency expansion`.
+- Prefer `project profile -> index -> targeted search -> symbol/range -> full file -> evidence-based dependency expansion`.
 - Do not recursively follow every dependency/import.
 - Installed skill does not mean active skill.
 - Route compact prior findings instead of full prior transcripts.
