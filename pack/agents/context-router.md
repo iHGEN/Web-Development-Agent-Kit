@@ -6,7 +6,7 @@ Provide each agent the **minimum sufficient** repository context, prior findings
 
 ## Modification authority
 
-Context packets, context logs, and routing metadata only.
+Context packets, context logs, routing metadata, and Graphify freshness-state metadata only.
 
 ## Project profile input
 
@@ -25,7 +25,8 @@ Read `capabilities.graphify` from the project profile before repository discover
 Use standard routing when:
 - Graphify is not detected;
 - Graphify is configured but `graphify-out/graph.json` is not ready;
-- the current runtime does not expose working Graphify graph tools;
+- the current runtime does not expose working Graphify graph tools or CLI refresh capability;
+- the Graph Refresh Gate reports task-local fallback;
 - a Graphify query fails, is stale/incomplete for the needed decision, or conflicts with current source.
 
 Preferred progression:
@@ -36,9 +37,15 @@ Preferred progression:
 
 When `capabilities.graphify.routing_mode == graphify-assisted`, Graphify is **preferred for navigation**, not trusted as behavioral authority.
 
-At the first repository-navigation decision for a task, verify that the current runtime can actually call the project Graphify graph. If it cannot, record one task-local fallback and continue in standard mode instead of repeatedly retrying a missing tool.
+Before the **first Graphify query of a task**, run the freshness gate:
 
-When Graphify is available, prefer narrow graph operations that answer the current routing question, such as:
+```bash
+python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+```
+
+Read `.agent-core/state/graphify.json` after the gate. Continue in Graphify-assisted mode only when its `routing_mode` is `graphify-assisted` and `dirty` is false. If the gate reports `standard`, use standard routing for that task instead of repeatedly retrying Graphify.
+
+When Graphify is fresh and available, prefer narrow graph operations that answer the current routing question, such as:
 - locate the feature owner or likely entry symbols;
 - inspect direct callers/callees or neighbors;
 - trace a path between two relevant concepts;
@@ -51,7 +58,31 @@ Never load or forward the complete `graphify-out/graph.json` into model context.
 
 Graphify-assisted preferred progression:
 
-`project profile -> Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search only for gaps -> full file only when needed -> evidence-backed expansion`
+`project profile -> Graph Refresh Gate -> Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search only for gaps -> full file only when needed -> evidence-backed expansion`
+
+## Post-step Graph Refresh Gate
+
+After **every completed code-changing implementation step**, and after the worker's step-local checks, run the same gate **once before Handoff Validator or another agent relies on Graphify**:
+
+```bash
+python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+```
+
+The gate fingerprints the relevant repository state. If nothing changed since the last successful Graphify refresh, it does not run Graphify again. If relevant source changed, it runs one incremental:
+
+```bash
+graphify update .
+```
+
+If the refresh succeeds, the graph becomes usable for handoff/review. If the CLI is missing, times out, or refresh fails, the gate records task-local standard fallback and the workflow continues without Graphify. Graphify freshness must never block completion.
+
+The state file is:
+
+```text
+.agent-core/state/graphify.json
+```
+
+Do not manually mark a failed graph as fresh.
 
 ## Continuous lifecycle role
 
@@ -63,7 +94,7 @@ The Context Router is not a one-time stage. Invoke it:
 4. before specialist validation when that reviewer needs different context/skills;
 5. during handoff or final-failure recovery when new context is required.
 
-Graphify-assisted mode may be used at each of these points when it reduces repository exploration, but only for the specific receiving agent's question.
+Graphify-assisted mode may be used at each of these points when it reduces repository exploration, but only after freshness is confirmed for the current repository state.
 
 ## Discovery packet
 
@@ -72,6 +103,7 @@ Route only:
 - task classification;
 - generated project-profile facts relevant to the request;
 - selected navigation mode (`standard` or `graphify-assisted`);
+- Graphify freshness state when relevant;
 - compact Graphify relationship findings when Graphify was actually used;
 - repository-index facts still needed;
 - likely feature entry points/candidate symbols;
@@ -85,7 +117,7 @@ After the plan is locked, create a fresh packet for **one approved step only** c
 - approved step;
 - exact candidate files/symbols/contracts;
 - compact verified discovery findings;
-- only relevant Graphify relationship evidence when useful;
+- only relevant fresh Graphify relationship evidence when useful;
 - downstream contract;
 - relevant active skills;
 - required validation;
@@ -97,14 +129,16 @@ Do not forward the entire discovery transcript or broad graph output.
 
 For handoff, specialist, security, or final-validation failures, route only the failing diff/symbols/contracts/tests plus the minimum surrounding context needed to verify or fix that failure.
 
-If Graphify-assisted mode is active, reviewers may use the graph to find callers, reachable boundaries, or neighboring contracts around changed symbols, but the diff and exact repository source remain authoritative.
+If Graphify-assisted mode is active, reviewers may use the graph to find callers, reachable boundaries, or neighboring contracts around changed symbols only after the Graph Refresh Gate confirms the graph is fresh. The diff and exact repository source remain authoritative.
 
 ## Rules
 
 - Default-deny arbitrary repository reads.
 - Select repository-navigation mode from the generated project profile first.
+- Before Graphify use, enforce the Graph Refresh Gate.
+- After every completed code-changing step, enforce one Graph Refresh Gate before handoff validation.
 - In Graphify-assisted mode, use the graph to narrow where to read; do not use it as proof of current behavior.
-- Fall back to standard routing immediately when Graphify is unavailable, unsuitable, stale, or contradictory.
+- Fall back to standard routing immediately when Graphify is unavailable, unsuitable, stale, refresh-failed, or contradictory.
 - Do not recursively follow every dependency/import or every graph neighbor.
 - Installed skill does not mean active skill.
 - Route compact prior findings instead of full prior transcripts.
@@ -123,6 +157,7 @@ Every Context Packet must state:
 - objective;
 - relevant original intent/acceptance criteria;
 - selected repository-navigation mode;
+- Graphify freshness/fallback state when relevant;
 - active skills;
 - allowed/candidate context with routing reasons;
 - compact Graphify findings when used;
