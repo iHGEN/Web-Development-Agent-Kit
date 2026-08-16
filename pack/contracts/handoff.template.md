@@ -1,8 +1,14 @@
 # Agent Handoff
 
 **From agent:**  
-**To agent:**  
-**Task / step ID:**  
+**To agent / next owner:**  
+**Task ID:**  
+**Approved step ID:**  
+**Locked plan version:**  
+
+## Relevant Original Intent / Acceptance Criteria
+
+- ...
 
 ## Objective
 
@@ -12,9 +18,9 @@
 
 - ...
 
-## Files Changed
+## Actual Files / Symbols Changed
 
-- ...
+- `path` — `symbol/section`
 
 ## Behavior Delivered
 
@@ -25,8 +31,15 @@
 - build:
 - lint/static analysis:
 - tests:
+- smoke/integration:
 
-## Known Issues
+## Approved Scope Comparison
+
+- expected files/components:
+- unexpected changes: None / ...
+- approved Plan Delta if applicable: None / ...
+
+## Known Issues / Limitations
 
 - None / ...
 
@@ -36,8 +49,14 @@
 
 ## Downstream Contract
 
-Describe the exact API, data model, component interface, event, or behavior the next agent can rely on.
+Describe the exact API, data model, component interface, event, deployment contract, or behavior the next agent may rely on.
+
+The downstream consumer must not need to guess undocumented implementation details.
 
 ## Handoff Validator
 
-Status: PENDING
+**Status:** PENDING | PASS | FAIL  
+**Evidence checked:** ...  
+**Failure requirements (if any):** ...
+
+Dependent work may continue only when status is `PASS`.
