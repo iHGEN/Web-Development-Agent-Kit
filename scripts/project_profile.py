@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import os
 
 MANAGED_MARKER = "<!-- WEB-AGENT-KIT:MANAGED -->"
 PROJECT_CONTEXT_START = "<!-- WEB-AGENT-KIT:PROJECT-CONTEXT:START -->"
@@ -10,6 +11,8 @@ IGNORE_DIRS = {
     ".git", ".agents", ".agent-core", "node_modules", "vendor", "bin", "obj",
     ".next", "dist", "build", "coverage", ".idea", ".vscode", ".cache"
 }
+
+ALLOWED_HIDDEN_DIRS = {".github", ".devcontainer"}
 
 IMPORTANT_ROOT_FILES = {
     "package.json", "composer.json", "tsconfig.json", "pyproject.toml", "go.mod",
@@ -69,30 +72,43 @@ def detect_project_name(project):
 
 
 def build_structure_summary(project, max_depth=2, max_entries=70):
+    """Build a shallow structural map without walking dependency/build directories."""
     project = Path(project).resolve()
     directories = set()
     root_files = set()
 
-    for path in project.rglob("*"):
+    for current_root, dirnames, filenames in os.walk(project):
+        current = Path(current_root)
         try:
-            rel = path.relative_to(project)
+            rel_root = current.relative_to(project)
         except ValueError:
             continue
 
-        if any(part in IGNORE_DIRS for part in rel.parts):
-            continue
+        # Prune ignored and irrelevant hidden directories before os.walk descends into them.
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in IGNORE_DIRS
+            and (not name.startswith(".") or name in ALLOWED_HIDDEN_DIRS)
+        ]
 
-        if path.is_dir():
-            if 1 <= len(rel.parts) <= max_depth:
-                # Keep hidden operational directories such as .github, but skip generic hidden noise.
-                if any(part.startswith(".") and part not in {".github", ".devcontainer"} for part in rel.parts):
-                    continue
-                directories.add(rel.as_posix() + "/")
-            continue
+        depth = 0 if rel_root == Path(".") else len(rel_root.parts)
+        if depth >= max_depth:
+            dirnames[:] = []
 
-        if len(rel.parts) == 1:
-            if rel.name in IMPORTANT_ROOT_FILES or rel.suffix.lower() in {".sln", ".csproj"}:
-                root_files.add(rel.as_posix())
+        for dirname in dirnames:
+            rel_dir = (rel_root / dirname) if rel_root != Path(".") else Path(dirname)
+            if 1 <= len(rel_dir.parts) <= max_depth:
+                directories.add(rel_dir.as_posix() + "/")
+
+        if depth == 0:
+            for filename in filenames:
+                p = Path(filename)
+                if filename in IMPORTANT_ROOT_FILES or p.suffix.lower() in {".sln", ".csproj"}:
+                    root_files.add(filename)
+
+        if len(directories) + len(root_files) >= max_entries * 2:
+            # Enough candidates for a deterministic capped summary.
+            break
 
     entries = sorted(directories) + sorted(root_files)
     return entries[:max_entries]
@@ -242,6 +258,8 @@ def apply_project_profile(project, kit_root=None, version=None, force_agents=Fal
         existing = agents_path.read_text(encoding="utf-8", errors="ignore")
         if force_agents or is_kit_managed(existing):
             agents_path.write_text(generated, encoding="utf-8")
+            if fallback_path.exists():
+                fallback_path.unlink()
             output_path = agents_path
             action = "updated project-aware AGENTS.md"
         else:
@@ -250,6 +268,8 @@ def apply_project_profile(project, kit_root=None, version=None, force_agents=Fal
             action = "preserved existing AGENTS.md; wrote project-aware AGENTS.web-kit.md"
     else:
         agents_path.write_text(generated, encoding="utf-8")
+        if fallback_path.exists():
+            fallback_path.unlink()
         output_path = agents_path
         action = "wrote project-aware AGENTS.md"
 
