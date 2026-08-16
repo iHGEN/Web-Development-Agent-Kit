@@ -9,7 +9,8 @@ PROJECT_CONTEXT_END = "<!-- WEB-AGENT-KIT:PROJECT-CONTEXT:END -->"
 
 IGNORE_DIRS = {
     ".git", ".agents", ".agent-core", "node_modules", "vendor", "bin", "obj",
-    ".next", "dist", "build", "coverage", ".idea", ".vscode", ".cache"
+    ".next", "dist", "build", "coverage", ".idea", ".vscode", ".cache",
+    "graphify-out"
 }
 
 ALLOWED_HIDDEN_DIRS = {".github", ".devcontainer"}
@@ -21,6 +22,15 @@ IMPORTANT_ROOT_FILES = {
     "vite.config.ts", "vite.config.js", "next.config.js", "next.config.mjs",
     "next.config.ts", "artisan"
 }
+
+GRAPHIFY_MCP_CONFIGS = (
+    ".mcp.json",
+    "mcp.json",
+    ".cursor/mcp.json",
+    ".gemini/settings.json",
+    ".vscode/mcp.json",
+    ".codex/config.toml",
+)
 
 CATEGORY_LABELS = {
     "languages": "Languages",
@@ -69,6 +79,62 @@ def detect_project_name(project):
         return csproj[0].stem
 
     return project.name
+
+
+def _looks_like_graphify_code_mcp(text):
+    """Detect the repo graph MCP, not Graphify's hosted docs-search MCP."""
+    lower = text.lower()
+    return (
+        "graphify.serve" in lower
+        or "graphify-mcp" in lower
+        or ("graphify" in lower and "graphify-out/graph.json" in lower)
+    )
+
+
+def detect_graphify(project):
+    """Detect project-local Graphify evidence without requiring Graphify to be installed."""
+    project = Path(project).resolve()
+    graph = project / "graphify-out" / "graph.json"
+    graph_ready = graph.is_file()
+
+    config_hits = []
+    for rel in GRAPHIFY_MCP_CONFIGS:
+        path = project / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if _looks_like_graphify_code_mcp(text):
+            config_hits.append(rel)
+
+    detected = graph_ready or bool(config_hits)
+    if graph_ready:
+        note = (
+            "Graphify graph snapshot detected. Prefer graph-assisted repository navigation when "
+            "Graphify tools are available at runtime; verify behavior from exact source before edits."
+        )
+    elif config_hits:
+        note = (
+            "Graphify MCP configuration detected but graphify-out/graph.json is missing. "
+            "Use standard routing until a project graph snapshot exists."
+        )
+    else:
+        note = "Graphify not detected in this project; use the standard repository routing loop."
+
+    return {
+        "detected": detected,
+        "graph_ready": graph_ready,
+        "graph_path": "graphify-out/graph.json" if graph_ready else None,
+        "local_mcp_configured": bool(config_hits),
+        "config_files": sorted(config_hits),
+        "routing_mode": "graphify-assisted" if graph_ready else "standard",
+        "fallback_mode": "standard",
+        "runtime_tool_required": graph_ready,
+        "source_authority": "repository source",
+        "note": note,
+    }
 
 
 def build_structure_summary(project, max_depth=2, max_entries=70):
@@ -149,6 +215,9 @@ def build_project_profile(project, kit_root, version):
         "kit_version": version,
         "technology_groups": group_detected_skills(skills, kit_root),
         "detected_skills": sorted(set(skills)),
+        "capabilities": {
+            "graphify": detect_graphify(project),
+        },
         "structure": build_structure_summary(project),
         "manifests": index.get("manifests", []),
         "config_files": index.get("config_files", []),
@@ -174,6 +243,29 @@ def render_project_context(profile):
     structure = profile.get("structure", [])
     structure_block = "\n".join(structure) if structure else "(No shallow structure detected)"
 
+    graphify = profile.get("capabilities", {}).get("graphify", {})
+    if graphify.get("graph_ready"):
+        graphify_status = "Detected — graph-assisted routing preferred when Graphify tools are available at runtime"
+        graphify_path = f"`{graphify.get('graph_path')}`"
+        graphify_rule = (
+            "- Graphify is ready for this project. Prefer the graph-assisted routing branch first, then verify "
+            "exact behavior from repository source. If the Graphify tool is unavailable, stale, incomplete, or "
+            "conflicts with source, immediately fall back to the standard routing loop."
+        )
+    elif graphify.get("detected"):
+        graphify_status = "Configured/detected, but no project graph snapshot is ready — standard routing"
+        graphify_path = "Not available"
+        graphify_rule = (
+            "- Graphify configuration was detected but no ready project graph snapshot exists. Use the standard "
+            "routing loop; do not assume Graphify results are available."
+        )
+    else:
+        graphify_status = "Not detected — standard routing"
+        graphify_path = "Not available"
+        graphify_rule = "- Graphify is not detected for this project. Use the standard repository routing loop."
+
+    graphify_configs = _bullet_list(graphify.get("config_files", []), empty="No project-local Graphify MCP config detected")
+
     return f"""{MANAGED_MARKER}
 {PROJECT_CONTEXT_START}
 # Project Agent Context — {profile.get('name', 'Web Project')}
@@ -191,6 +283,16 @@ Use it for **initial routing**, then verify exact behavior with targeted discove
 ## Detected Technology Stack
 
 {chr(10).join(technology_lines)}
+
+## Repository Navigation Capability
+
+- **Routing mode:** `{graphify.get('routing_mode', 'standard')}`
+- **Graphify:** {graphify_status}
+- **Graph snapshot:** {graphify_path}
+- **Project-local Graphify MCP configuration:**
+{graphify_configs}
+
+Graphify is a navigation/relationship aid, not behavioral authority. Repository source and current diffs remain authoritative.
 
 ## Project Structure — Shallow Routing Map
 
@@ -220,11 +322,12 @@ The Context Router still controls which files/symbols each agent may inspect.
 ## Project-aware Routing Rules
 
 - Read this generated project context before selecting agents or skills.
+{graphify_rule}
 - Treat detected technologies as routing evidence, not as proof that every part of the repository uses them.
 - Start from the user-requested feature and route only the relevant project slice.
 - Do not read the entire repository because it appears in the structure map.
 - Prefer existing project conventions and ownership discovered from the code over generic framework assumptions.
-- If the repository structure or stack changes materially, regenerate the project profile with the Web Kit update/install command.
+- If the repository structure, stack, or Graphify capability changes materially, regenerate the project profile with the Web Kit update/install command.
 - The machine-readable copy of this profile is `.agent-core/index/project-profile.json`.
 
 {PROJECT_CONTEXT_END}
@@ -286,6 +389,7 @@ def apply_project_profile(project, kit_root=None, version=None, force_agents=Fal
             "domain": profile["domain"],
             "technology_groups": profile["technology_groups"]
         }
+        cfg["capabilities"] = profile["capabilities"]
         cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
     return {
