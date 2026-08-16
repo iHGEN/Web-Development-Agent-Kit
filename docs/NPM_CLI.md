@@ -1,171 +1,171 @@
 # npm / npx CLI
 
-The Web Development Agent Kit exposes a tiny npm launcher so users can install and manage the kit without keeping the repository locally.
+The Web Development Agent Kit exposes a tiny npm launcher so users can install and manage the full GitHub-hosted kit without keeping the repository locally.
 
-## Final commands
+## Smart default
+
+Run inside a web project:
 
 ```bash
 npx @ihgen/web-kit
 ```
 
-Equivalent explicit install:
+The bare command is **idempotent**. It reads `.agent-kit.json` and decides the safest action:
+
+```text
+Web Kit missing
+  -> install
+
+Installed version < npm CLI version
+  -> update
+
+Installed version == npm CLI version
+  -> doctor / health check
+
+Installed version > npm CLI version
+  -> do NOT downgrade
+  -> doctor the remembered installed source
+```
+
+The main installation marker is:
+
+```text
+.agent-kit.json
+```
+
+A normal remote installation also records:
+
+```text
+.agent-kit-source.json
+```
+
+This allows doctor/scan to use the source/ref that belongs to the installed project instead of silently changing versions.
+
+## Explicit commands
 
 ```bash
 npx @ihgen/web-kit install
-```
-
-Other commands:
-
-```bash
 npx @ihgen/web-kit update
 npx @ihgen/web-kit doctor
 npx @ihgen/web-kit scan
 ```
 
-Pin an exact npm/GitHub kit release:
-
-```bash
-npx @ihgen/web-kit@1.1.3
-```
-
-## Version mapping
-
-The npm package version maps directly to the GitHub tag:
+Explicit `install` and `update` use the npm package's matching GitHub release by default:
 
 ```text
-@ihgen/web-kit@1.1.3
+@ihgen/web-kit@1.1.5
         ↓
-iHGEN/Web-Development-Agent-Kit@v1.1.3
+iHGEN/Web-Development-Agent-Kit@v1.1.5
 ```
 
-Therefore, create the matching GitHub tag **before** publishing the npm version.
+Create the matching GitHub tag before publishing the npm version.
 
-## Release `1.1.3`
+## Downgrade protection
 
-From a local clone of this repository:
+A newer project is never silently downgraded.
+
+For example, if a project uses Web Kit `1.2.0` and someone runs `@ihgen/web-kit@1.1.5`, smart mode leaves the project version unchanged and runs health validation against the remembered installed source when available.
+
+Explicit `install` / `update` also reject a semantic-version downgrade unless it is intentional:
 
 ```bash
-git pull origin main
-
-git tag -a v1.1.3 \
-  -m "Web Development Agent Kit v1.1.3 - npm CLI"
-
-git push origin v1.1.3
+npx @ihgen/web-kit update \
+  --ref v1.1.5 \
+  --allow-downgrade
 ```
 
-Then verify the npm package contents:
+Use `--allow-downgrade` carefully. It is handled by the npm launcher and is not forwarded into the project installer.
+
+## Project selection
+
+Current directory:
 
 ```bash
-npm pack --dry-run
+npx @ihgen/web-kit
 ```
 
-The npm package is intentionally tiny. It publishes only:
+Another project:
+
+```bash
+npx @ihgen/web-kit --project ../my-web-app
+```
+
+## Version and source overrides
+
+Use a branch/tag/commit:
+
+```bash
+npx @ihgen/web-kit update --ref main
+```
+
+Use another repository:
+
+```bash
+npx @ihgen/web-kit update \
+  --repo OWNER/REPO \
+  --ref v1.1.5
+```
+
+Use a direct ZIP:
+
+```bash
+npx @ihgen/web-kit update \
+  --source https://example.com/web-kit.zip
+```
+
+## Package size
+
+The npm package is intentionally tiny and publishes only the launcher/runtime bootstrap:
 
 ```text
 package.json
 bin/web-kit.js
 bootstrap/remote-install.py
-README.md (npm includes standard documentation automatically)
+README.md
 ```
 
 The full agent/skill library remains in GitHub.
-
-## Publish to npm
-
-Make sure your npm account or npm organization owns the `@ihgen` scope.
-
-```bash
-npm login
-npm whoami
-npm publish --access public
-```
-
-After publishing:
-
-```bash
-npx @ihgen/web-kit
-```
 
 ## How it works
 
 ```text
 npx @ihgen/web-kit
         ↓
-bin/web-kit.js
+inspect target project
         ↓
-find Python 3
+choose install / update / doctor
+        ↓
+bin/web-kit.js
         ↓
 bootstrap/remote-install.py
         ↓
-download GitHub tag matching npm version
+download the required GitHub kit source
         ↓
-run Web Kit project discovery
+run Web Kit discovery / install / validation
         ↓
-generate project-aware AGENTS.md
-        ↓
-install routed agents + detected skills
+project-aware AGENTS.md + routed agents + detected skills
 ```
 
-The npm package does not duplicate the complete skill catalog.
+## Release process
 
-## CLI routing
+For `1.1.5`:
 
-### Install
+```bash
+git pull origin main
+
+git tag -a v1.1.5 \
+  -m "Web Development Agent Kit v1.1.5 - smart idempotent npx"
+
+git push origin v1.1.5
+
+npm pack --dry-run
+npm publish --access public
+```
+
+After publication:
 
 ```bash
 npx @ihgen/web-kit
-```
-
-Downloads the matching GitHub release and installs the kit into the current directory.
-
-### Update
-
-```bash
-npx @ihgen/web-kit update
-```
-
-Re-runs discovery using the npm package's matching GitHub tag and refreshes managed agents, project context, routing, and detected skills.
-
-For an intentional exact upgrade:
-
-```bash
-npx @ihgen/web-kit@1.2.0 update
-```
-
-### Doctor
-
-```bash
-npx @ihgen/web-kit doctor
-```
-
-Checks the project's installed skills, agent definitions, routing files, index, and configuration.
-
-### Scan
-
-```bash
-npx @ihgen/web-kit scan
-```
-
-Scans the project without installing it and prints the detected stack/project index.
-
-## Custom project path
-
-```bash
-npx @ihgen/web-kit scan --project ../my-app
-```
-
-## Test `main` before tagging
-
-Before `v1.1.3` exists, test the current GitHub branch with:
-
-```bash
-node bin/web-kit.js scan --ref main --project /path/to/test-project
-```
-
-or install from main:
-
-```bash
-node bin/web-kit.js install --ref main --project /path/to/test-project
 ```
 
 ## Requirements
@@ -173,3 +173,13 @@ node bin/web-kit.js install --ref main --project /path/to/test-project
 - Node.js 18+ for the npm launcher.
 - Python 3 for the Web Kit installer/discovery engine.
 - Network access to GitHub unless `--source` points to a local ZIP.
+
+## Safety boundaries
+
+Smart mode never:
+- silently downgrades a newer project;
+- treats all installed skills as active skills;
+- grants agents unrestricted repository reads;
+- modifies application source merely because the kit is installed.
+
+Application code remains project-owned. The Web Kit manages its own agent/routing/skill metadata and generated project context.
