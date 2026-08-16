@@ -77,6 +77,10 @@ def main():
         if args.force_agents: cmd.append("--force-agents")
         subprocess.check_call(cmd)
 
+        profile_cmd=[sys.executable,str(kit/"scripts/project_profile.py"),str(project)]
+        if args.force_agents: profile_cmd.append("--force-agents")
+        subprocess.check_call(profile_cmd)
+
         (project/".agent-kit-source.json").write_text(json.dumps({
             "repo":repo,"ref":ref,"source":src,"sha256":sha
         },indent=2),encoding="utf-8")
@@ -85,6 +89,7 @@ def main():
         shutil.copy2(Path(__file__).resolve(),bindir/"remote-install.py")
 
         print("Remote installation complete.")
+        print("Project-aware AGENTS context generated from repository structure and detected stack.")
         print("Future update: python .agent-core/bin/remote-install.py --project .")
 
 if __name__=="__main__":
