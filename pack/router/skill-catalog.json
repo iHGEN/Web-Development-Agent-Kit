@@ -1,0 +1,2378 @@
+{
+  "version": 2,
+  "count": 334,
+  "categories": {
+    "core": [
+      "accessibility-baseline",
+      "api-design",
+      "backward-compatibility",
+      "clean-code",
+      "code-simplification",
+      "configuration",
+      "dependency-management",
+      "documentation",
+      "error-handling",
+      "git-workflow",
+      "http",
+      "logging",
+      "maintainable-code",
+      "modular-design",
+      "performance-baseline",
+      "refactoring",
+      "security-baseline",
+      "testing-strategy",
+      "validation",
+      "web-architecture",
+      "web-core"
+    ],
+    "languages": [
+      "csharp",
+      "go",
+      "java",
+      "javascript",
+      "kotlin",
+      "php",
+      "python",
+      "ruby",
+      "rust",
+      "typescript"
+    ],
+    "frontend": [
+      "accessibility",
+      "angular",
+      "astro",
+      "bootstrap",
+      "browser-apis",
+      "browser-compatibility",
+      "client-routing",
+      "css",
+      "data-fetching",
+      "forms",
+      "frontend-performance",
+      "frontend-security",
+      "html",
+      "indexeddb",
+      "material-ui",
+      "nextjs",
+      "notifications",
+      "nuxt",
+      "pinia",
+      "pwa",
+      "react",
+      "redux",
+      "responsive-design",
+      "seo",
+      "service-workers",
+      "shadcn-ui",
+      "state-management",
+      "svelte",
+      "sveltekit",
+      "swr",
+      "tailwind",
+      "tanstack-query",
+      "vue",
+      "web-vitals",
+      "web-workers",
+      "zustand"
+    ],
+    "backend": [
+      "aspnet-core",
+      "django",
+      "express",
+      "fastapi",
+      "fastify",
+      "fiber",
+      "gin",
+      "laravel",
+      "nestjs",
+      "nodejs",
+      "rails",
+      "spring-boot"
+    ],
+    "api-realtime": [
+      "api-contract-testing",
+      "api-versioning",
+      "graphql",
+      "grpc",
+      "idempotency",
+      "openapi",
+      "pagination",
+      "rest-api",
+      "sse",
+      "webhook-consumer",
+      "webhooks",
+      "websockets"
+    ],
+    "auth": [
+      "abac",
+      "aspnet-identity",
+      "authentication",
+      "authorization",
+      "jwt",
+      "laravel-passport",
+      "laravel-sanctum",
+      "multi-tenancy",
+      "oauth2",
+      "oidc",
+      "rbac",
+      "refresh-tokens",
+      "session-auth",
+      "webauthn-passkeys"
+    ],
+    "security": [
+      "api-security",
+      "command-injection",
+      "cookie-session-security",
+      "cors",
+      "cryptography-basics",
+      "csrf",
+      "dependency-security",
+      "file-upload-security",
+      "open-redirects",
+      "owasp-asvs",
+      "rate-limiting",
+      "secrets-management",
+      "secure-headers",
+      "security-testing",
+      "sql-injection",
+      "ssrf",
+      "web-security",
+      "xss"
+    ],
+    "data": [
+      "database-design",
+      "drizzle",
+      "eloquent",
+      "entity-framework-core",
+      "indexing",
+      "migrations",
+      "mongodb",
+      "mongoose",
+      "mysql",
+      "postgresql",
+      "prisma",
+      "query-optimization",
+      "redis",
+      "sequelize",
+      "sql",
+      "sql-server",
+      "sqlite",
+      "transactions",
+      "typeorm"
+    ],
+    "distributed-jobs": [
+      "background-jobs",
+      "bullmq",
+      "caching",
+      "concurrency",
+      "distributed-cache",
+      "distributed-locking",
+      "event-driven",
+      "eventual-consistency",
+      "hangfire",
+      "kafka",
+      "laravel-queues",
+      "pubsub",
+      "queues",
+      "rabbitmq",
+      "retry-resilience",
+      "scheduling"
+    ],
+    "storage-media": [
+      "azure-blob",
+      "cdn",
+      "file-upload",
+      "image-processing",
+      "object-storage",
+      "s3",
+      "signed-urls",
+      "streaming-downloads"
+    ],
+    "testing": [
+      "api-testing",
+      "browser-testing",
+      "contract-testing",
+      "database-testing",
+      "e2e-testing",
+      "integration-testing",
+      "jest",
+      "mocking",
+      "pest",
+      "playwright",
+      "smoke-testing",
+      "test-data",
+      "unit-testing",
+      "vitest",
+      "xunit"
+    ],
+    "observability-performance": [
+      "alerting",
+      "audit-logging",
+      "backend-performance",
+      "bundle-optimization",
+      "database-performance",
+      "error-monitoring",
+      "grafana",
+      "health-checks",
+      "load-testing",
+      "log-aggregation",
+      "loki",
+      "metrics",
+      "opentelemetry",
+      "profiling",
+      "prometheus",
+      "sentry",
+      "structured-logging",
+      "tracing",
+      "web-performance"
+    ],
+    "devops-delivery": [
+      "ansible",
+      "apache",
+      "artifact-management",
+      "artifact-signing",
+      "aws",
+      "azure",
+      "azure-devops-pipelines",
+      "backup-restore",
+      "blue-green-deployment",
+      "build-caching",
+      "buildkite",
+      "caddy",
+      "canary-deployment",
+      "capacity-planning",
+      "cd",
+      "cdn-operations",
+      "certificate-management",
+      "changelog",
+      "ci",
+      "circleci",
+      "cloud-architecture",
+      "cloud-cost-optimization",
+      "cloud-iam",
+      "cloud-networking",
+      "cloudflare",
+      "cloudflare-tunnel",
+      "cloudflare-workers",
+      "container-image-optimization",
+      "container-registry",
+      "container-scanning",
+      "containerization",
+      "conventional-commits",
+      "cron-scheduling",
+      "dast",
+      "database-deployment",
+      "dependency-scanning",
+      "deployment",
+      "devcontainers",
+      "devsecops",
+      "disaster-recovery",
+      "dns",
+      "docker",
+      "docker-buildkit",
+      "docker-compose",
+      "docker-healthchecks",
+      "docker-networking",
+      "docker-performance",
+      "docker-security",
+      "docker-volumes",
+      "dockerfile",
+      "environment-management",
+      "environment-promotion",
+      "error-budgets",
+      "feature-flags",
+      "firewall",
+      "gateway-api",
+      "gcp",
+      "github-actions",
+      "gitlab-ci",
+      "graceful-shutdown",
+      "helm",
+      "high-availability",
+      "http2-http3",
+      "iac-drift-management",
+      "iac-module-design",
+      "iac-scanning",
+      "iac-state-management",
+      "incident-response",
+      "infrastructure-as-code",
+      "jenkins",
+      "kubernetes",
+      "kubernetes-autoscaling",
+      "kubernetes-ingress",
+      "kubernetes-observability",
+      "kubernetes-secrets",
+      "kubernetes-security",
+      "kustomize",
+      "linux-server",
+      "load-balancing",
+      "log-rotation",
+      "multi-arch-builds",
+      "nginx",
+      "opentofu",
+      "pipeline-design",
+      "post-deploy-verification",
+      "preview-environments",
+      "production-readiness",
+      "provenance-attestation",
+      "pulumi",
+      "readiness-liveness",
+      "release-automation",
+      "reverse-proxy",
+      "rollback",
+      "rolling-deployment",
+      "runbooks",
+      "sast",
+      "sbom",
+      "secret-scanning",
+      "self-hosted-runners",
+      "semantic-versioning",
+      "serverless",
+      "service-mesh",
+      "sli-slo-sla",
+      "sre",
+      "ssh-hardening",
+      "ssl-tls",
+      "supply-chain-security",
+      "systemd",
+      "terraform",
+      "zero-downtime-deployment"
+    ],
+    "packages": [
+      "composer",
+      "dependency-upgrades",
+      "lockfiles",
+      "npm",
+      "nuget",
+      "pnpm",
+      "yarn"
+    ],
+    "architecture-patterns": [
+      "clean-architecture",
+      "domain-driven-design",
+      "microservices",
+      "modular-monolith",
+      "monorepo",
+      "vertical-slice"
+    ],
+    "integrations": [
+      "ai-api-integration",
+      "analytics",
+      "elasticsearch",
+      "email",
+      "maps",
+      "oauth-providers",
+      "payments",
+      "search",
+      "sms",
+      "stripe",
+      "third-party-api"
+    ]
+  },
+  "skills": [
+    {
+      "name": "api-contract-testing",
+      "category": "api-realtime",
+      "description": "Consumer/provider contract verification for HTTP/events.",
+      "activate": "Cross-team/service API boundaries."
+    },
+    {
+      "name": "api-versioning",
+      "category": "api-realtime",
+      "description": "API compatibility, deprecation, version selection, and migration strategy.",
+      "activate": "Breaking/parallel API evolution."
+    },
+    {
+      "name": "graphql",
+      "category": "api-realtime",
+      "description": "GraphQL schema, resolvers, authorization, pagination, batching, and query cost.",
+      "activate": "GraphQL package/schema."
+    },
+    {
+      "name": "grpc",
+      "category": "api-realtime",
+      "description": "gRPC protobuf contracts, streaming, deadlines, errors, compatibility, and generated code.",
+      "activate": "proto files / gRPC packages."
+    },
+    {
+      "name": "idempotency",
+      "category": "api-realtime",
+      "description": "Idempotent operations, idempotency keys, deduplication, retries, and persistence.",
+      "activate": "Payments, jobs, create/update requests that may repeat."
+    },
+    {
+      "name": "openapi",
+      "category": "api-realtime",
+      "description": "OpenAPI schemas, generated docs/clients, contract accuracy, and versioning.",
+      "activate": "Swagger/OpenAPI dependency/config/spec."
+    },
+    {
+      "name": "pagination",
+      "category": "api-realtime",
+      "description": "Offset/cursor pagination, stable ordering, filters, totals, and client contracts.",
+      "activate": "List endpoints with large/unbounded data."
+    },
+    {
+      "name": "rest-api",
+      "category": "api-realtime",
+      "description": "REST-style resource/action APIs, HTTP semantics, errors, and evolvability.",
+      "activate": "REST endpoint design/change."
+    },
+    {
+      "name": "sse",
+      "category": "api-realtime",
+      "description": "Server-Sent Events streaming, reconnect, event IDs, proxy behavior, and cleanup.",
+      "activate": "SSE endpoint/client."
+    },
+    {
+      "name": "webhook-consumer",
+      "category": "api-realtime",
+      "description": "Inbound webhook verification, replay protection, idempotency, async processing, and provider contracts.",
+      "activate": "Receiving webhooks."
+    },
+    {
+      "name": "webhooks",
+      "category": "api-realtime",
+      "description": "Outbound webhook delivery, signing, retries, idempotency, and observability.",
+      "activate": "Sending webhooks."
+    },
+    {
+      "name": "websockets",
+      "category": "api-realtime",
+      "description": "WebSocket connection auth, messages, reconnect, ordering, heartbeat, and security.",
+      "activate": "ws/socket.io/SignalR/Colyseus/realtime socket behavior."
+    },
+    {
+      "name": "clean-architecture",
+      "category": "architecture-patterns",
+      "description": "Clean Architecture dependency rule and boundary use without ceremony.",
+      "activate": "Project already uses Clean Architecture or task affects those boundaries."
+    },
+    {
+      "name": "domain-driven-design",
+      "category": "architecture-patterns",
+      "description": "DDD aggregates, entities, value objects, domain services/events, and bounded contexts.",
+      "activate": "Project actually uses DDD or complex domain invariants justify it."
+    },
+    {
+      "name": "microservices",
+      "category": "architecture-patterns",
+      "description": "Service ownership, contracts, data autonomy, failure handling, observability, and rollout.",
+      "activate": "Existing microservice architecture/cross-service change."
+    },
+    {
+      "name": "modular-monolith",
+      "category": "architecture-patterns",
+      "description": "Strong in-process module boundaries, internal contracts, data ownership, and deployment as one unit.",
+      "activate": "Modular monolith project."
+    },
+    {
+      "name": "monorepo",
+      "category": "architecture-patterns",
+      "description": "Monorepo project boundaries, shared packages, dependency graph, builds, and affected testing.",
+      "activate": "Workspace/solution containing multiple apps/packages."
+    },
+    {
+      "name": "vertical-slice",
+      "category": "architecture-patterns",
+      "description": "Feature/vertical-slice organization around use cases.",
+      "activate": "Project uses feature slices/mediator/use-case folders."
+    },
+    {
+      "name": "abac",
+      "category": "auth",
+      "description": "Attribute/policy-based authorization for contextual rules.",
+      "activate": "Complex authorization based on resource/user/environment attributes."
+    },
+    {
+      "name": "aspnet-identity",
+      "category": "auth",
+      "description": "ASP.NET Core Identity user, sign-in, token, claims, lockout, and auth integration.",
+      "activate": "Microsoft.AspNetCore.Identity references."
+    },
+    {
+      "name": "authentication",
+      "category": "auth",
+      "description": "Authentication flows, identity proof, credential lifecycle, and session/token selection.",
+      "activate": "Login/identity features."
+    },
+    {
+      "name": "authorization",
+      "category": "auth",
+      "description": "Resource/action authorization, ownership, policy enforcement, and IDOR prevention.",
+      "activate": "Permissions/roles/resource access."
+    },
+    {
+      "name": "jwt",
+      "category": "auth",
+      "description": "JWT validation, claims, signing keys, expiry, audience/issuer, and misuse prevention.",
+      "activate": "JWT-based auth."
+    },
+    {
+      "name": "laravel-passport",
+      "category": "auth",
+      "description": "Laravel Passport OAuth2 server/client behavior.",
+      "activate": "laravel/passport dependency."
+    },
+    {
+      "name": "laravel-sanctum",
+      "category": "auth",
+      "description": "Laravel Sanctum SPA/API token authentication and abilities.",
+      "activate": "laravel/sanctum dependency."
+    },
+    {
+      "name": "multi-tenancy",
+      "category": "auth",
+      "description": "Tenant isolation, tenant resolution, data boundaries, auth, jobs, caches, and observability.",
+      "activate": "Multi-tenant/SaaS features."
+    },
+    {
+      "name": "oauth2",
+      "category": "auth",
+      "description": "OAuth 2.0 authorization flows, clients, scopes, PKCE, redirects, and token handling.",
+      "activate": "OAuth client/resource server integration."
+    },
+    {
+      "name": "oidc",
+      "category": "auth",
+      "description": "OpenID Connect identity, discovery, nonce, claims, and session integration.",
+      "activate": "OIDC login/provider integration."
+    },
+    {
+      "name": "rbac",
+      "category": "auth",
+      "description": "Role-based access control modeling and enforcement.",
+      "activate": "Role-based permissions."
+    },
+    {
+      "name": "refresh-tokens",
+      "category": "auth",
+      "description": "Refresh-token rotation, replay detection, revocation, storage, and session continuity.",
+      "activate": "Refresh-token auth."
+    },
+    {
+      "name": "session-auth",
+      "category": "auth",
+      "description": "Server sessions, cookie lifecycle, fixation, rotation, expiration, and revocation.",
+      "activate": "Cookie/session auth."
+    },
+    {
+      "name": "webauthn-passkeys",
+      "category": "auth",
+      "description": "WebAuthn/passkeys registration, authentication, challenge, RP/origin, and credential lifecycle.",
+      "activate": "Passkey/security-key features."
+    },
+    {
+      "name": "aspnet-core",
+      "category": "backend",
+      "description": "ASP.NET Core hosting, DI, middleware, endpoints/controllers, authorization, async I/O, config, and testing.",
+      "activate": "Microsoft.NET.Sdk.Web / ASP.NET Core references."
+    },
+    {
+      "name": "django",
+      "category": "backend",
+      "description": "Django models, ORM, views, middleware, forms/DRF boundaries, transactions, and security.",
+      "activate": "Django dependency/settings."
+    },
+    {
+      "name": "express",
+      "category": "backend",
+      "description": "Express middleware, routing, error handling, security, and request lifecycle.",
+      "activate": "express dependency."
+    },
+    {
+      "name": "fastapi",
+      "category": "backend",
+      "description": "FastAPI dependency injection, Pydantic models, async endpoints, validation, and OpenAPI behavior.",
+      "activate": "fastapi dependency."
+    },
+    {
+      "name": "fastify",
+      "category": "backend",
+      "description": "Fastify plugins, schemas, lifecycle hooks, serialization, and performance.",
+      "activate": "fastify dependency."
+    },
+    {
+      "name": "fiber",
+      "category": "backend",
+      "description": "Fiber routing, middleware, request lifecycle, validation, and Go backend practices.",
+      "activate": "gofiber/fiber dependency."
+    },
+    {
+      "name": "gin",
+      "category": "backend",
+      "description": "Gin routing, middleware, binding/validation, context, errors, and Go web practices.",
+      "activate": "github.com/gin-gonic/gin dependency."
+    },
+    {
+      "name": "laravel",
+      "category": "backend",
+      "description": "Laravel routing, container, validation, authorization, Eloquent, jobs, events, testing, and deployment conventions.",
+      "activate": "laravel/framework dependency/artisan."
+    },
+    {
+      "name": "nestjs",
+      "category": "backend",
+      "description": "NestJS modules, providers, controllers, guards, pipes, interceptors, and testing.",
+      "activate": "@nestjs/core dependency."
+    },
+    {
+      "name": "nodejs",
+      "category": "backend",
+      "description": "Node.js runtime, event loop, streams, async I/O, process lifecycle, and server practices.",
+      "activate": "Node-based backend/runtime."
+    },
+    {
+      "name": "rails",
+      "category": "backend",
+      "description": "Rails controllers, Active Record, callbacks, jobs, routing, validation, authorization, and testing.",
+      "activate": "rails Gem dependency."
+    },
+    {
+      "name": "spring-boot",
+      "category": "backend",
+      "description": "Spring Boot controllers, DI, configuration, validation, transactions, security, and testing.",
+      "activate": "Spring Boot dependencies."
+    },
+    {
+      "name": "accessibility-baseline",
+      "category": "core",
+      "description": "Baseline semantic, keyboard, focus, forms, and accessible naming guidance.",
+      "activate": "Any user-facing frontend change."
+    },
+    {
+      "name": "api-design",
+      "category": "core",
+      "description": "Consistent resource/action API contracts and evolution.",
+      "activate": "Designing or changing an API."
+    },
+    {
+      "name": "backward-compatibility",
+      "category": "core",
+      "description": "Compatibility strategy for APIs, schemas, events, config, and persisted data.",
+      "activate": "Existing public/internal contracts are changed."
+    },
+    {
+      "name": "clean-code",
+      "category": "core",
+      "description": "Readable naming, control flow, duplication, dead code, and function/class responsibility.",
+      "activate": "Implementation and code review."
+    },
+    {
+      "name": "code-simplification",
+      "category": "core",
+      "description": "Behavior-preserving simplification and reduction of unnecessary complexity.",
+      "activate": "After implementation or explicit cleanup."
+    },
+    {
+      "name": "configuration",
+      "category": "core",
+      "description": "Environment-aware configuration, feature switches, and runtime settings.",
+      "activate": "Tasks involving configuration or deployment behavior."
+    },
+    {
+      "name": "dependency-management",
+      "category": "core",
+      "description": "Dependency selection, lifecycle, compatibility, lockfiles, and supply-chain hygiene.",
+      "activate": "Adding/upgrading/removing packages."
+    },
+    {
+      "name": "documentation",
+      "category": "core",
+      "description": "Developer, API, operational, and migration documentation practices.",
+      "activate": "When behavior/setup/contracts change."
+    },
+    {
+      "name": "error-handling",
+      "category": "core",
+      "description": "Consistent errors, exceptions, user-safe responses, retries, and failure propagation.",
+      "activate": "Any task involving failure states."
+    },
+    {
+      "name": "git-workflow",
+      "category": "core",
+      "description": "Branches, commits, diffs, conflict discipline, and review-friendly change structure.",
+      "activate": "Any repository-changing task."
+    },
+    {
+      "name": "http",
+      "category": "core",
+      "description": "HTTP methods, status codes, caching, headers, content negotiation, redirects, and semantics.",
+      "activate": "HTTP route/API/browser network behavior."
+    },
+    {
+      "name": "logging",
+      "category": "core",
+      "description": "Application logging conventions, structure, correlation, and sensitive-data hygiene.",
+      "activate": "Tasks involving logs or production diagnostics."
+    },
+    {
+      "name": "maintainable-code",
+      "category": "core",
+      "description": "Maintainability, simplicity, cohesion, coupling, and pragmatic extension-point guidance.",
+      "activate": "Any implementation or refactor."
+    },
+    {
+      "name": "modular-design",
+      "category": "core",
+      "description": "Module boundaries, dependency direction, cohesion, and public surface design.",
+      "activate": "New modules or cross-module work."
+    },
+    {
+      "name": "performance-baseline",
+      "category": "core",
+      "description": "Baseline performance awareness without premature optimization.",
+      "activate": "Any meaningful web change."
+    },
+    {
+      "name": "refactoring",
+      "category": "core",
+      "description": "Safe behavior-preserving refactoring strategy.",
+      "activate": "When existing design blocks the requested change or simplification."
+    },
+    {
+      "name": "security-baseline",
+      "category": "core",
+      "description": "Baseline secure web-development rules.",
+      "activate": "Any web change; deeper security skills when risk requires."
+    },
+    {
+      "name": "testing-strategy",
+      "category": "core",
+      "description": "Risk-based selection of unit, integration, contract, browser, and smoke tests.",
+      "activate": "Planning validation for a change."
+    },
+    {
+      "name": "validation",
+      "category": "core",
+      "description": "Boundary validation, normalization, domain invariants, and validation error design.",
+      "activate": "Any untrusted/external input."
+    },
+    {
+      "name": "web-architecture",
+      "category": "core",
+      "description": "Web system boundaries, data flow, ownership, contracts, and deployment-aware architecture.",
+      "activate": "Architecture or cross-layer changes."
+    },
+    {
+      "name": "web-core",
+      "category": "core",
+      "description": "Universal web application engineering baseline.",
+      "activate": "Any web task."
+    },
+    {
+      "name": "database-design",
+      "category": "data",
+      "description": "Relational/document data modeling, invariants, keys, relationships, and lifecycle.",
+      "activate": "Schema/domain persistence design."
+    },
+    {
+      "name": "drizzle",
+      "category": "data",
+      "description": "Drizzle schema/query/migration type-safe SQL practices.",
+      "activate": "drizzle-orm dependency."
+    },
+    {
+      "name": "eloquent",
+      "category": "data",
+      "description": "Laravel Eloquent relationships, scopes, eager loading, casts, transactions, and model lifecycle.",
+      "activate": "Laravel Eloquent model/query code."
+    },
+    {
+      "name": "entity-framework-core",
+      "category": "data",
+      "description": "EF Core DbContext lifetime, LINQ translation, tracking, migrations, concurrency, and query performance.",
+      "activate": "Microsoft.EntityFrameworkCore references."
+    },
+    {
+      "name": "indexing",
+      "category": "data",
+      "description": "Index selection, selectivity, composite order, covering, uniqueness, and write cost.",
+      "activate": "Query/schema performance work."
+    },
+    {
+      "name": "migrations",
+      "category": "data",
+      "description": "Schema/data migration safety, rollout sequencing, compatibility, and rollback.",
+      "activate": "Schema/data migration."
+    },
+    {
+      "name": "mongodb",
+      "category": "data",
+      "description": "MongoDB document modeling, indexes, atomicity, aggregation, and consistency.",
+      "activate": "MongoDB driver/mongoose."
+    },
+    {
+      "name": "mongoose",
+      "category": "data",
+      "description": "Mongoose schemas, validation, indexes, middleware, population, and MongoDB behavior.",
+      "activate": "mongoose dependency."
+    },
+    {
+      "name": "mysql",
+      "category": "data",
+      "description": "MySQL/MariaDB query, index, transaction, collation, and version-specific behavior.",
+      "activate": "MySQL/MariaDB driver/config/image."
+    },
+    {
+      "name": "postgresql",
+      "category": "data",
+      "description": "PostgreSQL-specific SQL, indexes, transactions, JSON, locking, and operations.",
+      "activate": "PostgreSQL driver/config/image."
+    },
+    {
+      "name": "prisma",
+      "category": "data",
+      "description": "Prisma schema/client, migrations, transactions, relations, and query behavior.",
+      "activate": "@prisma/client/prisma schema."
+    },
+    {
+      "name": "query-optimization",
+      "category": "data",
+      "description": "Query plans, cardinality, N+1, pagination, batching, and database performance.",
+      "activate": "Slow/heavy database access."
+    },
+    {
+      "name": "redis",
+      "category": "data",
+      "description": "Redis data types, TTLs, atomic operations, persistence role, and failure behavior.",
+      "activate": "Redis client/config/image."
+    },
+    {
+      "name": "sequelize",
+      "category": "data",
+      "description": "Sequelize models, associations, transactions, query behavior, and migrations.",
+      "activate": "sequelize dependency."
+    },
+    {
+      "name": "sql",
+      "category": "data",
+      "description": "SQL query correctness, joins, aggregation, nulls, locking, and parameterization.",
+      "activate": "SQL/raw query work."
+    },
+    {
+      "name": "sql-server",
+      "category": "data",
+      "description": "SQL Server query, index, transaction, EF integration, and operational behavior.",
+      "activate": "SQL Server client/provider."
+    },
+    {
+      "name": "sqlite",
+      "category": "data",
+      "description": "SQLite locking, transactions, WAL, schema limits, and local/server use.",
+      "activate": "SQLite dependency/file/config."
+    },
+    {
+      "name": "transactions",
+      "category": "data",
+      "description": "Atomicity, isolation, locks, retry, and transaction-boundary design.",
+      "activate": "Multi-write/concurrent persistence behavior."
+    },
+    {
+      "name": "typeorm",
+      "category": "data",
+      "description": "TypeORM entities, repositories/data source, transactions, relations, and migrations.",
+      "activate": "typeorm dependency."
+    },
+    {
+      "name": "ansible",
+      "category": "devops-delivery",
+      "description": "Ansible inventories, roles, playbooks, idempotency, and secret handling.",
+      "activate": "Ansible automation."
+    },
+    {
+      "name": "apache",
+      "category": "devops-delivery",
+      "description": "Apache HTTP server/reverse proxy/rewrite/static/security configuration.",
+      "activate": "Apache config/.htaccess."
+    },
+    {
+      "name": "artifact-management",
+      "category": "devops-delivery",
+      "description": "Build artifact packaging, storage, retention, provenance, and promotion.",
+      "activate": "CI artifacts/releases."
+    },
+    {
+      "name": "artifact-signing",
+      "category": "devops-delivery",
+      "description": "Artifact/container signing, verification, identity, and trust policy.",
+      "activate": "Signed releases/images."
+    },
+    {
+      "name": "aws",
+      "category": "devops-delivery",
+      "description": "AWS web infrastructure integration and operational conventions.",
+      "activate": "AWS resources/services."
+    },
+    {
+      "name": "azure",
+      "category": "devops-delivery",
+      "description": "Azure web infrastructure integration and operational conventions.",
+      "activate": "Azure resources/services."
+    },
+    {
+      "name": "azure-devops-pipelines",
+      "category": "devops-delivery",
+      "description": "Azure DevOps YAML pipelines, stages, environments, artifacts, and service connections.",
+      "activate": "azure-pipelines.yml."
+    },
+    {
+      "name": "backup-restore",
+      "category": "devops-delivery",
+      "description": "Backup policies, retention, encryption, restore procedures, and verification.",
+      "activate": "Backup/recovery."
+    },
+    {
+      "name": "blue-green-deployment",
+      "category": "devops-delivery",
+      "description": "Blue/green deployment, traffic cutover, validation, and rollback.",
+      "activate": "Blue/green releases."
+    },
+    {
+      "name": "build-caching",
+      "category": "devops-delivery",
+      "description": "Safe CI build/dependency caching and invalidation.",
+      "activate": "Slow or repeated CI builds."
+    },
+    {
+      "name": "buildkite",
+      "category": "devops-delivery",
+      "description": "Buildkite pipelines, agents, artifacts, secrets, and concurrency.",
+      "activate": "Buildkite pipeline files."
+    },
+    {
+      "name": "caddy",
+      "category": "devops-delivery",
+      "description": "Caddy web server/reverse proxy, TLS automation, routing, and headers.",
+      "activate": "Caddyfile."
+    },
+    {
+      "name": "canary-deployment",
+      "category": "devops-delivery",
+      "description": "Canary rollout, traffic percentages, metrics, and abort criteria.",
+      "activate": "Canary deployment."
+    },
+    {
+      "name": "capacity-planning",
+      "category": "devops-delivery",
+      "description": "Resource, traffic, growth, concurrency, and saturation capacity planning.",
+      "activate": "Scaling/capacity work."
+    },
+    {
+      "name": "cd",
+      "category": "devops-delivery",
+      "description": "Continuous delivery/deployment principles and promotion gates.",
+      "activate": "Deployment pipelines."
+    },
+    {
+      "name": "cdn-operations",
+      "category": "devops-delivery",
+      "description": "CDN caching, purge/invalidation, cache keys, origins, and rollout behavior.",
+      "activate": "CDN configuration."
+    },
+    {
+      "name": "certificate-management",
+      "category": "devops-delivery",
+      "description": "TLS certificate issuance, renewal, storage, and rotation.",
+      "activate": "Certificates/TLS automation."
+    },
+    {
+      "name": "changelog",
+      "category": "devops-delivery",
+      "description": "Human-readable change log and release note practices.",
+      "activate": "Release notes/changelogs."
+    },
+    {
+      "name": "ci",
+      "category": "devops-delivery",
+      "description": "CI pipeline stages, caching, deterministic builds, test gates, artifacts, and fail-fast behavior.",
+      "activate": "Any CI system."
+    },
+    {
+      "name": "circleci",
+      "category": "devops-delivery",
+      "description": "CircleCI workflows, jobs, caching, contexts, and deployment.",
+      "activate": ".circleci config."
+    },
+    {
+      "name": "cloud-architecture",
+      "category": "devops-delivery",
+      "description": "Cloud deployment architecture, availability zones, managed services, scaling, and failure domains.",
+      "activate": "Cloud-hosted systems."
+    },
+    {
+      "name": "cloud-cost-optimization",
+      "category": "devops-delivery",
+      "description": "Cloud cost visibility, right-sizing, lifecycle, storage/egress, and scaling economics.",
+      "activate": "Cost optimization."
+    },
+    {
+      "name": "cloud-iam",
+      "category": "devops-delivery",
+      "description": "Cloud identity, service identities, roles, policies, and least privilege.",
+      "activate": "Cloud IAM changes."
+    },
+    {
+      "name": "cloud-networking",
+      "category": "devops-delivery",
+      "description": "VPC/VNet, subnets, routing, firewalls/security groups, private endpoints, and egress.",
+      "activate": "Cloud network changes."
+    },
+    {
+      "name": "cloudflare",
+      "category": "devops-delivery",
+      "description": "Cloudflare proxy/tunnel/cache/WAF/DNS behavior and origin integration.",
+      "activate": "Cloudflare deployment/config."
+    },
+    {
+      "name": "cloudflare-tunnel",
+      "category": "devops-delivery",
+      "description": "Cloudflare Tunnel deployment, credentials, routing, health, and daemon operation.",
+      "activate": "cloudflared/tunnel usage."
+    },
+    {
+      "name": "cloudflare-workers",
+      "category": "devops-delivery",
+      "description": "Cloudflare Workers edge runtime, routing, bindings, secrets, and deployment.",
+      "activate": "Workers/wrangler projects."
+    },
+    {
+      "name": "container-image-optimization",
+      "category": "devops-delivery",
+      "description": "Runtime image minimization and dependency reduction.",
+      "activate": "Reducing image size/attack surface."
+    },
+    {
+      "name": "container-registry",
+      "category": "devops-delivery",
+      "description": "Container registry publishing, tags, retention, auth, and promotion.",
+      "activate": "Publishing images."
+    },
+    {
+      "name": "container-scanning",
+      "category": "devops-delivery",
+      "description": "Container image vulnerability and misconfiguration scanning.",
+      "activate": "Container security pipelines."
+    },
+    {
+      "name": "containerization",
+      "category": "devops-delivery",
+      "description": "Container architecture and runtime boundaries.",
+      "activate": "Containerizing or reviewing a service."
+    },
+    {
+      "name": "conventional-commits",
+      "category": "devops-delivery",
+      "description": "Conventional commit structure for automation and changelog workflows.",
+      "activate": "Projects using conventional commits."
+    },
+    {
+      "name": "cron-scheduling",
+      "category": "devops-delivery",
+      "description": "Cron/system timers for recurring operational jobs.",
+      "activate": "Host scheduled tasks."
+    },
+    {
+      "name": "dast",
+      "category": "devops-delivery",
+      "description": "Dynamic application security testing integration and safe execution.",
+      "activate": "DAST environments."
+    },
+    {
+      "name": "database-deployment",
+      "category": "devops-delivery",
+      "description": "Database migration sequencing, compatibility windows, and deploy safety.",
+      "activate": "Schema/data migrations during releases."
+    },
+    {
+      "name": "dependency-scanning",
+      "category": "devops-delivery",
+      "description": "Dependency vulnerability scanning and remediation workflow.",
+      "activate": "Dependency security pipelines."
+    },
+    {
+      "name": "deployment",
+      "category": "devops-delivery",
+      "description": "Deployment sequencing, assets, migrations, startup, traffic cutover, and verification.",
+      "activate": "Release/deploy work."
+    },
+    {
+      "name": "devcontainers",
+      "category": "devops-delivery",
+      "description": "Development Containers and reproducible developer environments.",
+      "activate": ".devcontainer usage."
+    },
+    {
+      "name": "devsecops",
+      "category": "devops-delivery",
+      "description": "Security integrated into build, delivery, infrastructure, and runtime operations.",
+      "activate": "DevSecOps review."
+    },
+    {
+      "name": "disaster-recovery",
+      "category": "devops-delivery",
+      "description": "Recovery objectives, backups, failover, restore drills, and disaster procedures.",
+      "activate": "DR planning."
+    },
+    {
+      "name": "dns",
+      "category": "devops-delivery",
+      "description": "DNS records, TTLs, cutovers, validation, and service discovery basics.",
+      "activate": "DNS/deployment cutovers."
+    },
+    {
+      "name": "docker",
+      "category": "devops-delivery",
+      "description": "Docker image/container build, runtime, security, caching, and reproducibility.",
+      "activate": "Dockerfile/container deployment."
+    },
+    {
+      "name": "docker-buildkit",
+      "category": "devops-delivery",
+      "description": "Docker BuildKit caches, mounts, secrets, and advanced build behavior.",
+      "activate": "BuildKit or optimized container builds."
+    },
+    {
+      "name": "docker-compose",
+      "category": "devops-delivery",
+      "description": "Docker Compose local/multi-service orchestration, health/dependencies, volumes, and networking.",
+      "activate": "compose files."
+    },
+    {
+      "name": "docker-healthchecks",
+      "category": "devops-delivery",
+      "description": "Container health checks and startup/readiness behavior.",
+      "activate": "Container health or orchestration checks."
+    },
+    {
+      "name": "docker-networking",
+      "category": "devops-delivery",
+      "description": "Docker and Compose networking, ports, DNS, and service connectivity.",
+      "activate": "Container connectivity/port issues."
+    },
+    {
+      "name": "docker-performance",
+      "category": "devops-delivery",
+      "description": "Container build/runtime performance and image-size optimization.",
+      "activate": "Container performance or slow builds."
+    },
+    {
+      "name": "docker-security",
+      "category": "devops-delivery",
+      "description": "Docker daemon/image/runtime security and least-privilege container execution.",
+      "activate": "Container security review."
+    },
+    {
+      "name": "docker-volumes",
+      "category": "devops-delivery",
+      "description": "Docker volumes, bind mounts, persistence, permissions, and backup implications.",
+      "activate": "Persistent or mounted container data."
+    },
+    {
+      "name": "dockerfile",
+      "category": "devops-delivery",
+      "description": "Dockerfile authoring, layering, build context, users, and runtime entrypoints.",
+      "activate": "Dockerfile changes."
+    },
+    {
+      "name": "environment-management",
+      "category": "devops-delivery",
+      "description": "Dev/test/staging/prod environment parity, config ownership, secrets, and drift.",
+      "activate": "Environment setup/deployment."
+    },
+    {
+      "name": "environment-promotion",
+      "category": "devops-delivery",
+      "description": "Promotion across dev/stage/prod with immutable artifacts and approvals.",
+      "activate": "Multi-environment delivery."
+    },
+    {
+      "name": "error-budgets",
+      "category": "devops-delivery",
+      "description": "Error budget calculation and release/reliability decision use.",
+      "activate": "SLO-driven operations."
+    },
+    {
+      "name": "feature-flags",
+      "category": "devops-delivery",
+      "description": "Feature flag lifecycle, targeting, cleanup, and rollout safety.",
+      "activate": "Feature flags."
+    },
+    {
+      "name": "firewall",
+      "category": "devops-delivery",
+      "description": "Host/network firewall rules and least-exposed service ports.",
+      "activate": "Firewall configuration."
+    },
+    {
+      "name": "gateway-api",
+      "category": "devops-delivery",
+      "description": "Kubernetes Gateway API concepts and route ownership.",
+      "activate": "Gateway API resources."
+    },
+    {
+      "name": "gcp",
+      "category": "devops-delivery",
+      "description": "Google Cloud web infrastructure integration and operational conventions.",
+      "activate": "GCP resources/services."
+    },
+    {
+      "name": "github-actions",
+      "category": "devops-delivery",
+      "description": "GitHub Actions workflows, permissions, caching, matrices, artifacts, concurrency, and PR checks.",
+      "activate": ".github/workflows."
+    },
+    {
+      "name": "gitlab-ci",
+      "category": "devops-delivery",
+      "description": "GitLab CI pipelines, runners, caches, artifacts, environments, and security.",
+      "activate": ".gitlab-ci.yml."
+    },
+    {
+      "name": "graceful-shutdown",
+      "category": "devops-delivery",
+      "description": "Graceful termination, request draining, job shutdown, and signal handling.",
+      "activate": "Deploy/restart behavior."
+    },
+    {
+      "name": "helm",
+      "category": "devops-delivery",
+      "description": "Helm charts, values, templates, releases, and upgrade safety.",
+      "activate": "Helm charts."
+    },
+    {
+      "name": "high-availability",
+      "category": "devops-delivery",
+      "description": "Redundancy, failure domains, failover, and dependency availability.",
+      "activate": "HA design."
+    },
+    {
+      "name": "http2-http3",
+      "category": "devops-delivery",
+      "description": "HTTP/2 and HTTP/3 deployment/runtime considerations.",
+      "activate": "Protocol performance/edge configuration."
+    },
+    {
+      "name": "iac-drift-management",
+      "category": "devops-delivery",
+      "description": "Infrastructure drift detection and reconciliation.",
+      "activate": "Drift or manual-change control."
+    },
+    {
+      "name": "iac-module-design",
+      "category": "devops-delivery",
+      "description": "Reusable IaC modules, inputs, outputs, lifecycle, and versioning.",
+      "activate": "Building reusable infrastructure modules."
+    },
+    {
+      "name": "iac-scanning",
+      "category": "devops-delivery",
+      "description": "IaC security/misconfiguration scanning.",
+      "activate": "Terraform/Kubernetes/CloudFormation-style scanning."
+    },
+    {
+      "name": "iac-state-management",
+      "category": "devops-delivery",
+      "description": "IaC remote state, locking, access, backup, and recovery.",
+      "activate": "Terraform/OpenTofu/Pulumi state."
+    },
+    {
+      "name": "incident-response",
+      "category": "devops-delivery",
+      "description": "Incident detection, triage, mitigation, communication, and follow-up.",
+      "activate": "Production incident workflows."
+    },
+    {
+      "name": "infrastructure-as-code",
+      "category": "devops-delivery",
+      "description": "Infrastructure-as-code design, review, drift, safety, and lifecycle.",
+      "activate": "Any declarative infrastructure."
+    },
+    {
+      "name": "jenkins",
+      "category": "devops-delivery",
+      "description": "Jenkins pipelines, agents, credentials, artifacts, and build hygiene.",
+      "activate": "Jenkinsfile."
+    },
+    {
+      "name": "kubernetes",
+      "category": "devops-delivery",
+      "description": "Kubernetes workloads, services, probes, resources, config/secrets, rollout, and scaling.",
+      "activate": "Kubernetes manifests/Helm."
+    },
+    {
+      "name": "kubernetes-autoscaling",
+      "category": "devops-delivery",
+      "description": "HPA/VPA/autoscaling signals and workload scaling.",
+      "activate": "Autoscaling."
+    },
+    {
+      "name": "kubernetes-ingress",
+      "category": "devops-delivery",
+      "description": "Kubernetes Ingress/Gateway routing, TLS, annotations, and controllers.",
+      "activate": "Ingress/Gateway config."
+    },
+    {
+      "name": "kubernetes-observability",
+      "category": "devops-delivery",
+      "description": "Kubernetes metrics/logs/traces and workload/cluster observability.",
+      "activate": "Observing Kubernetes workloads."
+    },
+    {
+      "name": "kubernetes-secrets",
+      "category": "devops-delivery",
+      "description": "Kubernetes secret delivery, external secret stores, and rotation.",
+      "activate": "Kubernetes secrets."
+    },
+    {
+      "name": "kubernetes-security",
+      "category": "devops-delivery",
+      "description": "Kubernetes workload security, RBAC, service accounts, pod security, and network policy.",
+      "activate": "Kubernetes security."
+    },
+    {
+      "name": "kustomize",
+      "category": "devops-delivery",
+      "description": "Kustomize bases, overlays, patches, and environment composition.",
+      "activate": "Kustomize config."
+    },
+    {
+      "name": "linux-server",
+      "category": "devops-delivery",
+      "description": "Linux server deployment, filesystem, users, packages, resources, and runtime operations.",
+      "activate": "Linux host deployments."
+    },
+    {
+      "name": "load-balancing",
+      "category": "devops-delivery",
+      "description": "Load-balancing algorithms, health, session affinity, and failure handling.",
+      "activate": "Multiple app instances/upstreams."
+    },
+    {
+      "name": "log-rotation",
+      "category": "devops-delivery",
+      "description": "Host/application log rotation, retention, disk protection, and archival.",
+      "activate": "File-based logs."
+    },
+    {
+      "name": "multi-arch-builds",
+      "category": "devops-delivery",
+      "description": "Multi-platform container images and architecture-aware builds.",
+      "activate": "amd64/arm64 or multi-platform delivery."
+    },
+    {
+      "name": "nginx",
+      "category": "devops-delivery",
+      "description": "Nginx reverse proxy, static files, TLS termination, buffering, WebSockets, caching, and headers.",
+      "activate": "nginx config/deployment."
+    },
+    {
+      "name": "opentofu",
+      "category": "devops-delivery",
+      "description": "OpenTofu modules, providers, state, plan/apply, and migration.",
+      "activate": "OpenTofu projects."
+    },
+    {
+      "name": "pipeline-design",
+      "category": "devops-delivery",
+      "description": "CI/CD pipeline stages, dependencies, fast feedback, and failure isolation.",
+      "activate": "Creating or restructuring pipelines."
+    },
+    {
+      "name": "post-deploy-verification",
+      "category": "devops-delivery",
+      "description": "Smoke checks and runtime verification after deployment.",
+      "activate": "Production/staging releases."
+    },
+    {
+      "name": "preview-environments",
+      "category": "devops-delivery",
+      "description": "Ephemeral per-branch/PR environments and cleanup.",
+      "activate": "Preview deployments."
+    },
+    {
+      "name": "production-readiness",
+      "category": "devops-delivery",
+      "description": "Production checklist across reliability, security, configuration, monitoring, capacity, backup, and operations.",
+      "activate": "Pre-release/readiness review."
+    },
+    {
+      "name": "provenance-attestation",
+      "category": "devops-delivery",
+      "description": "Build provenance and attestations for release artifacts.",
+      "activate": "SLSA/provenance workflows."
+    },
+    {
+      "name": "pulumi",
+      "category": "devops-delivery",
+      "description": "Pulumi stacks, providers, state, secrets, and infrastructure code.",
+      "activate": "Pulumi projects."
+    },
+    {
+      "name": "readiness-liveness",
+      "category": "devops-delivery",
+      "description": "Readiness, liveness, startup probes and dependency semantics.",
+      "activate": "Health probe design."
+    },
+    {
+      "name": "release-automation",
+      "category": "devops-delivery",
+      "description": "Automated versioning, release creation, notes, tags, and artifact publication.",
+      "activate": "Automated releases."
+    },
+    {
+      "name": "reverse-proxy",
+      "category": "devops-delivery",
+      "description": "Reverse proxy routing, upstreams, headers, timeouts, and trust boundaries.",
+      "activate": "Reverse proxy configuration."
+    },
+    {
+      "name": "rollback",
+      "category": "devops-delivery",
+      "description": "Rollback strategy for application, schema, config, and feature changes.",
+      "activate": "Risky release/migration."
+    },
+    {
+      "name": "rolling-deployment",
+      "category": "devops-delivery",
+      "description": "Rolling replacement, capacity, readiness, and compatibility.",
+      "activate": "Rolling rollout."
+    },
+    {
+      "name": "runbooks",
+      "category": "devops-delivery",
+      "description": "Operational runbooks and executable troubleshooting/recovery procedures.",
+      "activate": "Operational documentation."
+    },
+    {
+      "name": "sast",
+      "category": "devops-delivery",
+      "description": "Static application security testing integration and triage.",
+      "activate": "SAST pipelines."
+    },
+    {
+      "name": "sbom",
+      "category": "devops-delivery",
+      "description": "Software Bill of Materials generation, storage, and vulnerability correlation.",
+      "activate": "SBOM requirements."
+    },
+    {
+      "name": "secret-scanning",
+      "category": "devops-delivery",
+      "description": "Secret detection, revocation, rotation, and prevention.",
+      "activate": "Secret scanning."
+    },
+    {
+      "name": "self-hosted-runners",
+      "category": "devops-delivery",
+      "description": "Security and operations of self-hosted CI runners.",
+      "activate": "Self-hosted CI."
+    },
+    {
+      "name": "semantic-versioning",
+      "category": "devops-delivery",
+      "description": "Semantic versioning and compatibility-aware release numbering.",
+      "activate": "Versioned packages/APIs/releases."
+    },
+    {
+      "name": "serverless",
+      "category": "devops-delivery",
+      "description": "Serverless functions/services, concurrency, cold starts, events, limits, and deployment.",
+      "activate": "Function/serverless workloads."
+    },
+    {
+      "name": "service-mesh",
+      "category": "devops-delivery",
+      "description": "Service mesh routing, mTLS, retries, policy, and observability tradeoffs.",
+      "activate": "Istio/Linkerd/mesh usage."
+    },
+    {
+      "name": "sli-slo-sla",
+      "category": "devops-delivery",
+      "description": "SLIs, SLOs, SLAs, measurement windows, and reliability targets.",
+      "activate": "Service objectives."
+    },
+    {
+      "name": "sre",
+      "category": "devops-delivery",
+      "description": "Site Reliability Engineering principles for web systems.",
+      "activate": "Reliability work."
+    },
+    {
+      "name": "ssh-hardening",
+      "category": "devops-delivery",
+      "description": "SSH access, keys, account restrictions, forwarding, and audit practices.",
+      "activate": "SSH server/access changes."
+    },
+    {
+      "name": "ssl-tls",
+      "category": "devops-delivery",
+      "description": "TLS certificates, HTTPS redirects, proxy termination, trust, and client/server verification.",
+      "activate": "TLS/HTTPS configuration."
+    },
+    {
+      "name": "supply-chain-security",
+      "category": "devops-delivery",
+      "description": "Dependency/build/artifact provenance and software supply-chain controls.",
+      "activate": "Supply-chain security."
+    },
+    {
+      "name": "systemd",
+      "category": "devops-delivery",
+      "description": "systemd services, restart policies, environment, logs, dependencies, and hardening.",
+      "activate": "systemd service units."
+    },
+    {
+      "name": "terraform",
+      "category": "devops-delivery",
+      "description": "Terraform infrastructure state, modules, plans, providers, drift, and safe changes.",
+      "activate": ".tf files/Terraform infrastructure."
+    },
+    {
+      "name": "zero-downtime-deployment",
+      "category": "devops-delivery",
+      "description": "Zero/low-downtime release design and compatibility.",
+      "activate": "Availability-sensitive releases."
+    },
+    {
+      "name": "background-jobs",
+      "category": "distributed-jobs",
+      "description": "Async job design, payloads, retries, idempotency, cancellation, and observability.",
+      "activate": "Background work."
+    },
+    {
+      "name": "bullmq",
+      "category": "distributed-jobs",
+      "description": "BullMQ jobs, Redis queues, retries, flows, workers, and stalled-job behavior.",
+      "activate": "bullmq dependency."
+    },
+    {
+      "name": "caching",
+      "category": "distributed-jobs",
+      "description": "Cache-aside/write-through/invalidation, TTL, consistency, and stampede protection.",
+      "activate": "Caching feature/performance work."
+    },
+    {
+      "name": "concurrency",
+      "category": "distributed-jobs",
+      "description": "Race conditions, optimistic/pessimistic control, atomicity, and concurrent request behavior.",
+      "activate": "Shared mutable data or concurrent operations."
+    },
+    {
+      "name": "distributed-cache",
+      "category": "distributed-jobs",
+      "description": "Shared cache semantics across instances, serialization, invalidation, and deployment.",
+      "activate": "Multi-instance shared cache."
+    },
+    {
+      "name": "distributed-locking",
+      "category": "distributed-jobs",
+      "description": "Distributed mutual exclusion, lease expiry, fencing, and failure modes.",
+      "activate": "Cross-instance exclusive operations."
+    },
+    {
+      "name": "event-driven",
+      "category": "distributed-jobs",
+      "description": "Events, producers/consumers, contracts, idempotency, ordering, and eventual consistency.",
+      "activate": "Event-based architecture."
+    },
+    {
+      "name": "eventual-consistency",
+      "category": "distributed-jobs",
+      "description": "User/system behavior under delayed propagation and reconciliation.",
+      "activate": "Async replicated/event-driven workflows."
+    },
+    {
+      "name": "hangfire",
+      "category": "distributed-jobs",
+      "description": "Hangfire jobs, storage, retries, queues, recurring jobs, and ASP.NET integration.",
+      "activate": "Hangfire package."
+    },
+    {
+      "name": "kafka",
+      "category": "distributed-jobs",
+      "description": "Kafka topics, partitions, consumer groups, offsets, ordering, schemas, and idempotency.",
+      "activate": "Kafka client/config."
+    },
+    {
+      "name": "laravel-queues",
+      "category": "distributed-jobs",
+      "description": "Laravel jobs, queues, retries, failed jobs, batches, workers, and deployment.",
+      "activate": "Laravel queue usage."
+    },
+    {
+      "name": "pubsub",
+      "category": "distributed-jobs",
+      "description": "Publish/subscribe topics, delivery semantics, fanout, ordering, and consumer behavior.",
+      "activate": "Pub/sub messaging."
+    },
+    {
+      "name": "queues",
+      "category": "distributed-jobs",
+      "description": "Queue delivery, ack, retry, dead-letter, backpressure, ordering, and scaling.",
+      "activate": "Queue infrastructure."
+    },
+    {
+      "name": "rabbitmq",
+      "category": "distributed-jobs",
+      "description": "RabbitMQ exchanges, queues, routing, acknowledgments, dead letters, and delivery semantics.",
+      "activate": "RabbitMQ client/config."
+    },
+    {
+      "name": "retry-resilience",
+      "category": "distributed-jobs",
+      "description": "Timeouts, retries, backoff, jitter, circuit/bulkhead patterns, and partial failure.",
+      "activate": "External/network/transient failure handling."
+    },
+    {
+      "name": "scheduling",
+      "category": "distributed-jobs",
+      "description": "Scheduled/recurring jobs, overlap, time zones, leader election, and missed runs.",
+      "activate": "Cron/scheduled jobs."
+    },
+    {
+      "name": "accessibility",
+      "category": "frontend",
+      "description": "Detailed web accessibility implementation and review.",
+      "activate": "Interactive/user-facing UI or explicit accessibility work."
+    },
+    {
+      "name": "angular",
+      "category": "frontend",
+      "description": "Angular components, DI, signals/RxJS, templates, routing, and change detection.",
+      "activate": "@angular/core dependency."
+    },
+    {
+      "name": "astro",
+      "category": "frontend",
+      "description": "Astro islands, content/rendering boundaries, integrations, and static/server output.",
+      "activate": "astro dependency."
+    },
+    {
+      "name": "bootstrap",
+      "category": "frontend",
+      "description": "Bootstrap grid, utilities, components, and accessible integration.",
+      "activate": "bootstrap dependency."
+    },
+    {
+      "name": "browser-apis",
+      "category": "frontend",
+      "description": "Browser API capability, permission, lifecycle, and compatibility use.",
+      "activate": "Clipboard/camera/geolocation/files/notifications/etc."
+    },
+    {
+      "name": "browser-compatibility",
+      "category": "frontend",
+      "description": "Cross-browser support and graceful degradation.",
+      "activate": "Browser-specific APIs/CSS or compatibility bugs."
+    },
+    {
+      "name": "client-routing",
+      "category": "frontend",
+      "description": "SPA/client routing, nested layouts, URL state, navigation, and deep-link behavior.",
+      "activate": "Frontend route/navigation changes."
+    },
+    {
+      "name": "css",
+      "category": "frontend",
+      "description": "Maintainable CSS layout, cascade, responsive styling, and component styling.",
+      "activate": "CSS/SCSS or UI styling."
+    },
+    {
+      "name": "data-fetching",
+      "category": "frontend",
+      "description": "Frontend server-state fetching, caching, retries, cancellation, and stale-data handling.",
+      "activate": "Client API fetching."
+    },
+    {
+      "name": "forms",
+      "category": "frontend",
+      "description": "Form state, validation, submission, errors, accessibility, and progressive behavior.",
+      "activate": "Form-related features."
+    },
+    {
+      "name": "frontend-performance",
+      "category": "frontend",
+      "description": "Rendering, network waterfalls, code splitting, images, memoization, and client performance.",
+      "activate": "Frontend performance-sensitive tasks."
+    },
+    {
+      "name": "frontend-security",
+      "category": "frontend",
+      "description": "DOM/client security, XSS prevention, secrets exposure, URL/navigation safety, and client trust boundaries.",
+      "activate": "Rendering untrusted data, auth UI, browser storage, redirects."
+    },
+    {
+      "name": "html",
+      "category": "frontend",
+      "description": "Semantic HTML structure and browser-native behavior.",
+      "activate": "HTML/templates/JSX producing markup."
+    },
+    {
+      "name": "indexeddb",
+      "category": "frontend",
+      "description": "IndexedDB structured client storage, transactions, schema upgrades, and offline data.",
+      "activate": "Large/structured browser persistence."
+    },
+    {
+      "name": "material-ui",
+      "category": "frontend",
+      "description": "MUI components, theme, accessibility, styling, and composition.",
+      "activate": "@mui/* dependency."
+    },
+    {
+      "name": "nextjs",
+      "category": "frontend",
+      "description": "Next.js App/Pages Router, server/client boundaries, routing, rendering, caching, and deployment conventions.",
+      "activate": "next dependency."
+    },
+    {
+      "name": "notifications",
+      "category": "frontend",
+      "description": "Browser notification permission, UX, push lifecycle, and privacy.",
+      "activate": "Web notification/push features."
+    },
+    {
+      "name": "nuxt",
+      "category": "frontend",
+      "description": "Nuxt routing, server/client rendering, data fetching, modules, and runtime config.",
+      "activate": "nuxt dependency."
+    },
+    {
+      "name": "pinia",
+      "category": "frontend",
+      "description": "Pinia stores, actions, getters, hydration, and Vue state ownership.",
+      "activate": "pinia dependency."
+    },
+    {
+      "name": "pwa",
+      "category": "frontend",
+      "description": "Progressive Web App installability, offline model, manifests, update behavior, and lifecycle.",
+      "activate": "PWA/offline/installable app features."
+    },
+    {
+      "name": "react",
+      "category": "frontend",
+      "description": "React component, hooks, state, effects, rendering, and composition practices.",
+      "activate": "React dependency or JSX/TSX React app."
+    },
+    {
+      "name": "redux",
+      "category": "frontend",
+      "description": "Redux/Redux Toolkit state, slices, selectors, async logic, and normalization.",
+      "activate": "@reduxjs/toolkit or redux dependency."
+    },
+    {
+      "name": "responsive-design",
+      "category": "frontend",
+      "description": "Responsive layout, touch targets, viewport behavior, and content adaptation.",
+      "activate": "User-facing UI across viewport sizes."
+    },
+    {
+      "name": "seo",
+      "category": "frontend",
+      "description": "Technical SEO, metadata, canonical URLs, structured data, crawlability, and sitemap practices.",
+      "activate": "Public discoverable pages."
+    },
+    {
+      "name": "service-workers",
+      "category": "frontend",
+      "description": "Service worker lifecycle, caching, fetch interception, offline and update behavior.",
+      "activate": "Service-worker code or PWA caching."
+    },
+    {
+      "name": "shadcn-ui",
+      "category": "frontend",
+      "description": "shadcn/ui component ownership, Radix composition, accessibility, and project-local customization.",
+      "activate": "components.json or shadcn/Radix patterns."
+    },
+    {
+      "name": "state-management",
+      "category": "frontend",
+      "description": "Client state ownership, local/global/remote state separation, and predictable updates.",
+      "activate": "State-heavy frontend features."
+    },
+    {
+      "name": "svelte",
+      "category": "frontend",
+      "description": "Svelte components, reactivity, stores, transitions, and lifecycle.",
+      "activate": "svelte dependency."
+    },
+    {
+      "name": "sveltekit",
+      "category": "frontend",
+      "description": "SvelteKit routing, load/actions, server/client boundaries, and deployment.",
+      "activate": "@sveltejs/kit dependency."
+    },
+    {
+      "name": "swr",
+      "category": "frontend",
+      "description": "SWR server-state fetching, keys, revalidation, mutation, and cache behavior.",
+      "activate": "swr dependency."
+    },
+    {
+      "name": "tailwind",
+      "category": "frontend",
+      "description": "Tailwind utility styling, design tokens, variants, and maintainable class composition.",
+      "activate": "tailwindcss dependency/config."
+    },
+    {
+      "name": "tanstack-query",
+      "category": "frontend",
+      "description": "TanStack Query server-state cache, query keys, mutations, invalidation, retries, and optimistic updates.",
+      "activate": "@tanstack/react-query or related package."
+    },
+    {
+      "name": "vue",
+      "category": "frontend",
+      "description": "Vue reactivity, components, Composition/Options API, and state practices.",
+      "activate": "vue dependency."
+    },
+    {
+      "name": "web-vitals",
+      "category": "frontend",
+      "description": "Core user-perceived web performance metrics and diagnostics.",
+      "activate": "Public/interactive frontend performance work."
+    },
+    {
+      "name": "web-workers",
+      "category": "frontend",
+      "description": "Web Worker concurrency, message passing, transferables, and UI-thread isolation.",
+      "activate": "CPU-heavy browser work or workers."
+    },
+    {
+      "name": "zustand",
+      "category": "frontend",
+      "description": "Zustand stores, selectors, actions, subscriptions, and state boundaries.",
+      "activate": "zustand dependency."
+    },
+    {
+      "name": "ai-api-integration",
+      "category": "integrations",
+      "description": "LLM/AI API boundary, prompt/data privacy, retries, streaming, schema validation, cost, and fallback.",
+      "activate": "AI model/API feature."
+    },
+    {
+      "name": "analytics",
+      "category": "integrations",
+      "description": "Product analytics event schema, privacy, identity, consent, and reliable instrumentation.",
+      "activate": "Analytics/tracking."
+    },
+    {
+      "name": "elasticsearch",
+      "category": "integrations",
+      "description": "Elasticsearch mappings, analyzers, queries, pagination, indexing, and cluster-aware app behavior.",
+      "activate": "Elasticsearch client/config."
+    },
+    {
+      "name": "email",
+      "category": "integrations",
+      "description": "Transactional email composition, provider boundary, delivery, retries, templates, and privacy.",
+      "activate": "Email sending."
+    },
+    {
+      "name": "maps",
+      "category": "integrations",
+      "description": "Map/geocoding provider integration, coordinates, rate limits, privacy, and UI loading behavior.",
+      "activate": "Maps/geocoding features."
+    },
+    {
+      "name": "oauth-providers",
+      "category": "integrations",
+      "description": "Provider-specific social login connection, account linking, scopes, and provider failure behavior.",
+      "activate": "Google/Microsoft/GitHub/etc login."
+    },
+    {
+      "name": "payments",
+      "category": "integrations",
+      "description": "Payment boundary, amounts/currency, idempotency, state machine, webhooks, refunds, and reconciliation.",
+      "activate": "Payment/billing feature."
+    },
+    {
+      "name": "search",
+      "category": "integrations",
+      "description": "Application search indexing, relevance, filters, pagination, sync, and fallback behavior.",
+      "activate": "Search feature."
+    },
+    {
+      "name": "sms",
+      "category": "integrations",
+      "description": "SMS provider integration, formatting, opt-in/compliance boundary, retries, and cost/abuse.",
+      "activate": "SMS features."
+    },
+    {
+      "name": "stripe",
+      "category": "integrations",
+      "description": "Stripe PaymentIntent/Checkout/subscriptions/webhooks/idempotency integration practices.",
+      "activate": "stripe package/integration."
+    },
+    {
+      "name": "third-party-api",
+      "category": "integrations",
+      "description": "Generic external API client boundaries, timeouts, retries, validation, pagination, and provider errors.",
+      "activate": "External HTTP API."
+    },
+    {
+      "name": "csharp",
+      "category": "languages",
+      "description": "C# nullability, async, lifetime/disposal, language conventions, and maintainable backend design.",
+      "activate": ".cs/.csproj or .NET project."
+    },
+    {
+      "name": "go",
+      "category": "languages",
+      "description": "Go packages, interfaces, context, errors, concurrency, and web-service conventions.",
+      "activate": "go.mod or .go source."
+    },
+    {
+      "name": "java",
+      "category": "languages",
+      "description": "Java web-service language, concurrency, exceptions, dependency, and maintainability practices.",
+      "activate": "pom.xml/build.gradle or .java source."
+    },
+    {
+      "name": "javascript",
+      "category": "languages",
+      "description": "Modern JavaScript modules, async behavior, runtime boundaries, and maintainable patterns.",
+      "activate": "package.json or .js/.jsx source."
+    },
+    {
+      "name": "kotlin",
+      "category": "languages",
+      "description": "Kotlin null-safety, coroutines, DSL usage, and backend practices.",
+      "activate": ".kt or Kotlin Gradle configuration."
+    },
+    {
+      "name": "php",
+      "category": "languages",
+      "description": "Modern PHP typing, Composer conventions, dependency boundaries, and web application practices.",
+      "activate": "composer.json or .php source."
+    },
+    {
+      "name": "python",
+      "category": "languages",
+      "description": "Python typing, async/runtime conventions, packaging, and web-service practices.",
+      "activate": "pyproject.toml/requirements or .py source."
+    },
+    {
+      "name": "ruby",
+      "category": "languages",
+      "description": "Ruby web application structure, errors, dependency conventions, and maintainability practices.",
+      "activate": "Gemfile or .rb source."
+    },
+    {
+      "name": "rust",
+      "category": "languages",
+      "description": "Rust ownership, async, error types, concurrency, and web-service practices.",
+      "activate": "Cargo.toml or .rs source."
+    },
+    {
+      "name": "typescript",
+      "category": "languages",
+      "description": "TypeScript typing, narrowing, modules, strictness, and maintainable application patterns.",
+      "activate": "tsconfig.json, .ts/.tsx, or TypeScript dependency."
+    },
+    {
+      "name": "alerting",
+      "category": "observability-performance",
+      "description": "Actionable alert design, routing, thresholds, deduplication, and escalation.",
+      "activate": "Production alerts."
+    },
+    {
+      "name": "audit-logging",
+      "category": "observability-performance",
+      "description": "Security/business audit events, actor/action/resource/outcome, tamper resistance, and retention.",
+      "activate": "Sensitive administrative/business actions."
+    },
+    {
+      "name": "backend-performance",
+      "category": "observability-performance",
+      "description": "Server throughput/latency, async I/O, pooling, serialization, allocations, and hot paths.",
+      "activate": "Backend performance work."
+    },
+    {
+      "name": "bundle-optimization",
+      "category": "observability-performance",
+      "description": "Frontend bundle analysis, code splitting, dependency cost, tree shaking, and lazy loading.",
+      "activate": "Large JS bundle/startup."
+    },
+    {
+      "name": "database-performance",
+      "category": "observability-performance",
+      "description": "Database query latency, plans, indexes, pooling, locking, and workload behavior.",
+      "activate": "Database performance work."
+    },
+    {
+      "name": "error-monitoring",
+      "category": "observability-performance",
+      "description": "Exception/error monitoring, grouping, context, release tags, and privacy.",
+      "activate": "Sentry/AppInsights/etc."
+    },
+    {
+      "name": "grafana",
+      "category": "observability-performance",
+      "description": "Grafana dashboards, variables, alerts, and operational visualization.",
+      "activate": "Grafana usage."
+    },
+    {
+      "name": "health-checks",
+      "category": "observability-performance",
+      "description": "Liveness/readiness/dependency health semantics and orchestration behavior.",
+      "activate": "Health endpoints/container/orchestrator."
+    },
+    {
+      "name": "load-testing",
+      "category": "observability-performance",
+      "description": "Load models, ramping, latency percentiles, saturation, and safe test execution.",
+      "activate": "Capacity/performance validation."
+    },
+    {
+      "name": "log-aggregation",
+      "category": "observability-performance",
+      "description": "Central log collection, structure, retention, search, and correlation.",
+      "activate": "Centralized logging."
+    },
+    {
+      "name": "loki",
+      "category": "observability-performance",
+      "description": "Loki log collection, labels, queries, and retention.",
+      "activate": "Loki logging."
+    },
+    {
+      "name": "metrics",
+      "category": "observability-performance",
+      "description": "Counters, gauges, histograms, dimensions, SLI/SLO-friendly metrics.",
+      "activate": "Operational metrics."
+    },
+    {
+      "name": "opentelemetry",
+      "category": "observability-performance",
+      "description": "OpenTelemetry instrumentation, traces, metrics, logs correlation, exporters, and collector boundaries.",
+      "activate": "OpenTelemetry dependency/config."
+    },
+    {
+      "name": "profiling",
+      "category": "observability-performance",
+      "description": "CPU/memory/allocation/query/network profiling workflow.",
+      "activate": "Performance investigation."
+    },
+    {
+      "name": "prometheus",
+      "category": "observability-performance",
+      "description": "Prometheus metric instrumentation, scraping, labels, and alert inputs.",
+      "activate": "Prometheus usage."
+    },
+    {
+      "name": "sentry",
+      "category": "observability-performance",
+      "description": "Sentry error/performance monitoring, releases, source maps, and sensitive-data controls.",
+      "activate": "Sentry integration."
+    },
+    {
+      "name": "structured-logging",
+      "category": "observability-performance",
+      "description": "Structured log events, correlation, levels, fields, and privacy.",
+      "activate": "Logging/production diagnostics."
+    },
+    {
+      "name": "tracing",
+      "category": "observability-performance",
+      "description": "Distributed tracing spans, boundaries, attributes, context propagation, and sampling.",
+      "activate": "Cross-service latency/diagnostics."
+    },
+    {
+      "name": "web-performance",
+      "category": "observability-performance",
+      "description": "End-to-end web performance budgeting and diagnosis.",
+      "activate": "General web performance work."
+    },
+    {
+      "name": "composer",
+      "category": "packages",
+      "description": "Composer PHP packages, lockfile, scripts, platform constraints, and autoloading.",
+      "activate": "composer.json/lock."
+    },
+    {
+      "name": "dependency-upgrades",
+      "category": "packages",
+      "description": "Safe dependency upgrade planning, changelogs, compatibility, migrations, and regression tests.",
+      "activate": "Explicit upgrade task."
+    },
+    {
+      "name": "lockfiles",
+      "category": "packages",
+      "description": "Lockfile integrity, deterministic restore, merge conflicts, and review.",
+      "activate": "Dependency change."
+    },
+    {
+      "name": "npm",
+      "category": "packages",
+      "description": "npm package manifests, lockfiles, scripts, workspaces, and dependency lifecycle.",
+      "activate": "package-lock.json/npm workflow."
+    },
+    {
+      "name": "nuget",
+      "category": "packages",
+      "description": "NuGet PackageReference, lock/central package management, sources, and version compatibility.",
+      "activate": "csproj/packages props/NuGet config."
+    },
+    {
+      "name": "pnpm",
+      "category": "packages",
+      "description": "pnpm lockfile, workspace, catalogs/overrides, and dependency behavior.",
+      "activate": "pnpm-lock.yaml/pnpm-workspace.yaml."
+    },
+    {
+      "name": "yarn",
+      "category": "packages",
+      "description": "Yarn lockfile/workspaces, Berry/PnP behavior, constraints, and scripts.",
+      "activate": "yarn.lock/.yarnrc.*."
+    },
+    {
+      "name": "api-security",
+      "category": "security",
+      "description": "API-specific object/function authorization, resource consumption, inventory, SSRF, and unsafe upstream consumption.",
+      "activate": "Public/private APIs, integrations, API review."
+    },
+    {
+      "name": "command-injection",
+      "category": "security",
+      "description": "OS/process command invocation, argument handling, and shell injection defense.",
+      "activate": "Executing system commands/tools."
+    },
+    {
+      "name": "cookie-session-security",
+      "category": "security",
+      "description": "Cookie attributes, session identifiers, rotation, invalidation, and browser leakage.",
+      "activate": "Cookies/sessions/auth."
+    },
+    {
+      "name": "cors",
+      "category": "security",
+      "description": "CORS origin, credentials, preflight, and browser trust behavior.",
+      "activate": "Cross-origin API/browser configuration."
+    },
+    {
+      "name": "cryptography-basics",
+      "category": "security",
+      "description": "Correct use of standard cryptographic primitives, hashes, randomness, and key lifecycle.",
+      "activate": "Crypto/signing/encryption-related code."
+    },
+    {
+      "name": "csrf",
+      "category": "security",
+      "description": "Cross-site request forgery defenses for cookie-authenticated state changes.",
+      "activate": "Cookie/session state-changing requests."
+    },
+    {
+      "name": "dependency-security",
+      "category": "security",
+      "description": "Supply-chain and package vulnerability/update risk.",
+      "activate": "Dependency changes/security review."
+    },
+    {
+      "name": "file-upload-security",
+      "category": "security",
+      "description": "Upload type/size/name/storage/scanning/access controls and image/document processing risks.",
+      "activate": "File uploads/imports."
+    },
+    {
+      "name": "open-redirects",
+      "category": "security",
+      "description": "Redirect/return URL validation and navigation safety.",
+      "activate": "User-controlled redirect/return URLs."
+    },
+    {
+      "name": "owasp-asvs",
+      "category": "security",
+      "description": "OWASP ASVS-oriented verification structure for web security controls.",
+      "activate": "Formal security verification or high-risk feature."
+    },
+    {
+      "name": "rate-limiting",
+      "category": "security",
+      "description": "Rate limits, quotas, abuse prevention, distributed enforcement, and user feedback.",
+      "activate": "Auth, expensive/public APIs, abuse-sensitive actions."
+    },
+    {
+      "name": "secrets-management",
+      "category": "security",
+      "description": "Secrets storage, injection, rotation, least privilege, scanning, and log hygiene.",
+      "activate": "API keys/passwords/certs/signing keys."
+    },
+    {
+      "name": "secure-headers",
+      "category": "security",
+      "description": "CSP, HSTS, frame, MIME, referrer, permissions and related HTTP headers.",
+      "activate": "Web server/security header configuration."
+    },
+    {
+      "name": "security-testing",
+      "category": "security",
+      "description": "Security-focused automated/manual test design.",
+      "activate": "High-risk feature/security review."
+    },
+    {
+      "name": "sql-injection",
+      "category": "security",
+      "description": "SQL injection prevention and dynamic query safety.",
+      "activate": "Raw SQL/dynamic filters/order/query building."
+    },
+    {
+      "name": "ssrf",
+      "category": "security",
+      "description": "Server-side request forgery prevention for server-initiated URLs.",
+      "activate": "URL fetching, webhooks callbacks, image/import fetchers."
+    },
+    {
+      "name": "web-security",
+      "category": "security",
+      "description": "Comprehensive web application threat-boundary review.",
+      "activate": "Security-sensitive or broad web security review."
+    },
+    {
+      "name": "xss",
+      "category": "security",
+      "description": "Cross-site scripting sources, sinks, escaping, sanitization, CSP interactions, and DOM XSS.",
+      "activate": "Rendering/HTML/URL/script injection risk."
+    },
+    {
+      "name": "azure-blob",
+      "category": "storage-media",
+      "description": "Azure Blob containers, SAS, streaming, access tiers, and lifecycle.",
+      "activate": "Azure Blob SDK/config."
+    },
+    {
+      "name": "cdn",
+      "category": "storage-media",
+      "description": "CDN caching, keys, invalidation, immutable assets, origin protection, and headers.",
+      "activate": "CDN/static/media caching."
+    },
+    {
+      "name": "file-upload",
+      "category": "storage-media",
+      "description": "Application upload flow, streaming, size/type validation, progress, and storage boundaries.",
+      "activate": "File upload features."
+    },
+    {
+      "name": "image-processing",
+      "category": "storage-media",
+      "description": "Image decode/resize/format pipeline, resource limits, metadata, and output safety.",
+      "activate": "Image upload/processing."
+    },
+    {
+      "name": "object-storage",
+      "category": "storage-media",
+      "description": "Object storage keys, metadata, consistency, lifecycle, permissions, and CDN integration.",
+      "activate": "S3/Azure/GCS/object-store features."
+    },
+    {
+      "name": "s3",
+      "category": "storage-media",
+      "description": "Amazon S3-compatible object storage, multipart uploads, presigned URLs, metadata, and lifecycle.",
+      "activate": "S3 SDK/config."
+    },
+    {
+      "name": "signed-urls",
+      "category": "storage-media",
+      "description": "Time-limited signed upload/download URL design and authorization.",
+      "activate": "Direct client storage access."
+    },
+    {
+      "name": "streaming-downloads",
+      "category": "storage-media",
+      "description": "Range/streaming downloads, backpressure, content headers, caching, and authorization.",
+      "activate": "Large downloads/media/files."
+    },
+    {
+      "name": "api-testing",
+      "category": "testing",
+      "description": "HTTP/API request-response, auth, validation, errors, and contract tests.",
+      "activate": "API behavior changes."
+    },
+    {
+      "name": "browser-testing",
+      "category": "testing",
+      "description": "Browser behavior, accessibility interaction, navigation, and UI integration testing.",
+      "activate": "Frontend/browser features."
+    },
+    {
+      "name": "contract-testing",
+      "category": "testing",
+      "description": "Consumer-provider API/event compatibility tests.",
+      "activate": "Cross-service/module interfaces."
+    },
+    {
+      "name": "database-testing",
+      "category": "testing",
+      "description": "Database integration, migrations, constraints, transactions, and query correctness tests.",
+      "activate": "Data persistence changes."
+    },
+    {
+      "name": "e2e-testing",
+      "category": "testing",
+      "description": "End-to-end critical user flow validation across deployed/realistic stack.",
+      "activate": "Critical user journeys/cross-layer feature."
+    },
+    {
+      "name": "integration-testing",
+      "category": "testing",
+      "description": "Integration tests across real module/database/framework boundaries.",
+      "activate": "Boundary behavior that mocks cannot prove."
+    },
+    {
+      "name": "jest",
+      "category": "testing",
+      "description": "Jest testing, mocks, timers, environments, snapshots, and module behavior.",
+      "activate": "jest dependency."
+    },
+    {
+      "name": "mocking",
+      "category": "testing",
+      "description": "Mocks/fakes/stubs boundaries and avoiding over-mocked tests.",
+      "activate": "Testing external dependencies."
+    },
+    {
+      "name": "pest",
+      "category": "testing",
+      "description": "Pest PHP/Laravel tests, datasets, expectations, HTTP/database helpers.",
+      "activate": "pest dependency."
+    },
+    {
+      "name": "playwright",
+      "category": "testing",
+      "description": "Playwright locators, isolation, auto-waiting, browser projects, traces, and E2E practices.",
+      "activate": "@playwright/test/playwright."
+    },
+    {
+      "name": "smoke-testing",
+      "category": "testing",
+      "description": "Fast deploy/build smoke checks for critical startup and happy path.",
+      "activate": "CI/release validation."
+    },
+    {
+      "name": "test-data",
+      "category": "testing",
+      "description": "Factories/fixtures/seeding that create valid expressive test data.",
+      "activate": "Test setup complexity."
+    },
+    {
+      "name": "unit-testing",
+      "category": "testing",
+      "description": "Fast isolated behavior tests for pure/domain/component units.",
+      "activate": "Unit-test changes."
+    },
+    {
+      "name": "vitest",
+      "category": "testing",
+      "description": "Vitest unit/integration testing, mocks, timers, environment, and TypeScript workflow.",
+      "activate": "vitest dependency."
+    },
+    {
+      "name": "xunit",
+      "category": "testing",
+      "description": "xUnit .NET tests, fixtures, async tests, data, and integration patterns.",
+      "activate": "xunit reference."
+    }
+  ]
+}

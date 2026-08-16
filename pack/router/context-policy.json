@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "mode": "strict-routed-context",
+  "principles": {
+    "default_deny_repository_reads": true,
+    "lazy_load_skills": true,
+    "lazy_expand_code_context": true,
+    "prefer_index_before_source": true,
+    "prefer_symbol_or_range_reads": true,
+    "prefer_diff_after_implementation": true,
+    "handoff_uses_summary_not_full_history": true,
+    "original_prompt_always_available_to_captain": true
+  },
+  "task_sizes": {
+    "small": {
+      "candidate_files_initial": 5,
+      "candidate_files_hard_cap": 12,
+      "dependency_depth_initial": 1,
+      "approx_context_tokens_per_worker": 7000,
+      "max_active_skills": 3
+    },
+    "medium": {
+      "candidate_files_initial": 10,
+      "candidate_files_hard_cap": 25,
+      "dependency_depth_initial": 2,
+      "approx_context_tokens_per_worker": 14000,
+      "max_active_skills": 5
+    },
+    "large": {
+      "candidate_files_initial": 15,
+      "candidate_files_hard_cap": 40,
+      "dependency_depth_initial": 2,
+      "approx_context_tokens_per_worker": 24000,
+      "max_active_skills": 7
+    }
+  },
+  "expansion_rules": [
+    "Expand context only when a currently-read file references a new dependency, symbol, contract, test, configuration, or ownership boundary that is necessary to complete or validate the task.",
+    "Every expansion must record why the additional file/symbol is needed.",
+    "Do not recursively read every import/dependency.",
+    "Do not read generated, vendor, build, coverage, dependency-cache, or binary output unless the task explicitly targets it.",
+    "If the hard candidate-file cap would be exceeded, return to the Captain for a scope/context review before reading more."
+  ],
+  "excluded_paths": [
+    ".git/**",
+    "node_modules/**",
+    "vendor/**",
+    "bin/**",
+    "obj/**",
+    ".next/**",
+    "dist/**",
+    "build/**",
+    "coverage/**",
+    ".cache/**",
+    ".idea/**",
+    ".vscode/**"
+  ]
+}

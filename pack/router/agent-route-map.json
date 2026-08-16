@@ -1,0 +1,263 @@
+{
+  "version": 2,
+  "principle": "Route by responsibility + actual project technology + current task. Do not activate all detected skills.",
+  "routes": [
+    {
+      "route": "frontend",
+      "agents": [
+        "frontend-developer"
+      ],
+      "validators": [
+        "accessibility-reviewer",
+        "code-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "languages",
+        "frontend",
+        "auth",
+        "security",
+        "testing",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "backend",
+      "agents": [
+        "backend-developer"
+      ],
+      "validators": [
+        "api-contract-reviewer",
+        "security-reviewer",
+        "code-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "languages",
+        "backend",
+        "api-realtime",
+        "auth",
+        "security",
+        "data",
+        "distributed-jobs",
+        "testing",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "data",
+      "agents": [
+        "database-engineer"
+      ],
+      "validators": [
+        "code-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "data",
+        "distributed-jobs",
+        "testing",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "realtime",
+      "agents": [
+        "realtime-engineer"
+      ],
+      "validators": [
+        "api-contract-reviewer",
+        "security-reviewer",
+        "bug-hunter",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "api-realtime",
+        "auth",
+        "security",
+        "distributed-jobs",
+        "testing",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "integration",
+      "agents": [
+        "integration-engineer"
+      ],
+      "validators": [
+        "security-reviewer",
+        "api-contract-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "integrations",
+        "storage-media",
+        "api-realtime",
+        "security",
+        "distributed-jobs",
+        "testing"
+      ]
+    },
+    {
+      "route": "devops",
+      "agents": [
+        "devops-release-engineer",
+        "devops-platform-engineer",
+        "docker-container-engineer",
+        "ci-cd-engineer",
+        "release-deployment-engineer"
+      ],
+      "validators": [
+        "security-reviewer",
+        "handoff-validator",
+        "devsecops-reviewer",
+        "sre-reliability-engineer"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "packages",
+        "observability-performance",
+        "security"
+      ]
+    },
+    {
+      "route": "observability",
+      "agents": [
+        "observability-engineer"
+      ],
+      "validators": [
+        "performance-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "observability-performance",
+        "devops-delivery"
+      ]
+    },
+    {
+      "route": "docker-containers",
+      "agents": [
+        "docker-container-engineer"
+      ],
+      "validators": [
+        "devsecops-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "security",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "ci-cd",
+      "agents": [
+        "ci-cd-engineer",
+        "release-deployment-engineer"
+      ],
+      "validators": [
+        "devsecops-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "packages",
+        "security",
+        "testing",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "cloud-platform",
+      "agents": [
+        "cloud-infrastructure-engineer",
+        "devops-platform-engineer"
+      ],
+      "validators": [
+        "devsecops-reviewer",
+        "sre-reliability-engineer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "security",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "kubernetes-platform",
+      "agents": [
+        "kubernetes-platform-engineer"
+      ],
+      "validators": [
+        "devsecops-reviewer",
+        "sre-reliability-engineer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "security",
+        "observability-performance"
+      ]
+    },
+    {
+      "route": "infrastructure-as-code",
+      "agents": [
+        "infrastructure-as-code-engineer"
+      ],
+      "validators": [
+        "devsecops-reviewer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "security"
+      ]
+    },
+    {
+      "route": "linux-operations",
+      "agents": [
+        "linux-operations-engineer"
+      ],
+      "validators": [
+        "devsecops-reviewer",
+        "sre-reliability-engineer",
+        "handoff-validator"
+      ],
+      "skill_families": [
+        "core",
+        "devops-delivery",
+        "security",
+        "observability-performance"
+      ]
+    }
+  ],
+  "always_available_control_agents": [
+    "web-orchestrator",
+    "repository-indexer",
+    "context-router",
+    "intent-discovery",
+    "plan-validator",
+    "code-simplifier",
+    "test-engineer",
+    "security-reviewer",
+    "performance-reviewer",
+    "code-reviewer",
+    "bug-hunter",
+    "handoff-validator",
+    "final-integration-validator"
+  ]
+}

@@ -1,0 +1,1141 @@
+{
+  "version": 3,
+  "always_install": [
+    "web-core",
+    "maintainable-code",
+    "security-baseline",
+    "testing-strategy",
+    "performance-baseline",
+    "git-workflow"
+  ],
+  "rules": [
+    {
+      "skill": "typescript",
+      "any_files": [
+        "tsconfig.json",
+        "**/tsconfig.json"
+      ],
+      "npm_packages": [
+        "typescript"
+      ]
+    },
+    {
+      "skill": "javascript",
+      "any_files": [
+        "package.json",
+        "**/package.json"
+      ]
+    },
+    {
+      "skill": "react",
+      "npm_packages": [
+        "react"
+      ]
+    },
+    {
+      "skill": "nextjs",
+      "npm_packages": [
+        "next"
+      ]
+    },
+    {
+      "skill": "vue",
+      "npm_packages": [
+        "vue"
+      ]
+    },
+    {
+      "skill": "nuxt",
+      "npm_packages": [
+        "nuxt"
+      ]
+    },
+    {
+      "skill": "angular",
+      "npm_packages": [
+        "@angular/core"
+      ]
+    },
+    {
+      "skill": "svelte",
+      "npm_packages": [
+        "svelte"
+      ]
+    },
+    {
+      "skill": "sveltekit",
+      "npm_packages": [
+        "@sveltejs/kit"
+      ]
+    },
+    {
+      "skill": "astro",
+      "npm_packages": [
+        "astro"
+      ]
+    },
+    {
+      "skill": "tailwind",
+      "npm_packages": [
+        "tailwindcss"
+      ],
+      "any_files": [
+        "tailwind.config.js",
+        "tailwind.config.ts",
+        "**/tailwind.config.js",
+        "**/tailwind.config.ts"
+      ]
+    },
+    {
+      "skill": "shadcn-ui",
+      "any_files": [
+        "components.json",
+        "**/components.json"
+      ],
+      "npm_packages": [
+        "@radix-ui/react-dialog",
+        "class-variance-authority"
+      ]
+    },
+    {
+      "skill": "material-ui",
+      "npm_packages": [
+        "@mui/material"
+      ]
+    },
+    {
+      "skill": "bootstrap",
+      "npm_packages": [
+        "bootstrap"
+      ]
+    },
+    {
+      "skill": "redux",
+      "npm_packages": [
+        "@reduxjs/toolkit",
+        "redux"
+      ]
+    },
+    {
+      "skill": "zustand",
+      "npm_packages": [
+        "zustand"
+      ]
+    },
+    {
+      "skill": "tanstack-query",
+      "npm_packages": [
+        "@tanstack/react-query",
+        "@tanstack/vue-query",
+        "@tanstack/svelte-query"
+      ]
+    },
+    {
+      "skill": "swr",
+      "npm_packages": [
+        "swr"
+      ]
+    },
+    {
+      "skill": "pinia",
+      "npm_packages": [
+        "pinia"
+      ]
+    },
+    {
+      "skill": "nodejs",
+      "any_files": [
+        "package.json",
+        "**/package.json"
+      ]
+    },
+    {
+      "skill": "express",
+      "npm_packages": [
+        "express"
+      ]
+    },
+    {
+      "skill": "nestjs",
+      "npm_packages": [
+        "@nestjs/core"
+      ]
+    },
+    {
+      "skill": "fastify",
+      "npm_packages": [
+        "fastify"
+      ]
+    },
+    {
+      "skill": "csharp",
+      "any_files": [
+        "*.csproj",
+        "**/*.csproj",
+        "*.sln",
+        "**/*.sln"
+      ]
+    },
+    {
+      "skill": "aspnet-core",
+      "csproj_contains": [
+        "Microsoft.NET.Sdk.Web",
+        "Microsoft.AspNetCore"
+      ]
+    },
+    {
+      "skill": "aspnet-identity",
+      "csproj_contains": [
+        "Microsoft.AspNetCore.Identity"
+      ]
+    },
+    {
+      "skill": "entity-framework-core",
+      "csproj_contains": [
+        "Microsoft.EntityFrameworkCore"
+      ]
+    },
+    {
+      "skill": "xunit",
+      "csproj_contains": [
+        "xunit"
+      ]
+    },
+    {
+      "skill": "hangfire",
+      "csproj_contains": [
+        "Hangfire"
+      ]
+    },
+    {
+      "skill": "nuget",
+      "any_files": [
+        "*.csproj",
+        "**/*.csproj",
+        "Directory.Packages.props",
+        "**/Directory.Packages.props",
+        "NuGet.Config",
+        "**/NuGet.Config"
+      ]
+    },
+    {
+      "skill": "php",
+      "any_files": [
+        "composer.json",
+        "**/composer.json"
+      ]
+    },
+    {
+      "skill": "laravel",
+      "composer_packages": [
+        "laravel/framework"
+      ],
+      "any_files": [
+        "artisan",
+        "**/artisan"
+      ]
+    },
+    {
+      "skill": "laravel-sanctum",
+      "composer_packages": [
+        "laravel/sanctum"
+      ]
+    },
+    {
+      "skill": "laravel-passport",
+      "composer_packages": [
+        "laravel/passport"
+      ]
+    },
+    {
+      "skill": "pest",
+      "composer_packages": [
+        "pestphp/pest",
+        "pestphp/pest-plugin-laravel"
+      ]
+    },
+    {
+      "skill": "composer",
+      "any_files": [
+        "composer.json",
+        "**/composer.json"
+      ]
+    },
+    {
+      "skill": "laravel-queues",
+      "composer_packages": [
+        "laravel/framework"
+      ]
+    },
+    {
+      "skill": "go",
+      "any_files": [
+        "go.mod",
+        "**/go.mod"
+      ]
+    },
+    {
+      "skill": "gin",
+      "file_contains": {
+        "go.mod": [
+          "github.com/gin-gonic/gin"
+        ]
+      }
+    },
+    {
+      "skill": "fiber",
+      "file_contains": {
+        "go.mod": [
+          "github.com/gofiber/fiber"
+        ]
+      }
+    },
+    {
+      "skill": "python",
+      "any_files": [
+        "pyproject.toml",
+        "**/pyproject.toml",
+        "requirements.txt",
+        "**/requirements.txt"
+      ]
+    },
+    {
+      "skill": "django",
+      "file_contains": {
+        "pyproject.toml": [
+          "django",
+          "Django"
+        ],
+        "requirements.txt": [
+          "django",
+          "Django"
+        ]
+      }
+    },
+    {
+      "skill": "fastapi",
+      "file_contains": {
+        "pyproject.toml": [
+          "fastapi"
+        ],
+        "requirements.txt": [
+          "fastapi"
+        ]
+      }
+    },
+    {
+      "skill": "java",
+      "any_files": [
+        "pom.xml",
+        "**/pom.xml",
+        "build.gradle",
+        "**/build.gradle",
+        "build.gradle.kts",
+        "**/build.gradle.kts"
+      ]
+    },
+    {
+      "skill": "kotlin",
+      "any_files": [
+        "*.kt",
+        "**/*.kt",
+        "build.gradle.kts",
+        "**/build.gradle.kts"
+      ]
+    },
+    {
+      "skill": "spring-boot",
+      "file_contains": {
+        "pom.xml": [
+          "spring-boot"
+        ],
+        "build.gradle": [
+          "spring-boot"
+        ],
+        "build.gradle.kts": [
+          "spring-boot"
+        ]
+      }
+    },
+    {
+      "skill": "rust",
+      "any_files": [
+        "Cargo.toml",
+        "**/Cargo.toml"
+      ]
+    },
+    {
+      "skill": "ruby",
+      "any_files": [
+        "Gemfile",
+        "**/Gemfile"
+      ]
+    },
+    {
+      "skill": "rails",
+      "file_contains": {
+        "Gemfile": [
+          "rails"
+        ]
+      }
+    },
+    {
+      "skill": "openapi",
+      "npm_packages": [
+        "swagger-ui-express",
+        "@nestjs/swagger"
+      ],
+      "composer_packages": [
+        "darkaonline/l5-swagger"
+      ],
+      "csproj_contains": [
+        "Swashbuckle.AspNetCore",
+        "Microsoft.AspNetCore.OpenApi"
+      ],
+      "any_files": [
+        "openapi.yaml",
+        "openapi.yml",
+        "openapi.json",
+        "**/openapi.yaml",
+        "**/openapi.yml",
+        "**/openapi.json"
+      ]
+    },
+    {
+      "skill": "graphql",
+      "npm_packages": [
+        "graphql",
+        "@apollo/server",
+        "@nestjs/graphql"
+      ],
+      "composer_packages": [
+        "webonyx/graphql-php"
+      ],
+      "csproj_contains": [
+        "HotChocolate"
+      ]
+    },
+    {
+      "skill": "grpc",
+      "npm_packages": [
+        "@grpc/grpc-js"
+      ],
+      "csproj_contains": [
+        "Grpc.AspNetCore",
+        "Grpc.Net.Client"
+      ],
+      "any_files": [
+        "*.proto",
+        "**/*.proto"
+      ]
+    },
+    {
+      "skill": "websockets",
+      "npm_packages": [
+        "ws",
+        "socket.io",
+        "colyseus",
+        "colyseus.js"
+      ],
+      "composer_packages": [
+        "beyondcode/laravel-websockets",
+        "laravel/reverb"
+      ],
+      "csproj_contains": [
+        "SignalR"
+      ]
+    },
+    {
+      "skill": "bullmq",
+      "npm_packages": [
+        "bullmq"
+      ]
+    },
+    {
+      "skill": "rabbitmq",
+      "npm_packages": [
+        "amqplib"
+      ],
+      "composer_packages": [
+        "php-amqplib/php-amqplib"
+      ],
+      "csproj_contains": [
+        "RabbitMQ.Client"
+      ]
+    },
+    {
+      "skill": "kafka",
+      "npm_packages": [
+        "kafkajs"
+      ],
+      "composer_packages": [
+        "arnaud-lb/php-rdkafka"
+      ],
+      "csproj_contains": [
+        "Confluent.Kafka"
+      ]
+    },
+    {
+      "skill": "postgresql",
+      "npm_packages": [
+        "pg"
+      ],
+      "composer_packages": [
+        "pdo_pgsql"
+      ],
+      "csproj_contains": [
+        "Npgsql"
+      ],
+      "compose_images": [
+        "postgres"
+      ]
+    },
+    {
+      "skill": "mysql",
+      "npm_packages": [
+        "mysql",
+        "mysql2"
+      ],
+      "csproj_contains": [
+        "Pomelo.EntityFrameworkCore.MySql",
+        "MySqlConnector"
+      ],
+      "compose_images": [
+        "mysql",
+        "mariadb"
+      ]
+    },
+    {
+      "skill": "sql-server",
+      "npm_packages": [
+        "mssql"
+      ],
+      "csproj_contains": [
+        "Microsoft.EntityFrameworkCore.SqlServer",
+        "Microsoft.Data.SqlClient"
+      ],
+      "compose_images": [
+        "mssql"
+      ]
+    },
+    {
+      "skill": "sqlite",
+      "npm_packages": [
+        "better-sqlite3",
+        "sqlite3"
+      ],
+      "composer_packages": [
+        "ext-pdo_sqlite"
+      ],
+      "csproj_contains": [
+        "Microsoft.EntityFrameworkCore.Sqlite"
+      ],
+      "any_files": [
+        "*.sqlite",
+        "**/*.sqlite",
+        "*.db",
+        "**/*.db"
+      ]
+    },
+    {
+      "skill": "mongodb",
+      "npm_packages": [
+        "mongodb",
+        "mongoose"
+      ],
+      "csproj_contains": [
+        "MongoDB.Driver"
+      ],
+      "compose_images": [
+        "mongo"
+      ]
+    },
+    {
+      "skill": "redis",
+      "npm_packages": [
+        "redis",
+        "ioredis"
+      ],
+      "composer_packages": [
+        "predis/predis"
+      ],
+      "csproj_contains": [
+        "StackExchange.Redis"
+      ],
+      "compose_images": [
+        "redis"
+      ]
+    },
+    {
+      "skill": "prisma",
+      "npm_packages": [
+        "@prisma/client",
+        "prisma"
+      ],
+      "any_files": [
+        "schema.prisma",
+        "**/schema.prisma"
+      ]
+    },
+    {
+      "skill": "drizzle",
+      "npm_packages": [
+        "drizzle-orm"
+      ]
+    },
+    {
+      "skill": "typeorm",
+      "npm_packages": [
+        "typeorm"
+      ]
+    },
+    {
+      "skill": "sequelize",
+      "npm_packages": [
+        "sequelize"
+      ]
+    },
+    {
+      "skill": "mongoose",
+      "npm_packages": [
+        "mongoose"
+      ]
+    },
+    {
+      "skill": "eloquent",
+      "composer_packages": [
+        "laravel/framework"
+      ]
+    },
+    {
+      "skill": "jwt",
+      "npm_packages": [
+        "jsonwebtoken",
+        "jose"
+      ],
+      "composer_packages": [
+        "firebase/php-jwt",
+        "tymon/jwt-auth"
+      ],
+      "csproj_contains": [
+        "System.IdentityModel.Tokens.Jwt",
+        "Microsoft.AspNetCore.Authentication.JwtBearer"
+      ]
+    },
+    {
+      "skill": "oauth2",
+      "npm_packages": [
+        "passport",
+        "openid-client",
+        "@auth/core",
+        "next-auth"
+      ],
+      "composer_packages": [
+        "league/oauth2-client"
+      ],
+      "csproj_contains": [
+        "Microsoft.AspNetCore.Authentication.OAuth"
+      ]
+    },
+    {
+      "skill": "oidc",
+      "npm_packages": [
+        "openid-client",
+        "@auth/core",
+        "next-auth"
+      ],
+      "csproj_contains": [
+        "Microsoft.AspNetCore.Authentication.OpenIdConnect"
+      ]
+    },
+    {
+      "skill": "webauthn-passkeys",
+      "npm_packages": [
+        "@simplewebauthn/server",
+        "@simplewebauthn/browser"
+      ],
+      "composer_packages": [
+        "web-auth/webauthn-lib"
+      ]
+    },
+    {
+      "skill": "playwright",
+      "npm_packages": [
+        "@playwright/test",
+        "playwright"
+      ]
+    },
+    {
+      "skill": "vitest",
+      "npm_packages": [
+        "vitest"
+      ]
+    },
+    {
+      "skill": "jest",
+      "npm_packages": [
+        "jest"
+      ]
+    },
+    {
+      "skill": "docker",
+      "any_files": [
+        "Dockerfile",
+        "**/Dockerfile"
+      ]
+    },
+    {
+      "skill": "docker-compose",
+      "any_files": [
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+        "**/docker-compose.yml",
+        "**/docker-compose.yaml",
+        "**/compose.yml",
+        "**/compose.yaml"
+      ]
+    },
+    {
+      "skill": "nginx",
+      "any_files": [
+        "nginx.conf",
+        "**/nginx.conf",
+        "*.nginx",
+        "**/*.nginx"
+      ]
+    },
+    {
+      "skill": "apache",
+      "any_files": [
+        ".htaccess",
+        "**/.htaccess",
+        "httpd.conf",
+        "**/httpd.conf"
+      ]
+    },
+    {
+      "skill": "github-actions",
+      "any_files": [
+        ".github/workflows/*.yml",
+        ".github/workflows/*.yaml"
+      ]
+    },
+    {
+      "skill": "kubernetes",
+      "any_files": [
+        "Chart.yaml",
+        "**/Chart.yaml",
+        "kustomization.yaml",
+        "**/kustomization.yaml"
+      ]
+    },
+    {
+      "skill": "terraform",
+      "any_files": [
+        "*.tf",
+        "**/*.tf"
+      ]
+    },
+    {
+      "skill": "opentelemetry",
+      "npm_packages": [
+        "@opentelemetry/api",
+        "@opentelemetry/sdk-node"
+      ],
+      "composer_packages": [
+        "open-telemetry/sdk"
+      ],
+      "csproj_contains": [
+        "OpenTelemetry"
+      ]
+    },
+    {
+      "skill": "error-monitoring",
+      "npm_packages": [
+        "@sentry/node",
+        "@sentry/react",
+        "@sentry/nextjs"
+      ],
+      "composer_packages": [
+        "sentry/sentry-laravel"
+      ],
+      "csproj_contains": [
+        "Sentry"
+      ]
+    },
+    {
+      "skill": "npm",
+      "any_files": [
+        "package-lock.json",
+        "**/package-lock.json"
+      ]
+    },
+    {
+      "skill": "pnpm",
+      "any_files": [
+        "pnpm-lock.yaml",
+        "**/pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "**/pnpm-workspace.yaml"
+      ]
+    },
+    {
+      "skill": "yarn",
+      "any_files": [
+        "yarn.lock",
+        "**/yarn.lock",
+        ".yarnrc.yml",
+        "**/.yarnrc.yml"
+      ]
+    },
+    {
+      "skill": "lockfiles",
+      "any_files": [
+        "package-lock.json",
+        "**/package-lock.json",
+        "pnpm-lock.yaml",
+        "**/pnpm-lock.yaml",
+        "yarn.lock",
+        "**/yarn.lock",
+        "composer.lock",
+        "**/composer.lock"
+      ]
+    },
+    {
+      "skill": "stripe",
+      "npm_packages": [
+        "stripe",
+        "@stripe/stripe-js",
+        "@stripe/react-stripe-js"
+      ],
+      "composer_packages": [
+        "stripe/stripe-php"
+      ],
+      "csproj_contains": [
+        "Stripe.net"
+      ]
+    },
+    {
+      "skill": "elasticsearch",
+      "npm_packages": [
+        "@elastic/elasticsearch"
+      ],
+      "composer_packages": [
+        "elasticsearch/elasticsearch"
+      ],
+      "csproj_contains": [
+        "Elastic.Clients.Elasticsearch",
+        "NEST"
+      ]
+    },
+    {
+      "skill": "s3",
+      "npm_packages": [
+        "@aws-sdk/client-s3",
+        "aws-sdk"
+      ],
+      "composer_packages": [
+        "aws/aws-sdk-php"
+      ],
+      "csproj_contains": [
+        "AWSSDK.S3"
+      ]
+    },
+    {
+      "skill": "azure-blob",
+      "npm_packages": [
+        "@azure/storage-blob"
+      ],
+      "composer_packages": [
+        "microsoft/azure-storage-blob"
+      ],
+      "csproj_contains": [
+        "Azure.Storage.Blobs"
+      ]
+    },
+    {
+      "skill": "dockerfile",
+      "any_files": [
+        "Dockerfile",
+        "**/Dockerfile",
+        "Dockerfile.*",
+        "**/Dockerfile.*"
+      ]
+    },
+    {
+      "skill": "docker-buildkit",
+      "file_contains": {
+        "Dockerfile": [
+          "--mount=type=cache",
+          "--mount=type=secret",
+          "# syntax=docker/dockerfile"
+        ]
+      }
+    },
+    {
+      "skill": "docker-networking",
+      "any_files": [
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml"
+      ]
+    },
+    {
+      "skill": "docker-volumes",
+      "file_contains": {
+        "docker-compose.yml": [
+          "volumes:"
+        ],
+        "docker-compose.yaml": [
+          "volumes:"
+        ],
+        "compose.yml": [
+          "volumes:"
+        ],
+        "compose.yaml": [
+          "volumes:"
+        ]
+      }
+    },
+    {
+      "skill": "docker-healthchecks",
+      "file_contains": {
+        "Dockerfile": [
+          "HEALTHCHECK"
+        ],
+        "docker-compose.yml": [
+          "healthcheck:"
+        ],
+        "docker-compose.yaml": [
+          "healthcheck:"
+        ],
+        "compose.yml": [
+          "healthcheck:"
+        ],
+        "compose.yaml": [
+          "healthcheck:"
+        ]
+      }
+    },
+    {
+      "skill": "devcontainers",
+      "any_files": [
+        ".devcontainer/devcontainer.json",
+        "**/.devcontainer/devcontainer.json"
+      ]
+    },
+    {
+      "skill": "gitlab-ci",
+      "any_files": [
+        ".gitlab-ci.yml",
+        "**/.gitlab-ci.yml"
+      ]
+    },
+    {
+      "skill": "azure-devops-pipelines",
+      "any_files": [
+        "azure-pipelines.yml",
+        "azure-pipelines.yaml",
+        "**/azure-pipelines.yml",
+        "**/azure-pipelines.yaml"
+      ]
+    },
+    {
+      "skill": "jenkins",
+      "any_files": [
+        "Jenkinsfile",
+        "**/Jenkinsfile"
+      ]
+    },
+    {
+      "skill": "circleci",
+      "any_files": [
+        ".circleci/config.yml",
+        "**/.circleci/config.yml"
+      ]
+    },
+    {
+      "skill": "buildkite",
+      "any_files": [
+        ".buildkite/pipeline.yml",
+        ".buildkite/pipeline.yaml",
+        "**/.buildkite/pipeline.yml",
+        "**/.buildkite/pipeline.yaml"
+      ]
+    },
+    {
+      "skill": "pipeline-design",
+      "any_files": [
+        ".github/workflows/*.yml",
+        ".github/workflows/*.yaml",
+        ".gitlab-ci.yml",
+        "azure-pipelines.yml",
+        "Jenkinsfile",
+        ".circleci/config.yml",
+        ".buildkite/pipeline.yml"
+      ]
+    },
+    {
+      "skill": "caddy",
+      "any_files": [
+        "Caddyfile",
+        "**/Caddyfile"
+      ]
+    },
+    {
+      "skill": "cloudflare-workers",
+      "any_files": [
+        "wrangler.toml",
+        "wrangler.json",
+        "wrangler.jsonc",
+        "**/wrangler.toml",
+        "**/wrangler.json",
+        "**/wrangler.jsonc"
+      ],
+      "npm_packages": [
+        "wrangler"
+      ]
+    },
+    {
+      "skill": "helm",
+      "any_files": [
+        "Chart.yaml",
+        "**/Chart.yaml"
+      ]
+    },
+    {
+      "skill": "kustomize",
+      "any_files": [
+        "kustomization.yaml",
+        "kustomization.yml",
+        "**/kustomization.yaml",
+        "**/kustomization.yml"
+      ]
+    },
+    {
+      "skill": "pulumi",
+      "any_files": [
+        "Pulumi.yaml",
+        "Pulumi.yml",
+        "**/Pulumi.yaml",
+        "**/Pulumi.yml"
+      ]
+    },
+    {
+      "skill": "ansible",
+      "any_files": [
+        "ansible.cfg",
+        "**/ansible.cfg",
+        "playbook.yml",
+        "playbook.yaml",
+        "**/playbook.yml",
+        "**/playbook.yaml"
+      ]
+    },
+    {
+      "skill": "infrastructure-as-code",
+      "any_files": [
+        "*.tf",
+        "**/*.tf",
+        "Pulumi.yaml",
+        "**/Pulumi.yaml",
+        "ansible.cfg",
+        "**/ansible.cfg"
+      ]
+    },
+    {
+      "skill": "aws",
+      "npm_packages": [
+        "@aws-sdk/client-s3",
+        "aws-sdk"
+      ],
+      "composer_packages": [
+        "aws/aws-sdk-php"
+      ],
+      "csproj_contains": [
+        "AWSSDK."
+      ]
+    },
+    {
+      "skill": "azure",
+      "npm_packages": [
+        "@azure/identity",
+        "@azure/storage-blob"
+      ],
+      "csproj_contains": [
+        "Azure.Identity",
+        "Azure.Storage"
+      ]
+    },
+    {
+      "skill": "gcp",
+      "npm_packages": [
+        "@google-cloud/storage",
+        "@google-cloud/pubsub"
+      ],
+      "composer_packages": [
+        "google/cloud-storage"
+      ],
+      "csproj_contains": [
+        "Google.Cloud"
+      ]
+    },
+    {
+      "skill": "prometheus",
+      "npm_packages": [
+        "prom-client"
+      ],
+      "csproj_contains": [
+        "prometheus-net"
+      ],
+      "any_files": [
+        "prometheus.yml",
+        "prometheus.yaml",
+        "**/prometheus.yml",
+        "**/prometheus.yaml"
+      ]
+    },
+    {
+      "skill": "grafana",
+      "any_files": [
+        "grafana.ini",
+        "**/grafana.ini"
+      ]
+    },
+    {
+      "skill": "loki",
+      "any_files": [
+        "loki-config.yml",
+        "loki-config.yaml",
+        "**/loki-config.yml",
+        "**/loki-config.yaml"
+      ]
+    },
+    {
+      "skill": "sentry",
+      "npm_packages": [
+        "@sentry/node",
+        "@sentry/react",
+        "@sentry/nextjs"
+      ],
+      "composer_packages": [
+        "sentry/sentry-laravel"
+      ],
+      "csproj_contains": [
+        "Sentry"
+      ]
+    },
+    {
+      "skill": "systemd",
+      "any_files": [
+        "*.service",
+        "**/*.service",
+        "*.timer",
+        "**/*.timer"
+      ]
+    }
+  ]
+}
