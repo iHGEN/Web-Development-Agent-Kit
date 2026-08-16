@@ -20,10 +20,81 @@ def digest(path):
     return h.hexdigest()
 
 
-def fetch(url, out):
+def _fetch_with_curl(url, out):
+    curl = shutil.which("curl")
+    if not curl:
+        return False
+
+    print("Download transport: curl (15s connect timeout, 180s total timeout, 3 retries)")
+    cmd = [
+        curl,
+        "--fail",
+        "--location",
+        "--retry", "3",
+        "--retry-delay", "1",
+        "--connect-timeout", "15",
+        "--max-time", "180",
+        "--progress-bar",
+        "--output", str(out),
+        url,
+    ]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        if out.exists():
+            out.unlink()
+        raise RuntimeError(f"curl exited with status {result.returncode}")
+    return True
+
+
+def _fetch_with_urllib(url, out):
+    print("Download transport: Python urllib (30s socket timeout)")
     req = urllib.request.Request(url, headers={"User-Agent": "web-dev-agent-kit/1.1"})
-    with urllib.request.urlopen(req, timeout=90) as r, open(out, "wb") as f:
-        shutil.copyfileobj(r, f)
+    with urllib.request.urlopen(req, timeout=30) as r, open(out, "wb") as f:
+        total_header = r.headers.get("Content-Length")
+        try:
+            total = int(total_header) if total_header else 0
+        except ValueError:
+            total = 0
+
+        received = 0
+        next_report = 10
+        while True:
+            chunk = r.read(256 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            received += len(chunk)
+
+            if total > 0:
+                percent = int(received * 100 / total)
+                if percent >= next_report:
+                    print(f"Download progress: {min(percent, 100)}%", flush=True)
+                    next_report += 10
+            elif received // (1024 * 1024) > (received - len(chunk)) // (1024 * 1024):
+                print(f"Downloaded {received / (1024 * 1024):.1f} MiB", flush=True)
+
+    print(f"Download complete: {out.stat().st_size / (1024 * 1024):.1f} MiB")
+
+
+def fetch(url, out):
+    curl_error = None
+    if shutil.which("curl"):
+        try:
+            _fetch_with_curl(url, out)
+            print(f"Download complete: {out.stat().st_size / (1024 * 1024):.1f} MiB")
+            return
+        except Exception as exc:
+            curl_error = exc
+            print(f"curl download failed ({exc}); falling back to Python urllib.", file=sys.stderr)
+
+    try:
+        _fetch_with_urllib(url, out)
+    except Exception as exc:
+        if out.exists():
+            out.unlink()
+        if curl_error:
+            raise RuntimeError(f"curl failed: {curl_error}; urllib failed: {exc}") from exc
+        raise
 
 
 def source_for(args, project):
@@ -92,11 +163,14 @@ def main():
         local = Path(src).expanduser()
 
         if local.exists():
+            print(f"Using local Web Kit archive: {local}")
             shutil.copy2(local, archive)
         elif src.startswith("file://"):
-            shutil.copy2(Path(urllib.parse.urlparse(src).path), archive)
+            local_file = Path(urllib.parse.urlparse(src).path)
+            print(f"Using local Web Kit archive: {local_file}")
+            shutil.copy2(local_file, archive)
         else:
-            print(f"Downloading {src}")
+            print(f"Downloading {src}", flush=True)
             try:
                 fetch(src, archive)
             except Exception as exc:
@@ -106,10 +180,12 @@ def main():
                     f"Details: {exc}"
                 )
 
+        print("Verifying downloaded archive...", flush=True)
         sha = digest(archive)
         if args.sha256 and sha.lower() != args.sha256.lower():
             raise SystemExit(f"SHA-256 mismatch. Expected {args.sha256}, got {sha}")
 
+        print("Extracting Web Kit...", flush=True)
         extract = td / "extract"
         extract.mkdir()
         with zipfile.ZipFile(archive) as z:
@@ -122,6 +198,7 @@ def main():
         if args.action == "install" and args.force_agents:
             cmd.append("--force-agents")
 
+        print(f"Running Web Kit {args.action} against {project}...", flush=True)
         result = subprocess.run(cmd)
         if result.returncode != 0:
             raise SystemExit(result.returncode)
