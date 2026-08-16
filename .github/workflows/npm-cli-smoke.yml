@@ -93,16 +93,74 @@ jobs:
 
           test -f "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit.json"
+          test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit-source.json"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/index/project-profile.json"
           test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/bin/remote-install.py"
 
           grep -q "web-kit-smoke-app" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
           grep -q "Project Agent Context" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
 
-      - name: Test packaged CLI doctor
+      - name: Test smart mode on current installation
         shell: bash
         run: |
           set -euo pipefail
+          OUTPUT="$RUNNER_TEMP/smart-current.log"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" \
+            --project "$RUNNER_TEMP/web-kit-sample" | tee "$OUTPUT"
+
+          grep -q "Mode:      smart" "$OUTPUT"
+          grep -q "Decision:  doctor" "$OUTPUT"
+          grep -q "already installed" "$OUTPUT"
+
+      - name: Test no silent downgrade for newer project
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample" / ".agent-kit.json"
+          data = json.loads(p.read_text())
+          data["version"] = "9.0.0"
+          p.write_text(json.dumps(data, indent=2))
+          PY
+
+          OUTPUT="$RUNNER_TEMP/smart-newer.log"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" \
+            --project "$SAMPLE" | tee "$OUTPUT"
+
+          grep -q "newer than npm CLI" "$OUTPUT"
+          grep -q "Decision:  doctor" "$OUTPUT"
+
+      - name: Test explicit downgrade protection
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          set +e
+          OUTPUT="$(npx --yes "./${{ steps.pack.outputs.tarball }}" update \
+            --ref v1.1.5 \
+            --project "$SAMPLE" 2>&1)"
+          STATUS=$?
+          set -e
+          echo "$OUTPUT"
+          test "$STATUS" -eq 3
+          echo "$OUTPUT" | grep -q "Refusing downgrade"
+
+      - name: Test packaged CLI doctor explicitly
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample" / ".agent-kit.json"
+          data = json.loads(p.read_text())
+          data["version"] = "1.1.5"
+          p.write_text(json.dumps(data, indent=2))
+          PY
+
           npx --yes "./${{ steps.pack.outputs.tarball }}" doctor \
-            --ref main \
-            --project "$RUNNER_TEMP/web-kit-sample"
+            --project "$SAMPLE"
