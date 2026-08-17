@@ -3,6 +3,8 @@ name: AI Compatibility + Graphify Smoke
 on:
   push:
     paths:
+      - "package.json"
+      - "VERSION"
       - "bin/**"
       - "scripts/**"
       - "pack/rules/**"
@@ -10,6 +12,8 @@ on:
       - ".github/workflows/ai-compat-graphify-smoke.yml"
   pull_request:
     paths:
+      - "package.json"
+      - "VERSION"
       - "bin/**"
       - "scripts/**"
       - "pack/rules/**"
@@ -66,12 +70,14 @@ jobs:
           test -f "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
           test -f "$SAMPLE/.agent-core/rules/ai-compatibility.md"
           test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
+          test -f "$SAMPLE/.agent-core/rules/graphify-refresh.py"
 
           grep -q 'Existing Claude instructions' "$SAMPLE/CLAUDE.md"
           grep -q 'Existing Gemini instructions' "$SAMPLE/GEMINI.md"
           grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/CLAUDE.md"
           grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/GEMINI.md"
           grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/.github/copilot-instructions.md"
+          grep -q 'Never run `graphify update .` directly' "$SAMPLE/CLAUDE.md"
           grep -q 'alwaysApply: true' "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
 
           python - <<'PY'
@@ -120,6 +126,79 @@ jobs:
           assert state['configured'] is True
           assert state['initial_graph_required'] is True
           PY
+
+      - name: Verify Graph Refresh Gate self-heals all Graphify metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          MOCKBIN="$RUNNER_TEMP/mockbin"
+          LOG="$RUNNER_TEMP/graphify-refresh.log"
+          export PATH="$MOCKBIN:$PATH"
+          export GRAPHIFY_TEST_LOG="$LOG"
+          : > "$LOG"
+
+          mkdir -p "$SAMPLE/graphify-out"
+          echo '{"nodes":[],"edges":[]}' > "$SAMPLE/graphify-out/graph.json"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          for rel in ['.agent-kit.json', '.agent-core/index/project-profile.json']:
+              p = sample / rel
+              data = json.loads(p.read_text())
+              data.setdefault('capabilities', {}).setdefault('graphify', {}).update({
+                  'detected': False,
+                  'graph_ready': False,
+                  'routing_mode': 'standard',
+              })
+              p.write_text(json.dumps(data, indent=2))
+          p = sample / '.agent-core/state/graphify-install.json'
+          data = json.loads(p.read_text())
+          data['graph_ready'] = False
+          data['initial_graph_required'] = True
+          p.write_text(json.dumps(data, indent=2))
+          PY
+
+          python "$SAMPLE/.agent-core/rules/graphify-refresh.py" \
+            --project "$SAMPLE" --task-id metadata-sync
+          grep -q '^update \.$' "$LOG"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          cfg = json.loads((sample / '.agent-kit.json').read_text())
+          profile = json.loads((sample / '.agent-core/index/project-profile.json').read_text())
+          install = json.loads((sample / '.agent-core/state/graphify-install.json').read_text())
+          runtime = json.loads((sample / '.agent-core/state/graphify.json').read_text())
+          for source in (cfg, profile):
+              graphify = source['capabilities']['graphify']
+              assert graphify['detected'] is True
+              assert graphify['graph_ready'] is True
+              assert graphify['routing_mode'] == 'graphify-assisted'
+              assert graphify['dirty'] is False
+          assert install['graph_ready'] is True
+          assert install['initial_graph_required'] is False
+          assert install['observed_routing_mode'] == 'graphify-assisted'
+          assert runtime['dirty'] is False
+          assert runtime['routing_mode'] == 'graphify-assisted'
+          PY
+
+      - name: Verify doctor warns on unmanaged Graphify instructions without deleting them
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          echo '' >> "$SAMPLE/CLAUDE.md"
+          echo 'Always run graphify update . after every edit.' >> "$SAMPLE/CLAUDE.md"
+
+          OUTPUT="$RUNNER_TEMP/doctor-ai-conflict.log"
+          python scripts/agent-kit.py doctor "$SAMPLE" | tee "$OUTPUT"
+          grep -q 'CLAUDE.md: direct Graphify update command outside the managed bridge' "$OUTPUT"
+          grep -q 'Status: HEALTHY WITH WARNINGS' "$OUTPUT"
+          grep -q 'Always run graphify update . after every edit.' "$SAMPLE/CLAUDE.md"
 
       - name: Verify npm graphify command routes through Web Kit
         shell: bash
