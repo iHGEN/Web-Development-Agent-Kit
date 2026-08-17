@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Create sample project with existing assistant instructions
+      - name: Create sample project with existing AI instructions
         shell: bash
         run: |
           set -euo pipefail
@@ -57,10 +57,26 @@ jobs:
           {"name":"web-kit-ai-sample","dependencies":{"react":"^19.0.0"}}
           JSON
           echo 'export const value = 1;' > "$SAMPLE/src/index.ts"
-          echo '# Existing Claude instructions' > "$SAMPLE/CLAUDE.md"
-          echo '# Existing Gemini instructions' > "$SAMPLE/GEMINI.md"
+          cat > "$SAMPLE/AGENTS.md" <<'TXT'
+          # Existing AGENTS instructions
 
-      - name: Install Web Kit and verify cross-AI bridges
+          Keep this project-owned AGENTS content exactly.
+          TXT
+          cat > "$SAMPLE/CLAUDE.md" <<'TXT'
+          # Existing Claude instructions
+
+          Keep this project-owned Claude content exactly.
+          TXT
+          cat > "$SAMPLE/GEMINI.md" <<'TXT'
+          # Existing Gemini instructions
+
+          Keep this project-owned Gemini content exactly.
+          TXT
+          cp "$SAMPLE/AGENTS.md" "$RUNNER_TEMP/original-AGENTS.md"
+          cp "$SAMPLE/CLAUDE.md" "$RUNNER_TEMP/original-CLAUDE.md"
+          cp "$SAMPLE/GEMINI.md" "$RUNNER_TEMP/original-GEMINI.md"
+
+      - name: Install Web Kit and verify non-destructive AI roles
         shell: bash
         run: |
           set -euo pipefail
@@ -72,30 +88,73 @@ jobs:
           test -f "$SAMPLE/GEMINI.md"
           test -f "$SAMPLE/.github/copilot-instructions.md"
           test -f "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
+          test ! -e "$SAMPLE/AGENTS.web-kit.md"
           test -f "$SAMPLE/.agent-core/rules/ai-compatibility.md"
           test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
           test -f "$SAMPLE/.agent-core/rules/graphify-refresh.py"
           test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
 
-          grep -q 'Existing Claude instructions' "$SAMPLE/CLAUDE.md"
-          grep -q 'Existing Gemini instructions' "$SAMPLE/GEMINI.md"
-          grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/CLAUDE.md"
-          grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/GEMINI.md"
-          grep -q 'WEB-AGENT-KIT:AI-BRIDGE:START' "$SAMPLE/.github/copilot-instructions.md"
-          grep -q 'Never run `graphify update .` directly' "$SAMPLE/CLAUDE.md"
-          grep -q 'alwaysApply: true' "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
-
           python - <<'PY'
           import json, os
           from pathlib import Path
           sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          rt = Path(os.environ['RUNNER_TEMP'])
+          for name in ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md'):
+              original = (rt / f'original-{name}').read_text()
+              current = (sample / name).read_text()
+              assert current.startswith(original), name
+              assert '<!-- WEB-AGENT-KIT:AI-ROLES:START -->' in current
+              assert '<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->' not in current
+              assert current.count('<!-- WEB-AGENT-KIT:AI-ROLES:START -->') == 1
+
+          # These files did not exist, so they receive a one-time project summary plus roles.
+          for rel in ('.github/copilot-instructions.md', '.cursor/rules/ihgen-web-kit.mdc'):
+              text = (sample / rel).read_text()
+              assert '<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->' in text
+              assert 'web-kit-ai-sample' in text
+              assert '<!-- WEB-AGENT-KIT:AI-ROLES:START -->' in text
+
           cfg = json.loads((sample / '.agent-kit.json').read_text())
           compat = cfg['ai_compatibility']
           assert 'codex' in compat['native_agents_md']
           assert 'kimi' in compat['native_agents_md']
-          assert compat['managed_bridges']['claude'] == 'CLAUDE.md'
-          assert compat['managed_bridges']['gemini'] == 'GEMINI.md'
+          assert compat['managed_roles']['claude'] == 'CLAUDE.md'
+          assert compat['managed_roles']['gemini'] == 'GEMINI.md'
+          assert compat['temporary_graphify_role'] == '.agent-core/state/graphify-bootstrap-role.md'
           PY
+
+          # A second update must still preserve project-owned text and keep one roles block.
+          python scripts/agent-kit.py update "$SAMPLE"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          rt = Path(os.environ['RUNNER_TEMP'])
+          for name in ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md'):
+              original = (rt / f'original-{name}').read_text()
+              current = (sample / name).read_text()
+              assert current.startswith(original), name
+              assert current.count('<!-- WEB-AGENT-KIT:AI-ROLES:START -->') == 1
+          PY
+
+      - name: Verify missing instruction files get one-time project summaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-empty-ai-sample"
+          mkdir -p "$SAMPLE/src"
+          cat > "$SAMPLE/package.json" <<'JSON'
+          {"name":"empty-ai-project","dependencies":{"react":"^19.0.0"}}
+          JSON
+          echo 'export const value = 1;' > "$SAMPLE/src/index.ts"
+          python scripts/agent-kit.py install "$SAMPLE"
+
+          for rel in AGENTS.md CLAUDE.md GEMINI.md .github/copilot-instructions.md .cursor/rules/ihgen-web-kit.mdc; do
+            test -f "$SAMPLE/$rel"
+            grep -q 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' "$SAMPLE/$rel"
+            grep -q 'empty-ai-project' "$SAMPLE/$rel"
+            grep -q 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/$rel"
+          done
 
       - name: Verify question-aware repository navigation policy
         shell: bash
@@ -136,7 +195,7 @@ jobs:
           assert 'graphify-refresh-gate' in nav['relationship_discovery']['preferred_progression']
           PY
 
-      - name: Verify Graphify setup is opt-in and project-local
+      - name: Verify Graphify setup creates and removes temporary current-AI role
         shell: bash
         run: |
           set -euo pipefail
@@ -158,8 +217,16 @@ jobs:
           export PATH="$MOCKBIN:$PATH"
           export GRAPHIFY_TEST_LOG="$LOG"
 
+          sha256sum "$SAMPLE/AGENTS.md" "$SAMPLE/CLAUDE.md" "$SAMPLE/GEMINI.md" > "$RUNNER_TEMP/ai-before-graphify.sha"
+
           python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --yes
           grep -q '^install --project$' "$LOG"
+          test -f "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+          grep -q 'Temporary Role — Build the Initial Graphify Project Graph' "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+          grep -q 'graphify-setup.py --project . --complete' "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+
+          # Graphify setup must not rewrite project AI instruction files.
+          sha256sum -c "$RUNNER_TEMP/ai-before-graphify.sha"
 
           python - <<'PY'
           import json, os
@@ -169,6 +236,33 @@ jobs:
           assert state['installed'] is True
           assert state['configured'] is True
           assert state['initial_graph_required'] is True
+          assert state['bootstrap_role_active'] is True
+          assert state['current_ai_action_required'] is True
+          PY
+
+          # The role cannot be removed before the current AI actually builds the graph.
+          set +e
+          python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --complete
+          STATUS=$?
+          set -e
+          test "$STATUS" -eq 2
+          test -f "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+
+          # Simulate the current AI successfully building the initial graph, then complete the role.
+          mkdir -p "$SAMPLE/graphify-out"
+          echo '{"nodes":[],"edges":[]}' > "$SAMPLE/graphify-out/graph.json"
+          python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --complete
+          test ! -e "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          state = json.loads((sample / '.agent-core/state/graphify-install.json').read_text())
+          assert state['graph_ready'] is True
+          assert state['initial_graph_required'] is False
+          assert state['bootstrap_role_active'] is False
+          assert state['current_ai_action_required'] is False
           PY
 
       - name: Verify Graph Refresh Gate self-heals all Graphify metadata
@@ -181,9 +275,6 @@ jobs:
           export PATH="$MOCKBIN:$PATH"
           export GRAPHIFY_TEST_LOG="$LOG"
           : > "$LOG"
-
-          mkdir -p "$SAMPLE/graphify-out"
-          echo '{"nodes":[],"edges":[]}' > "$SAMPLE/graphify-out/graph.json"
 
           python - <<'PY'
           import json, os
@@ -240,7 +331,7 @@ jobs:
 
           OUTPUT="$RUNNER_TEMP/doctor-ai-conflict.log"
           python scripts/agent-kit.py doctor "$SAMPLE" | tee "$OUTPUT"
-          grep -q 'CLAUDE.md: direct Graphify update command outside the managed bridge' "$OUTPUT"
+          grep -q 'CLAUDE.md: direct Graphify update command outside the managed roles block' "$OUTPUT"
           grep -q 'Status: HEALTHY WITH WARNINGS' "$OUTPUT"
           grep -q 'Always run graphify update . after every edit.' "$SAMPLE/CLAUDE.md"
 
