@@ -52,7 +52,6 @@ def upsert_roles(path, section, initial_content=None):
     current = path.read_text(encoding="utf-8", errors="ignore")
     updated = _replace_marked_section(current, ROLE_START, ROLE_END, section)
     if updated is None:
-        # Seamlessly migrate the older managed bridge block while preserving everything else byte-for-byte.
         updated = _replace_marked_section(current, LEGACY_BRIDGE_START, LEGACY_BRIDGE_END, section)
     if updated is None:
         updated = _append_without_changing_existing(current, section)
@@ -138,12 +137,13 @@ For Web-Kit-managed engineering work:
 2. Follow `.agent-core/rules/repository-navigation.md` for question-aware repository navigation.
 3. Read `.agent-core/index/project-profile.json` first for lightweight project routing metadata.
 4. Use `.agent-core/routing/context-policy.json` to keep context bounded and activate only the roles/skills needed for the current step.
-5. Act only in the role routed for the current phase: Captain, discovery/indexing/router, architect/planner, implementation worker, specialist reviewer, Handoff Validator, or Final Integration Validator.
-6. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
-7. For exact text/symbol/path lookup, use targeted current-source search (`rg` or equivalent) directly.
-8. For relationship/dependency/ownership/impact discovery, use Graphify first only when the Graph Refresh Gate reports a fresh graph; then verify exact source before planning or editing.
-9. Never run `graphify update .` directly as a replacement for the managed Graph Refresh Gate.
-10. Current source, current diff, tests/build, and runtime evidence override Graphify/index summaries.
+5. If `.agent-core/state/graphify-bootstrap-role.md` exists, treat it as a **temporary current-AI role** and execute it before normal Graphify-assisted repository work. After the graph is built, follow that role's completion command; successful completion deletes the temporary role.
+6. Act only in the role routed for the current phase: Captain, discovery/indexing/router, architect/planner, implementation worker, specialist reviewer, Handoff Validator, or Final Integration Validator.
+7. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
+8. For exact text/symbol/path lookup, use targeted current-source search (`rg` or equivalent) directly.
+9. For relationship/dependency/ownership/impact discovery, use Graphify first only when the Graph Refresh Gate reports a fresh graph; then verify exact source before planning or editing.
+10. Never run `graphify update .` directly as a replacement for the managed Graph Refresh Gate.
+11. Current source, current diff, tests/build, and runtime evidence override Graphify/index summaries.
 
 If project-owned instructions outside this block conflict with Web-Kit workflow mechanics, preserve them but report the conflict with `doctor`; do not silently delete user content.
 {ROLE_END}"""
@@ -188,6 +188,7 @@ def apply_ai_compatibility(project, canonical_path=None, profile=None):
         "canonical_instructions": "AGENTS.md",
         "canonical_workflow": ".agent-core/rules/workflow.md",
         "canonical_navigation_rule": ".agent-core/rules/repository-navigation.md",
+        "temporary_graphify_role": ".agent-core/state/graphify-bootstrap-role.md",
         "native_agents_md": ["codex", "kimi", "agents-md-compatible"],
         "managed_roles": {
             "agents": "AGENTS.md",
