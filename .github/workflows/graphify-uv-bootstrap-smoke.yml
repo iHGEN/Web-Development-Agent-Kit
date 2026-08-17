@@ -1,0 +1,121 @@
+name: Graphify uv Bootstrap Smoke
+
+on:
+  push:
+    paths:
+      - "pack/rules/graphify-setup.mjs"
+      - "pack/rules/graphify-refresh.mjs"
+      - ".github/workflows/graphify-uv-bootstrap-smoke.yml"
+  pull_request:
+    paths:
+      - "pack/rules/graphify-setup.mjs"
+      - "pack/rules/graphify-refresh.mjs"
+      - ".github/workflows/graphify-uv-bootstrap-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  uv-bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prove Graphify can be delegated to uv without Python
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NODE_BIN="$(command -v node)"
+          PROJECT="$RUNNER_TEMP/uv-bootstrap-project"
+          HOME_DIR="$RUNNER_TEMP/uv-bootstrap-home"
+          MOCKBIN="$RUNNER_TEMP/uv-bootstrap-mockbin"
+          UV_BIN="$HOME_DIR/.local/bin/uv"
+          UV_LOG="$RUNNER_TEMP/uv-bootstrap.log"
+          PY_LOG="$RUNNER_TEMP/uv-bootstrap-python.log"
+
+          mkdir -p "$PROJECT/.agent-core/rules" "$HOME_DIR/.local/bin" "$MOCKBIN"
+          cp pack/rules/graphify-setup.mjs "$PROJECT/.agent-core/rules/graphify-setup.mjs"
+          cp pack/rules/graphify-refresh.mjs "$PROJECT/.agent-core/rules/graphify-refresh.mjs"
+          : > "$UV_LOG"
+          : > "$PY_LOG"
+
+          # Any attempt by Web Kit to use Python directly is a hard failure.
+          for name in python python3 py pip pip3 pipx; do
+            cat > "$MOCKBIN/$name" <<'SH'
+          #!/usr/bin/env bash
+          echo "${0##*/} $*" >> "$WEB_KIT_PYTHON_CALL_LOG"
+          exit 97
+          SH
+            chmod +x "$MOCKBIN/$name"
+          done
+
+          # Mock an already-available uv binary. Its tool-install operation creates
+          # the Graphify CLI exactly where Web Kit searches for user-level tools.
+          cat > "$UV_BIN" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "$*" >> "$UV_TEST_LOG"
+          if [ "${1:-}" = "--version" ]; then
+            echo 'uv test'
+            exit 0
+          fi
+          if [ "${1:-}" = "tool" ] && [ "${2:-}" = "install" ] && [ "${3:-}" = "graphifyy" ]; then
+            mkdir -p "$HOME/.local/bin"
+            cat > "$HOME/.local/bin/graphify" <<'GRAPHIFY'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = "--version" ]; then
+            echo 'graphify test'
+            exit 0
+          fi
+          if [ "${1:-}" = "install" ] && [ "${2:-}" = "--project" ]; then
+            exit 0
+          fi
+          if [ "${1:-}" = "update" ]; then
+            exit 0
+          fi
+          exit 0
+          GRAPHIFY
+            chmod +x "$HOME/.local/bin/graphify"
+            exit 0
+          fi
+          exit 2
+          SH
+          chmod +x "$UV_BIN"
+
+          HOME="$HOME_DIR" \
+          PATH="$MOCKBIN:/usr/bin:/bin" \
+          UV_TEST_LOG="$UV_LOG" \
+          WEB_KIT_PYTHON_CALL_LOG="$PY_LOG" \
+            "$NODE_BIN" "$PROJECT/.agent-core/rules/graphify-setup.mjs" \
+              --project "$PROJECT" --yes
+
+          grep -q '^tool install graphifyy$' "$UV_LOG"
+          test -x "$HOME_DIR/.local/bin/graphify"
+          test -f "$PROJECT/.agent-core/state/graphify-bootstrap-role.md"
+
+          if [ -s "$PY_LOG" ]; then
+            echo 'Web Kit unexpectedly invoked Python/pip:'
+            cat "$PY_LOG"
+            exit 1
+          fi
+
+          "$NODE_BIN" - "$PROJECT" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const project = process.argv[2];
+          const state = JSON.parse(fs.readFileSync(path.join(project, '.agent-core/state/graphify-install.json'), 'utf8'));
+          if (!state.installed || !state.configured) process.exit(1);
+          if (state.installer !== 'uv') process.exit(1);
+          if (!state.initial_graph_required || !state.bootstrap_role_active) process.exit(1);
+          NODE
