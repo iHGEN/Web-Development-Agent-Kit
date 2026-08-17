@@ -6,6 +6,14 @@ Shorter checklists may summarize one phase, but they MUST NOT replace or bypass 
 
 Repository-navigation tool selection is governed by the supporting rule `.agent-core/rules/repository-navigation.md`.
 
+## Runtime contract
+
+Web Kit itself requires **Node.js + npm only**. A system Python installation is not a Web-Kit requirement.
+
+- Run managed Web-Kit helpers with `node`.
+- Graphify is optional and may use Python internally; when Graphify is requested and Python is not already available, Web Kit may bootstrap `uv` and let `uv` manage Graphify's Python runtime.
+- Absence of Python, `uv`, or Graphify must never block the standard Web-Kit workflow.
+
 The lifecycle has two repository-navigation capabilities:
 - `standard` — lightweight project profile/index/targeted current-source search/symbol routing;
 - `graphify-assisted` — a fresh Graphify project graph can narrow relationship/dependency/impact exploration before exact source verification.
@@ -72,7 +80,7 @@ When the generated profile reports a ready Graphify graph, **do not query it bef
 Before the first Graphify query for the task, run:
 
 ```bash
-python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
 The gate writes:
@@ -296,7 +304,7 @@ This phase is **mandatory after every completed code-changing agent step** when 
 Run exactly once for the completed repository state:
 
 ```bash
-python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
 The gate behavior is:
