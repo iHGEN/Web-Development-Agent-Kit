@@ -2,6 +2,21 @@
 
 A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
 
+## Runtime requirement
+
+Web Kit requires only:
+
+```text
+Node.js
+npm
+```
+
+Web Kit itself does **not** require Python, pip, or pipx.
+
+Graphify is optional. Graphify uses Python internally, but when you opt into Graphify, Web Kit can bootstrap `uv` and let `uv` manage Graphify's Python runtime. The user does not need to manually install Python for Web Kit.
+
+If Graphify or uv cannot be installed, Web Kit continues normally in standard routed-context mode.
+
 ## Quick start
 
 ```bash
@@ -11,7 +26,7 @@ npx @ihgen/web-kit
 The bare command is smart and idempotent:
 
 ```text
-Web Kit missing                  -> install
+Web Kit missing                 -> install
 Installed version < CLI version -> update
 Installed version = CLI version -> doctor
 Installed version > CLI version -> no downgrade; doctor
@@ -29,62 +44,150 @@ npx @ihgen/web-kit graphify
 
 ## Non-destructive AI instruction files
 
-Web Kit explores the project first and generates `.agent-core/index/project-profile.json`, but it does **not** replace existing AI instruction files.
+Web Kit never replaces project-owned AI instructions.
 
-Managed targets:
+Managed targets include:
 
 ```text
-Codex / Kimi / AGENTS-compatible -> AGENTS.md
-Claude Code                      -> CLAUDE.md
-Gemini CLI                       -> GEMINI.md
-GitHub Copilot                   -> .github/copilot-instructions.md
-Cursor                           -> .cursor/rules/ihgen-web-kit.mdc
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.github/copilot-instructions.md
+.cursor/rules/ihgen-web-kit.mdc
 ```
 
 Behavior:
 
 ```text
-instruction file already exists
-  -> keep all existing project/user content
-  -> add or refresh only the marked Web-Kit roles block
+file already exists
+  -> preserve all existing content
+  -> add/update only Web Kit's marked roles block
 
-instruction file does not exist
-  -> create it once
-  -> add a compact discovered project summary
-  -> add the Web-Kit roles block
+file does not exist
+  -> explore project with lightweight structural discovery
+  -> create file once with compact project summary
+  -> add Web Kit roles block
 
 later update
-  -> leave user content and initial summary unchanged
-  -> refresh only the managed roles block
+  -> preserve project summary and user content
+  -> refresh only roles block
 ```
 
-New installs do not create `AGENTS.web-kit.md`. If an older project already has that legacy file, Web Kit leaves it untouched and `doctor` may report it as legacy.
+Managed markers:
 
-`--force-agents` remains accepted only for backwards CLI compatibility; it no longer authorizes replacing AI instruction files.
+```text
+<!-- WEB-AGENT-KIT:AI-ROLES:START -->
+...
+<!-- WEB-AGENT-KIT:AI-ROLES:END -->
+```
+
+New installs do not create `AGENTS.web-kit.md`. An old `AGENTS.web-kit.md` from an earlier release is treated as a legacy project artifact and is left alone.
 
 ## One workflow across coding AIs
 
-Web Kit has one canonical lifecycle independent of model/vendor:
+All supported assistants route into the same lifecycle:
 
 ```text
-AGENTS.md / assistant instruction file
-        ↓
-Web-Kit managed roles block
-        ↓
-.agent-core/rules/workflow.md
-        ↓
-.agent-core/rules/repository-navigation.md
-        ↓
-.agent-core/routing/context-policy.json
+Codex ────────────┐
+Kimi ─────────────┤
+Claude Code ──────┤
+Gemini CLI ───────┤
+Cursor ───────────┤
+GitHub Copilot ───┤
+Other assistants ─┘
+                  ↓
+       .agent-core/rules/workflow.md
+                  ↓
+ .agent-core/rules/repository-navigation.md
 ```
 
-The roles block tells the assistant which phase/role it is allowed to perform and points it to the shared workflow rather than duplicating a Claude/Codex/Gemini/Cursor-specific lifecycle.
+The assistant-specific files contain roles and project-owned instructions, not separate copies of the engineering workflow.
 
-See `.agent-core/rules/ai-compatibility.md` after installation.
+## Project-aware installation
+
+Installation performs lightweight project discovery and records:
+
+- project name/directory;
+- detected technology groups and relevant skills;
+- shallow repository structure;
+- manifests/build files;
+- configuration files;
+- test roots;
+- migration/data roots;
+- Graphify capability;
+- AI compatibility/role metadata.
+
+Machine-readable profile:
+
+```text
+.agent-core/index/project-profile.json
+```
+
+Structural index:
+
+```text
+.agent-core/index/project-index.json
+```
+
+## Repository navigation rule
+
+### Direct source lookup
+
+For exact text, symbol, path, error, endpoint, or implementation lookup:
+
+```text
+rg / equivalent targeted current-source search
+        ↓
+exact file or symbol
+        ↓
+current source
+```
+
+### Relationship / dependency / impact discovery
+
+When Graphify is ready:
+
+```text
+project profile
+      ↓
+Graph Refresh Gate
+      ↓
+fresh Graphify relationship query
+      ↓
+small candidate symbol set
+      ↓
+exact source verification
+```
+
+The Graph Refresh Gate is Node-based:
+
+```bash
+node .agent-core/rules/graphify-refresh.mjs \
+  --project . \
+  --task-id <task-id>
+```
+
+Graphify may be used only when `.agent-core/state/graphify.json` reports:
+
+```json
+{
+  "routing_mode": "graphify-assisted",
+  "dirty": false
+}
+```
+
+Mental model:
+
+```text
+Graphify                 = Where should I look?
+targeted search + source = What actually exists?
+diff                     = What changed?
+tests/build/runtime      = Does it actually work?
+```
+
+Graphify is navigation evidence only. Current source, current diff, tests/build output, and runtime evidence remain authoritative.
 
 ## Optional Graphify setup
-
-Graphify is optional. Without it, Web Kit uses the normal routed-context loop.
 
 Opt in with:
 
@@ -98,116 +201,46 @@ or:
 npx @ihgen/web-kit update --install-graphify
 ```
 
-Web Kit installs/registers Graphify for the project. If Graphify cannot be installed or configured, standard routing continues normally.
+Graphify setup flow:
 
-### Temporary current-AI initial-build role
+```text
+Graphify already available?
+  -> register it for the project
 
-Graphify's initial graph must be built **inside the coding assistant**. When Graphify is installed but `graphify-out/graph.json` does not exist, Web Kit creates:
+Graphify missing?
+  -> find uv
+  -> if uv missing, bootstrap uv
+  -> uv installs/manages Graphify and its Python runtime
+  -> register Graphify for the project
+```
+
+Graphify project registration is wrapped so project-owned AI instruction files are restored byte-for-byte after registration. Web Kit's own roles remain controlled by Web Kit.
+
+### Initial graph bootstrap
+
+If Graphify is registered but `graphify-out/graph.json` does not exist, Web Kit creates:
 
 ```text
 .agent-core/state/graphify-bootstrap-role.md
 ```
 
-Every managed AI roles block says: if that file exists, the **current AI** must treat it as a temporary role and build the initial project graph using the Graphify skill registered for that assistant.
-
-The temporary role tells the AI to:
+The current AI treats it as a temporary role and builds the graph using its registered Graphify skill, for example:
 
 ```text
-check graphify-out/graph.json
-        ↓
-missing?
-  -> invoke Graphify for repository root
-  -> /graphify . in slash-command assistants
-  -> use the installed $graphify skill in Codex
-        ↓
-verify graphify-out/graph.json exists
-        ↓
-run:
-python .agent-core/rules/graphify-setup.py --project . --complete
-        ↓
-remove/deactivate temporary role
-        ↓
-return to normal Web-Kit workflow
+/graphify .
 ```
 
-The completion command refuses to remove the temporary role if the graph has not actually been created.
+or the assistant's Graphify skill invocation.
 
-Graphify setup does not need to rewrite `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or the other Web-Kit-managed AI instruction content after the roles block exists.
+After the graph exists, the role instructs the AI to run:
 
-## Repository navigation rule
-
-Web Kit does not force Graphify first for every question and does not force `rg` first for every question.
-
-### Direct source lookup
-
-For exact text/symbol/path questions:
-
-```text
-rg / equivalent targeted current-source search
-        ↓
-exact file/symbol
-        ↓
-current source
+```bash
+node .agent-core/rules/graphify-setup.mjs \
+  --project . \
+  --complete
 ```
 
-### Relationship / dependency / impact discovery
-
-For callers, dependencies, ownership, cross-layer paths, or impact:
-
-```text
-Graphify ready?
-   /       \
- NO        YES
- ↓          ↓
-standard  Graph Refresh Gate
- search        ↓
-             clean?
-            /     \
-          NO      YES
-          ↓        ↓
-       standard  narrow Graphify query
-        search        ↓
-                 candidate symbols
-                       ↓
-                  exact source
-```
-
-Mental model:
-
-```text
-Graphify                  = Where should I look?
-rg / targeted source      = What actually exists?
-diff                       = What changed?
-tests / build / runtime    = Does it actually work?
-```
-
-## Graph freshness
-
-Once the initial graph exists, Web Kit controls refresh cadence with the Graph Refresh Gate:
-
-```text
-worker completes one code-changing step
-        ↓
-Graph Refresh Gate
-        ↓
-repository unchanged? -> skip refresh
-repository changed?   -> one incremental graphify update .
-        ↓
-refresh succeeds -> fresh graphify-assisted routing
-refresh fails    -> standard routing fallback
-        ↓
-Handoff Validator
-```
-
-The gate runs once per completed changed repository state, not once per file write.
-
-Managed runtime state:
-
-```text
-.agent-core/state/graphify.json
-```
-
-Graphify is navigation evidence only. Current source, current diff, tests/build, and runtime behavior remain authoritative.
+Completion refuses to remove the role until `graphify-out/graph.json` actually exists. After successful completion, the temporary role is deleted and normal refresh-gated Graphify navigation begins.
 
 ## Canonical engineering lifecycle
 
@@ -216,13 +249,11 @@ USER
   ↓
 CAPTAIN
   ↓
-Record original prompt
+Record original prompt + task ID
   ↓
-Classify task
+Classify SMALL / MEDIUM / LARGE
   ↓
-Project Profile + Repository Navigation Decision
-  ↓
-Repository Indexer
+Project Profile + Repository Index
   ↓
 Context Router / Token Governor
   ↓
@@ -234,19 +265,21 @@ Implementation Design
   ↓
 Execution Registry
   ↓
-Plan Validator
-  ├─ FAIL -> revise -> validate again
-  └─ PASS
+Independent Plan Validator
+  ├─ revise/reject/missing dependency -> planning loop
+  └─ all required steps APPROVED
        ↓
     LOCK PLAN
        ↓
-Context Router
+Fresh Context Packet for one step
        ↓
-Implement one approved step
+Selected Worker implements one approved step
        ↓
-Graph Refresh Gate when applicable
+Step-local validation
        ↓
-Handoff Validator
+Graph Refresh Gate when Graphify is ready
+       ↓
+Independent Handoff Validator
        ↓
 Repeat approved steps
        ↓
@@ -254,7 +287,7 @@ Code Simplifier
        ↓
 Affected Tests
        ↓
-Relevant specialist validation
+Relevant Specialist Validation
        ↓
 Final Integration Validator
        ↓
@@ -263,74 +296,47 @@ Captain closure against original request
 DONE
 ```
 
-Material repository evidence that invalidates the locked plan enters a Plan Delta validation loop. No silent improvisation.
+Material evidence that invalidates a locked plan enters the Plan Delta validation loop. Agents do not silently improvise outside the approved plan.
 
 ## Context/token routing
 
-Standard routing:
-
-```text
-project profile
-  -> repository index
-  -> targeted search
-  -> exact symbol/range
-  -> full file only when needed
-  -> evidence-backed expansion
-```
-
-Relationship-oriented Graphify routing:
-
-```text
-project profile
-  -> Graph Refresh Gate
-  -> narrow Graphify query/path/neighbors
-  -> small candidate symbol set
-  -> exact source symbol/range
-  -> targeted search only for gaps
-  -> evidence-backed expansion
-```
-
-Rules:
+Rules include:
 
 - no unrestricted repository reads by default;
+- project profile/index before broad source expansion;
+- navigation tool selected by question type;
 - installed skill does not mean active skill;
-- never dump the full Graphify graph into model context;
-- Graphify failure falls back to standard routing instead of blocking work;
+- fresh Context Packet per approved implementation step;
 - compact evidence-linked handoffs instead of full transcripts;
-- fresh context packet per approved implementation step;
-- diff-first handoff/review validation;
+- diff-first implementation review;
+- never put the entire Graphify graph into model context;
+- Graphify failure falls back to standard routing without blocking work;
 - token optimization never overrides correctness, security, or user intent.
 
-## Project-aware installation
+## Local Node CLI
 
-Installation discovers and records:
-
-- project name/directory;
-- technology groups;
-- shallow repository structure;
-- manifests/build files;
-- configuration files;
-- test roots;
-- migration/data roots;
-- Graphify capability;
-- cross-AI compatibility metadata.
-
-Machine-readable profile:
-
-```text
-.agent-core/index/project-profile.json
-```
-
-## Local Python CLI
+The repository development CLI is Node-based:
 
 ```bash
-python scripts/agent-kit.py scan /path/to/project
-python scripts/agent-kit.py install /path/to/project
-python scripts/agent-kit.py doctor /path/to/project
-python scripts/agent-kit.py update /path/to/project
-python scripts/agent-kit.py graphify /path/to/project
-python scripts/agent-kit.py catalog
-python scripts/agent-kit.py add-skill /path/to/project <skill-name>
+node scripts/agent-kit.mjs scan /path/to/project
+node scripts/agent-kit.mjs install /path/to/project
+node scripts/agent-kit.mjs doctor /path/to/project
+node scripts/agent-kit.mjs update /path/to/project
+node scripts/agent-kit.mjs graphify /path/to/project
+node scripts/agent-kit.mjs catalog
+node scripts/agent-kit.mjs add-skill /path/to/project <skill-name>
+```
+
+Installed projects also receive a Node updater:
+
+```bash
+node .agent-core/bin/web-kit-update.mjs
+```
+
+The recommended public entry point remains:
+
+```bash
+npx @ihgen/web-kit
 ```
 
 ## Release mapping
