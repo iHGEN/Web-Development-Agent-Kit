@@ -1,6 +1,6 @@
 # Web Development Agent Kit
 
-A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, independent plan/handoff validation, security/testing gates, Graphify-assisted navigation, and routed DevOps agents.
+A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
 
 ## Quick start
 
@@ -11,7 +11,7 @@ npx @ihgen/web-kit
 The bare command is smart and idempotent:
 
 ```text
-Web Kit missing                 -> install
+Web Kit missing                  -> install
 Installed version < CLI version -> update
 Installed version = CLI version -> doctor
 Installed version > CLI version -> no downgrade; doctor
@@ -24,66 +24,166 @@ npx @ihgen/web-kit install
 npx @ihgen/web-kit update
 npx @ihgen/web-kit doctor
 npx @ihgen/web-kit scan
+npx @ihgen/web-kit graphify
 ```
 
-## Works across coding AIs
+## Non-destructive AI instruction files
 
-Web Kit has **one canonical workflow**, independent of the model or coding assistant.
+Web Kit explores the project first and generates `.agent-core/index/project-profile.json`, but it does **not** replace existing AI instruction files.
 
-Canonical installed sources:
+Managed targets:
 
 ```text
-AGENTS.md / AGENTS.web-kit.md
+Codex / Kimi / AGENTS-compatible -> AGENTS.md
+Claude Code                      -> CLAUDE.md
+Gemini CLI                       -> GEMINI.md
+GitHub Copilot                   -> .github/copilot-instructions.md
+Cursor                           -> .cursor/rules/ihgen-web-kit.mdc
+```
+
+Behavior:
+
+```text
+instruction file already exists
+  -> keep all existing project/user content
+  -> add or refresh only the marked Web-Kit roles block
+
+instruction file does not exist
+  -> create it once
+  -> add a compact discovered project summary
+  -> add the Web-Kit roles block
+
+later update
+  -> leave user content and initial summary unchanged
+  -> refresh only the managed roles block
+```
+
+New installs do not create `AGENTS.web-kit.md`. If an older project already has that legacy file, Web Kit leaves it untouched and `doctor` may report it as legacy.
+
+`--force-agents` remains accepted only for backwards CLI compatibility; it no longer authorizes replacing AI instruction files.
+
+## One workflow across coding AIs
+
+Web Kit has one canonical lifecycle independent of model/vendor:
+
+```text
+AGENTS.md / assistant instruction file
+        ↓
+Web-Kit managed roles block
+        ↓
 .agent-core/rules/workflow.md
+        ↓
+.agent-core/rules/repository-navigation.md
+        ↓
 .agent-core/routing/context-policy.json
-.agent-core/index/project-profile.json
 ```
 
-Web Kit generates thin compatibility bridges rather than duplicating the workflow:
-
-```text
-Codex             -> AGENTS.md (native)
-Kimi Code         -> AGENTS.md (native)
-Claude Code       -> CLAUDE.md bridge
-Gemini CLI        -> GEMINI.md bridge
-GitHub Copilot    -> .github/copilot-instructions.md bridge
-Cursor            -> .cursor/rules/ihgen-web-kit.mdc bridge
-Other assistants  -> AGENTS.md when supported, or point their project instructions at the canonical files
-```
-
-Existing user instructions in `CLAUDE.md`, `GEMINI.md`, Copilot instructions, and a user-owned `AGENTS.md` are preserved. Web Kit updates only its marked bridge section.
+The roles block tells the assistant which phase/role it is allowed to perform and points it to the shared workflow rather than duplicating a Claude/Codex/Gemini/Cursor-specific lifecycle.
 
 See `.agent-core/rules/ai-compatibility.md` after installation.
 
 ## Optional Graphify setup
 
-Graphify is **not required**. Without it, Web Kit uses the normal lightweight routed-context loop.
+Graphify is optional. Without it, Web Kit uses the normal routed-context loop.
 
-If you want graph-assisted repository navigation to reduce broad file exploration, opt in with:
+Opt in with:
 
 ```bash
 npx @ihgen/web-kit graphify
 ```
 
-or combine it with an update:
+or:
 
 ```bash
 npx @ihgen/web-kit update --install-graphify
 ```
 
-Web Kit prefers an isolated user-level Graphify installation with MCP support and runs repo-local assistant registration. If Graphify is not available or setup fails, Web Kit continues normally in standard mode.
+Web Kit installs/registers Graphify for the project. If Graphify cannot be installed or configured, standard routing continues normally.
 
-After first-time Graphify setup, build the initial project graph once from your coding assistant:
+### Temporary current-AI initial-build role
+
+Graphify's initial graph must be built **inside the coding assistant**. When Graphify is installed but `graphify-out/graph.json` does not exist, Web Kit creates:
 
 ```text
-/graphify .
+.agent-core/state/graphify-bootstrap-role.md
 ```
 
-When `graphify-out/graph.json` exists, Web Kit can select the Graphify-assisted routing branch.
+Every managed AI roles block says: if that file exists, the **current AI** must treat it as a temporary role and build the initial project graph using the Graphify skill registered for that assistant.
 
-### Graph freshness
+The temporary role tells the AI to:
 
-Web Kit includes a Graph Refresh Gate:
+```text
+check graphify-out/graph.json
+        ↓
+missing?
+  -> invoke Graphify for repository root
+  -> /graphify . in slash-command assistants
+  -> use the installed $graphify skill in Codex
+        ↓
+verify graphify-out/graph.json exists
+        ↓
+run:
+python .agent-core/rules/graphify-setup.py --project . --complete
+        ↓
+remove/deactivate temporary role
+        ↓
+return to normal Web-Kit workflow
+```
+
+The completion command refuses to remove the temporary role if the graph has not actually been created.
+
+Graphify setup does not need to rewrite `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or the other Web-Kit-managed AI instruction content after the roles block exists.
+
+## Repository navigation rule
+
+Web Kit does not force Graphify first for every question and does not force `rg` first for every question.
+
+### Direct source lookup
+
+For exact text/symbol/path questions:
+
+```text
+rg / equivalent targeted current-source search
+        ↓
+exact file/symbol
+        ↓
+current source
+```
+
+### Relationship / dependency / impact discovery
+
+For callers, dependencies, ownership, cross-layer paths, or impact:
+
+```text
+Graphify ready?
+   /       \
+ NO        YES
+ ↓          ↓
+standard  Graph Refresh Gate
+ search        ↓
+             clean?
+            /     \
+          NO      YES
+          ↓        ↓
+       standard  narrow Graphify query
+        search        ↓
+                 candidate symbols
+                       ↓
+                  exact source
+```
+
+Mental model:
+
+```text
+Graphify                  = Where should I look?
+rg / targeted source      = What actually exists?
+diff                       = What changed?
+tests / build / runtime    = Does it actually work?
+```
+
+## Graph freshness
+
+Once the initial graph exists, Web Kit controls refresh cadence with the Graph Refresh Gate:
 
 ```text
 worker completes one code-changing step
@@ -99,15 +199,15 @@ refresh fails    -> standard routing fallback
 Handoff Validator
 ```
 
-The gate is intentionally once per completed repository state, not once per file write.
+The gate runs once per completed changed repository state, not once per file write.
 
-Managed state:
+Managed runtime state:
 
 ```text
 .agent-core/state/graphify.json
 ```
 
-Graphify is navigation evidence only. Current source, diffs, tests, and runtime behavior remain authoritative.
+Graphify is navigation evidence only. Current source, current diff, tests/build, and runtime behavior remain authoritative.
 
 ## Canonical engineering lifecycle
 
@@ -120,7 +220,7 @@ Record original prompt
   ↓
 Classify task
   ↓
-Project Profile + Repository Navigation Mode
+Project Profile + Repository Navigation Decision
   ↓
 Repository Indexer
   ↓
@@ -144,7 +244,7 @@ Context Router
        ↓
 Implement one approved step
        ↓
-Graph Refresh Gate (when Graphify graph exists)
+Graph Refresh Gate when applicable
        ↓
 Handoff Validator
        ↓
@@ -155,7 +255,6 @@ Code Simplifier
 Affected Tests
        ↓
 Relevant specialist validation
-(Security / Code / Performance / Accessibility / API / DevSecOps / Bug Hunter ...)
        ↓
 Final Integration Validator
        ↓
@@ -164,11 +263,11 @@ Captain closure against original request
 DONE
 ```
 
-If material repository evidence invalidates the locked plan, the affected step stops and enters a Plan Delta validation loop. No silent improvisation.
+Material repository evidence that invalidates the locked plan enters a Plan Delta validation loop. No silent improvisation.
 
 ## Context/token routing
 
-### Standard mode
+Standard routing:
 
 ```text
 project profile
@@ -179,7 +278,7 @@ project profile
   -> evidence-backed expansion
 ```
 
-### Graphify-assisted mode
+Relationship-oriented Graphify routing:
 
 ```text
 project profile
@@ -196,7 +295,7 @@ Rules:
 - no unrestricted repository reads by default;
 - installed skill does not mean active skill;
 - never dump the full Graphify graph into model context;
-- Graphify failure must fall back to standard routing instead of blocking work;
+- Graphify failure falls back to standard routing instead of blocking work;
 - compact evidence-linked handoffs instead of full transcripts;
 - fresh context packet per approved implementation step;
 - diff-first handoff/review validation;
@@ -204,7 +303,7 @@ Rules:
 
 ## Project-aware installation
 
-Installation discovers the target project and records:
+Installation discovers and records:
 
 - project name/directory;
 - technology groups;
