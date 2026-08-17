@@ -1,6 +1,17 @@
 # npm / npx CLI
 
-The Web Development Agent Kit exposes a tiny npm launcher so users can install and manage the full GitHub-hosted kit without keeping the repository locally.
+Web Development Agent Kit is designed to be installed and managed through npm/npx.
+
+## Requirements
+
+```text
+Node.js 18+
+npm / npx
+```
+
+A system Python installation is **not required** by Web Kit.
+
+Graphify is optional. If Graphify is requested and needs Python internally, Web Kit can bootstrap `uv`; `uv` then manages Graphify's Python runtime separately.
 
 ## Smart default
 
@@ -10,7 +21,7 @@ Run inside a web project:
 npx @ihgen/web-kit
 ```
 
-The bare command is **idempotent**. It reads `.agent-kit.json` and decides the safest action:
+The bare command is idempotent:
 
 ```text
 Web Kit missing
@@ -27,19 +38,12 @@ Installed version > npm CLI version
   -> doctor the remembered installed source
 ```
 
-The main installation marker is:
+Installation markers:
 
 ```text
 .agent-kit.json
-```
-
-A normal remote installation also records:
-
-```text
 .agent-kit-source.json
 ```
-
-This allows doctor/scan to use the source/ref that belongs to the installed project instead of silently changing versions.
 
 ## Explicit commands
 
@@ -48,33 +52,8 @@ npx @ihgen/web-kit install
 npx @ihgen/web-kit update
 npx @ihgen/web-kit doctor
 npx @ihgen/web-kit scan
+npx @ihgen/web-kit graphify
 ```
-
-Explicit `install` and `update` use the npm package's matching GitHub release by default:
-
-```text
-@ihgen/web-kit@1.1.5
-        ↓
-iHGEN/Web-Development-Agent-Kit@v1.1.5
-```
-
-Create the matching GitHub tag before publishing the npm version.
-
-## Downgrade protection
-
-A newer project is never silently downgraded.
-
-For example, if a project uses Web Kit `1.2.0` and someone runs `@ihgen/web-kit@1.1.5`, smart mode leaves the project version unchanged and runs health validation against the remembered installed source when available.
-
-Explicit `install` / `update` also reject a semantic-version downgrade unless it is intentional:
-
-```bash
-npx @ihgen/web-kit update \
-  --ref v1.1.5 \
-  --allow-downgrade
-```
-
-Use `--allow-downgrade` carefully. It is handled by the npm launcher and is not forwarded into the project installer.
 
 ## Project selection
 
@@ -90,89 +69,121 @@ Another project:
 npx @ihgen/web-kit --project ../my-web-app
 ```
 
-## Version and source overrides
-
-Use a branch/tag/commit:
+## Version/source overrides
 
 ```bash
 npx @ihgen/web-kit update --ref main
-```
 
-Use another repository:
-
-```bash
 npx @ihgen/web-kit update \
   --repo OWNER/REPO \
-  --ref v1.1.5
-```
+  --ref vX.Y.Z
 
-Use a direct ZIP:
-
-```bash
 npx @ihgen/web-kit update \
   --source https://example.com/web-kit.zip
 ```
 
-## Package size
+## Downgrade protection
 
-The npm package is intentionally tiny and publishes only the launcher/runtime bootstrap:
+A newer project is never silently downgraded.
+
+An intentional semantic-version downgrade requires:
+
+```bash
+npx @ihgen/web-kit update \
+  --ref vX.Y.Z \
+  --allow-downgrade
+```
+
+## Package contents
+
+The npm package intentionally stays small:
 
 ```text
 package.json
 bin/web-kit.js
-bootstrap/remote-install.py
+bootstrap/remote-install.mjs
 README.md
 ```
 
-The full agent/skill library remains in GitHub.
+The npm package includes the small JS dependency needed to extract the downloaded GitHub archive. The full agent/skill/rules library remains in GitHub.
 
 ## How it works
 
 ```text
 npx @ihgen/web-kit
         ↓
-inspect target project
+inspect target project metadata
         ↓
 choose install / update / doctor
         ↓
 bin/web-kit.js
         ↓
-bootstrap/remote-install.py
+bootstrap/remote-install.mjs
         ↓
-download the required GitHub kit source
+download matching GitHub kit source
         ↓
-run Web Kit discovery / install / validation
+node scripts/agent-kit.mjs
         ↓
-project-aware AGENTS.md + routed agents + detected skills
+project profile + index
+        ↓
+managed AI roles + detected skills + routing/validators
 ```
 
-## Release process
+Web Kit never requires `python`, `python3`, `py`, pip, or pipx during normal install/update/scan/doctor execution.
 
-For `1.1.5`:
+## AI instruction safety
+
+Existing project-owned instruction files are preserved:
+
+```text
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.github/copilot-instructions.md
+.cursor/rules/ihgen-web-kit.mdc
+```
+
+Web Kit changes only its marked roles block. Missing files are created once with a compact project summary plus roles.
+
+## Optional Graphify
 
 ```bash
-git pull origin main
-
-git tag -a v1.1.5 \
-  -m "Web Development Agent Kit v1.1.5 - smart idempotent npx"
-
-git push origin v1.1.5
-
-npm pack --dry-run
-npm publish --access public
+npx @ihgen/web-kit graphify
 ```
 
-After publication:
+If Graphify is missing:
+
+```text
+find uv
+  ↓
+uv missing? -> bootstrap uv
+  ↓
+uv installs/manages Graphify
+  ↓
+register Graphify for project
+```
+
+If the initial graph is missing, the current AI receives the temporary role:
+
+```text
+.agent-core/state/graphify-bootstrap-role.md
+```
+
+After the AI builds `graphify-out/graph.json`, it completes the role with:
 
 ```bash
-npx @ihgen/web-kit
+node .agent-core/rules/graphify-setup.mjs --project . --complete
 ```
 
-## Requirements
+## Release mapping
 
-- Node.js 18+ for the npm launcher.
-- Python 3 for the Web Kit installer/discovery engine.
-- Network access to GitHub unless `--source` points to a local ZIP.
+```text
+@ihgen/web-kit@X.Y.Z
+        ↓
+iHGEN/Web-Development-Agent-Kit@vX.Y.Z
+```
+
+Create the matching GitHub tag before publishing the npm version.
 
 ## Safety boundaries
 
@@ -180,6 +191,5 @@ Smart mode never:
 - silently downgrades a newer project;
 - treats all installed skills as active skills;
 - grants agents unrestricted repository reads;
+- overwrites project-owned AI instructions;
 - modifies application source merely because the kit is installed.
-
-Application code remains project-owned. The Web Kit manages its own agent/routing/skill metadata and generated project context.
