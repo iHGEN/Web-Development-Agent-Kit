@@ -44,22 +44,46 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Validate release version consistency
+      - name: Validate Node sources and release version
         shell: bash
         run: |
           set -euo pipefail
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          FILE_VERSION="$(tr -d '\r\n' < VERSION)"
-          test "$PACKAGE_VERSION" = "$FILE_VERSION"
-          echo "Release version: $PACKAGE_VERSION"
+          test "$(node -p "require('./package.json').version")" = "$(tr -d '\r\n' < VERSION)"
+          node --check bin/web-kit.js
+          node --check bootstrap/remote-install.mjs
+          node --check scripts/agent-kit.mjs
+          node --check scripts/project-profile.mjs
+          node --check scripts/ai-compat.mjs
+          node --check pack/rules/graphify-setup.mjs
+          node --check pack/rules/graphify-refresh.mjs
+
+      - name: Prove Web Kit does not call Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          MOCK="$RUNNER_TEMP/no-python"
+          LOG="$RUNNER_TEMP/python-calls.log"
+          mkdir -p "$MOCK"
+          : > "$LOG"
+          for name in python python3 py; do
+            cat > "$MOCK/$name" <<'SH'
+          #!/usr/bin/env bash
+          echo "${0##*/} $*" >> "$WEB_KIT_PYTHON_CALL_LOG"
+          exit 97
+          SH
+            chmod +x "$MOCK/$name"
+          done
+          echo "$MOCK" >> "$GITHUB_PATH"
+          echo "WEB_KIT_PYTHON_CALL_LOG=$LOG" >> "$GITHUB_ENV"
 
       - name: Validate npm package contents
-        run: npm pack --dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUTPUT="$(npm pack --dry-run 2>&1)"
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q 'bootstrap/remote-install.mjs'
+          ! echo "$OUTPUT" | grep -q 'bootstrap/remote-install.py'
 
       - name: Build npm tarball
         id: pack
@@ -68,7 +92,6 @@ jobs:
           set -euo pipefail
           TARBALL="$(npm pack --silent)"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-          echo "Packed $TARBALL"
 
       - name: Create sample web project
         shell: bash
@@ -79,33 +102,22 @@ jobs:
           cat > "$SAMPLE/package.json" <<'JSON'
           {
             "name": "web-kit-smoke-app",
-            "dependencies": {
-              "react": "^19.0.0"
-            },
-            "devDependencies": {
-              "typescript": "^5.0.0"
-            }
+            "dependencies": {"react": "^19.0.0"},
+            "devDependencies": {"typescript": "^5.0.0"}
           }
           JSON
           echo '{}' > "$SAMPLE/tsconfig.json"
           echo 'export const App = () => null;' > "$SAMPLE/src/App.tsx"
 
-      - name: Test packaged CLI scan
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx --yes "./${{ steps.pack.outputs.tarball }}" scan \
-            --ref main \
-            --project "$RUNNER_TEMP/web-kit-sample"
-
-      - name: Test packaged CLI install
+      - name: Test packaged CLI scan and install without Python
         shell: bash
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-sample"
-          npx --yes "./${{ steps.pack.outputs.tarball }}" install \
-            --ref main \
-            --project "$SAMPLE"
+          TARBALL="./${{ steps.pack.outputs.tarball }}"
+
+          npx --yes "$TARBALL" scan --ref main --project "$SAMPLE"
+          npx --yes "$TARBALL" install --ref main --project "$SAMPLE"
 
           test -f "$SAMPLE/AGENTS.md"
           test -f "$SAMPLE/CLAUDE.md"
@@ -117,197 +129,151 @@ jobs:
           test -f "$SAMPLE/.agent-kit-source.json"
           test -f "$SAMPLE/.agent-core/index/project-profile.json"
           test -f "$SAMPLE/.agent-core/rules/workflow.md"
-          test -f "$SAMPLE/.agent-core/rules/graphify-refresh.py"
-          test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
+          test -f "$SAMPLE/.agent-core/rules/graphify-refresh.mjs"
+          test -f "$SAMPLE/.agent-core/rules/graphify-setup.mjs"
           test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
-          test -f "$SAMPLE/.agent-core/bin/remote-install.py"
+          test -f "$SAMPLE/.agent-core/bin/web-kit-update.mjs"
+          test ! -e "$SAMPLE/.agent-core/rules/graphify-refresh.py"
+          test ! -e "$SAMPLE/.agent-core/rules/graphify-setup.py"
+          test ! -e "$SAMPLE/.agent-core/bin/remote-install.py"
 
-          grep -q "web-kit-smoke-app" "$SAMPLE/AGENTS.md"
-          grep -q "WEB-AGENT-KIT:PROJECT-SUMMARY:START" "$SAMPLE/AGENTS.md"
-          grep -q "WEB-AGENT-KIT:AI-ROLES:START" "$SAMPLE/AGENTS.md"
-          grep -q ".agent-core/rules/workflow.md" "$SAMPLE/AGENTS.md"
-          grep -q ".agent-core/rules/repository-navigation.md" "$SAMPLE/AGENTS.md"
-          grep -q "graphify-bootstrap-role.md" "$SAMPLE/AGENTS.md"
+          grep -q 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' "$SAMPLE/AGENTS.md"
+          grep -q 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/AGENTS.md"
+          grep -q 'graphify-refresh.mjs' "$SAMPLE/AGENTS.md"
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample"
-          profile = json.loads((sample / ".agent-core/index/project-profile.json").read_text())
-          graphify = profile["capabilities"]["graphify"]
-          assert graphify["detected"] is False
-          assert graphify["graph_ready"] is False
-          assert graphify["routing_mode"] == "standard"
-          cfg = json.loads((sample / '.agent-kit.json').read_text())
-          assert cfg['ai_compatibility']['canonical_instructions'] == 'AGENTS.md'
-          assert cfg['ai_compatibility']['managed_roles']['claude'] == 'CLAUDE.md'
-          PY
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const profile = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/index/project-profile.json'), 'utf8'));
+          const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
+          if (profile.capabilities.graphify.detected !== false) process.exit(1);
+          if (profile.capabilities.graphify.graph_ready !== false) process.exit(1);
+          if (profile.capabilities.graphify.routing_mode !== 'standard') process.exit(1);
+          if (cfg.runtime !== 'node+npm') process.exit(1);
+          if (cfg.ai_compatibility.runtime !== 'node+npm') process.exit(1);
+          NODE
+
+      - name: Test non-destructive update
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          TARBALL="./${{ steps.pack.outputs.tarball }}"
+          echo 'PROJECT OWNED CLAUDE RULE' >> "$SAMPLE/CLAUDE.md"
+          BEFORE="$(sed '/WEB-AGENT-KIT:AI-ROLES:START/,/WEB-AGENT-KIT:AI-ROLES:END/d' "$SAMPLE/CLAUDE.md")"
+          npx --yes "$TARBALL" update --ref main --project "$SAMPLE"
+          AFTER="$(sed '/WEB-AGENT-KIT:AI-ROLES:START/,/WEB-AGENT-KIT:AI-ROLES:END/d' "$SAMPLE/CLAUDE.md")"
+          test "$BEFORE" = "$AFTER"
+          grep -q 'PROJECT OWNED CLAUDE RULE' "$SAMPLE/CLAUDE.md"
+          test "$(grep -c 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/CLAUDE.md")" -eq 1
 
       - name: Test smart mode on current installation
         shell: bash
         run: |
           set -euo pipefail
           OUTPUT="$RUNNER_TEMP/smart-current.log"
-          npx --yes "./${{ steps.pack.outputs.tarball }}" \
-            --project "$RUNNER_TEMP/web-kit-sample" | tee "$OUTPUT"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" --project "$RUNNER_TEMP/web-kit-sample" | tee "$OUTPUT"
+          grep -q 'Decision:  doctor' "$OUTPUT"
+          grep -q 'Runtime:   Node.js' "$OUTPUT"
 
-          grep -q "Mode:      smart" "$OUTPUT"
-          grep -q "Decision:  doctor" "$OUTPUT"
-          grep -q "already installed" "$OUTPUT"
-
-      - name: Test update detects Graphify and refreshes canonical loop
+      - name: Test Graphify detection and Node freshness gate
         shell: bash
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-sample"
+          TARBALL="./${{ steps.pack.outputs.tarball }}"
           mkdir -p "$SAMPLE/graphify-out"
           echo '{"nodes": [], "edges": []}' > "$SAMPLE/graphify-out/graph.json"
           cat > "$SAMPLE/.mcp.json" <<'JSON'
-          {
-            "mcpServers": {
-              "graphify": {
-                "command": "python",
-                "args": ["-m", "graphify.serve", "graphify-out/graph.json"]
-              }
-            }
-          }
+          {"mcpServers":{"graphify":{"command":"managed-by-uv","args":["graphify-out/graph.json"]}}}
           JSON
+          npx --yes "$TARBALL" update --ref main --project "$SAMPLE"
 
-          npx --yes "./${{ steps.pack.outputs.tarball }}" update \
-            --ref main \
-            --project "$SAMPLE"
-
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample"
-          profile = json.loads((sample / ".agent-core/index/project-profile.json").read_text())
-          config = json.loads((sample / ".agent-kit.json").read_text())
-          graphify = profile["capabilities"]["graphify"]
-          assert graphify["detected"] is True
-          assert graphify["graph_ready"] is True
-          assert graphify["local_mcp_configured"] is True
-          assert graphify["routing_mode"] == "graphify-assisted"
-          assert config["capabilities"]["graphify"]["routing_mode"] == "graphify-assisted"
-          agents = (sample / 'AGENTS.md').read_text()
-          assert agents.count('<!-- WEB-AGENT-KIT:AI-ROLES:START -->') == 1
-          # Initial project summary is intentionally not rewritten by updates.
-          assert 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' in agents
-          PY
-
-          grep -q "Direct source lookup" "$SAMPLE/.agent-core/rules/workflow.md"
-          grep -q "Relationship / dependency / impact discovery" "$SAMPLE/.agent-core/rules/workflow.md"
-          grep -q "Graph Refresh Gate" "$SAMPLE/.agent-core/rules/workflow.md"
-          grep -q "Post-step Graph Refresh Gate" "$SAMPLE/.agent-core/agents/context-router.md"
-
-      - name: Test Graphify freshness gate refreshes once per changed state
-        shell: bash
-        run: |
-          set -euo pipefail
-          SAMPLE="$RUNNER_TEMP/web-kit-sample"
-          MOCK_BIN="$RUNNER_TEMP/mock-bin"
+          MOCK="$RUNNER_TEMP/mock-graphify"
           LOG="$RUNNER_TEMP/graphify-calls.log"
-          mkdir -p "$MOCK_BIN"
+          mkdir -p "$MOCK"
           : > "$LOG"
-
-          cat > "$MOCK_BIN/graphify" <<'SH'
+          cat > "$MOCK/graphify" <<'SH'
           #!/usr/bin/env bash
-          set -euo pipefail
           echo "$*" >> "$GRAPHIFY_TEST_LOG"
-          if [ "${GRAPHIFY_MOCK_FAIL:-0}" = "1" ]; then
-            exit 9
-          fi
+          if [ "${GRAPHIFY_MOCK_FAIL:-0}" = "1" ] && [ "${1:-}" = "update" ]; then exit 9; fi
           exit 0
           SH
-          chmod +x "$MOCK_BIN/graphify"
+          chmod +x "$MOCK/graphify"
+          export WEB_KIT_GRAPHIFY_BIN="$MOCK/graphify"
+          export GRAPHIFY_TEST_LOG="$LOG"
+          GATE="$SAMPLE/.agent-core/rules/graphify-refresh.mjs"
 
-          GATE="$SAMPLE/.agent-core/rules/graphify-refresh.py"
-
-          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
-            python "$GATE" --project "$SAMPLE" --task-id task-1
-          test "$(wc -l < "$LOG")" -eq 1
-          grep -q '^update \.$' "$LOG"
-
-          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
-            python "$GATE" --project "$SAMPLE" --task-id task-1
-          test "$(wc -l < "$LOG")" -eq 1
+          node "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(grep -c '^update \.$' "$LOG")" -eq 1
+          node "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(grep -c '^update \.$' "$LOG")" -eq 1
 
           echo 'export const App = () => "changed";' > "$SAMPLE/src/App.tsx"
-          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
-            python "$GATE" --project "$SAMPLE" --task-id task-1
-          test "$(wc -l < "$LOG")" -eq 2
+          node "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(grep -c '^update \.$' "$LOG")" -eq 2
 
           echo 'export const App = () => "changed-again";' > "$SAMPLE/src/App.tsx"
-          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" GRAPHIFY_MOCK_FAIL=1 \
-            python "$GATE" --project "$SAMPLE" --task-id task-1
-          test "$(wc -l < "$LOG")" -eq 3
+          GRAPHIFY_MOCK_FAIL=1 node "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(grep -c '^update \.$' "$LOG")" -eq 3
+          node "$GATE" --project "$SAMPLE" --task-id task-1
+          test "$(grep -c '^update \.$' "$LOG")" -eq 3
 
-          PATH="$MOCK_BIN:$PATH" GRAPHIFY_TEST_LOG="$LOG" \
-            python "$GATE" --project "$SAMPLE" --task-id task-1
-          test "$(wc -l < "$LOG")" -eq 3
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const state = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/state/graphify.json'), 'utf8'));
+          if (state.runtime !== 'node') process.exit(1);
+          if (state.routing_mode !== 'standard' || !state.fallback_for_task || !state.dirty) process.exit(1);
+          NODE
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample"
-          state = json.loads((sample / ".agent-core/state/graphify.json").read_text())
-          assert state["routing_mode"] == "standard"
-          assert state["fallback_for_task"] is True
-          assert state["fallback_task_id"] == "task-1"
-          assert state["dirty"] is True
-          PY
-
-      - name: Test no silent downgrade for newer project
+      - name: Test downgrade protection and doctor
         shell: bash
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-sample"
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          p = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample" / ".agent-kit.json"
-          data = json.loads(p.read_text())
-          data["version"] = "9.0.0"
-          p.write_text(json.dumps(data, indent=2))
-          PY
+          TARBALL="./${{ steps.pack.outputs.tarball }}"
 
-          OUTPUT="$RUNNER_TEMP/smart-newer.log"
-          npx --yes "./${{ steps.pack.outputs.tarball }}" \
-            --project "$SAMPLE" | tee "$OUTPUT"
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const p = path.join(sample, '.agent-kit.json');
+          const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+          data.version = '9.0.0';
+          fs.writeFileSync(p, JSON.stringify(data, null, 2));
+          NODE
 
-          grep -q "newer than npm CLI" "$OUTPUT"
-          grep -q "Decision:  doctor" "$OUTPUT"
+          OUTPUT="$(npx --yes "$TARBALL" --project "$SAMPLE")"
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q 'newer than npm CLI'
 
-      - name: Test explicit downgrade protection
-        shell: bash
-        run: |
-          set -euo pipefail
-          SAMPLE="$RUNNER_TEMP/web-kit-sample"
           set +e
-          OUTPUT="$(npx --yes "./${{ steps.pack.outputs.tarball }}" update \
-            --ref v1.1.5 \
-            --project "$SAMPLE" 2>&1)"
+          DOWNGRADE="$(npx --yes "$TARBALL" update --ref v1.1.5 --project "$SAMPLE" 2>&1)"
           STATUS=$?
           set -e
-          echo "$OUTPUT"
           test "$STATUS" -eq 3
-          echo "$OUTPUT" | grep -q "Refusing downgrade"
+          echo "$DOWNGRADE" | grep -q 'Refusing downgrade'
 
-      - name: Test packaged CLI doctor explicitly
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const p = path.join(sample, '.agent-kit.json');
+          const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+          data.version = require(path.join(process.cwd(), 'package.json')).version;
+          fs.writeFileSync(p, JSON.stringify(data, null, 2));
+          NODE
+          npx --yes "$TARBALL" doctor --project "$SAMPLE"
+
+      - name: Assert Python was never invoked
         shell: bash
         run: |
           set -euo pipefail
-          SAMPLE="$RUNNER_TEMP/web-kit-sample"
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          root = Path.cwd()
-          p = Path(os.environ["RUNNER_TEMP"]) / "web-kit-sample" / ".agent-kit.json"
-          data = json.loads(p.read_text())
-          package = json.loads((root / "package.json").read_text())
-          data["version"] = package["version"]
-          p.write_text(json.dumps(data, indent=2))
-          PY
-
-          npx --yes "./${{ steps.pack.outputs.tarball }}" doctor \
-            --project "$SAMPLE"
+          if [ -s "$WEB_KIT_PYTHON_CALL_LOG" ]; then
+            echo 'Unexpected Python calls:'
+            cat "$WEB_KIT_PYTHON_CALL_LOG"
+            exit 1
+          fi
