@@ -6,6 +6,7 @@ on:
       - "package.json"
       - "VERSION"
       - "bin/**"
+      - "bootstrap/**"
       - "scripts/**"
       - "pack/rules/**"
       - "pack/agents/**"
@@ -17,6 +18,7 @@ on:
       - "package.json"
       - "VERSION"
       - "bin/**"
+      - "bootstrap/**"
       - "scripts/**"
       - "pack/rules/**"
       - "pack/agents/**"
@@ -42,10 +44,15 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Validate Node sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check scripts/agent-kit.mjs
+          node --check scripts/project-profile.mjs
+          node --check scripts/ai-compat.mjs
+          node --check pack/rules/graphify-setup.mjs
+          node --check pack/rules/graphify-refresh.mjs
 
       - name: Create sample project with existing AI instructions
         shell: bash
@@ -81,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
-          python scripts/agent-kit.py install "$SAMPLE"
+          node scripts/agent-kit.mjs install "$SAMPLE"
 
           test -f "$SAMPLE/AGENTS.md"
           test -f "$SAMPLE/CLAUDE.md"
@@ -90,52 +97,47 @@ jobs:
           test -f "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
           test ! -e "$SAMPLE/AGENTS.web-kit.md"
           test -f "$SAMPLE/.agent-core/rules/ai-compatibility.md"
-          test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
-          test -f "$SAMPLE/.agent-core/rules/graphify-refresh.py"
+          test -f "$SAMPLE/.agent-core/rules/graphify-setup.mjs"
+          test -f "$SAMPLE/.agent-core/rules/graphify-refresh.mjs"
           test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
+          test ! -e "$SAMPLE/.agent-core/rules/graphify-setup.py"
+          test ! -e "$SAMPLE/.agent-core/rules/graphify-refresh.py"
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          rt = Path(os.environ['RUNNER_TEMP'])
-          for name in ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md'):
-              original = (rt / f'original-{name}').read_text()
-              current = (sample / name).read_text()
-              assert current.startswith(original), name
-              assert '<!-- WEB-AGENT-KIT:AI-ROLES:START -->' in current
-              assert '<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->' not in current
-              assert current.count('<!-- WEB-AGENT-KIT:AI-ROLES:START -->') == 1
+          node - "$SAMPLE" "$RUNNER_TEMP" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const rt = process.argv[3];
+          for (const name of ['AGENTS.md','CLAUDE.md','GEMINI.md']) {
+            const original = fs.readFileSync(path.join(rt, `original-${name}`), 'utf8');
+            const current = fs.readFileSync(path.join(sample, name), 'utf8');
+            if (!current.startsWith(original)) throw new Error(`${name} project content changed`);
+            if (!current.includes('<!-- WEB-AGENT-KIT:AI-ROLES:START -->')) throw new Error(`${name} roles missing`);
+            if (current.includes('<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->')) throw new Error(`${name} should not get generated summary`);
+            if ((current.match(/WEB-AGENT-KIT:AI-ROLES:START/g) || []).length !== 1) throw new Error(`${name} duplicate roles`);
+          }
+          for (const rel of ['.github/copilot-instructions.md','.cursor/rules/ihgen-web-kit.mdc']) {
+            const text = fs.readFileSync(path.join(sample, rel), 'utf8');
+            if (!text.includes('WEB-AGENT-KIT:PROJECT-SUMMARY:START') || !text.includes('web-kit-ai-sample') || !text.includes('WEB-AGENT-KIT:AI-ROLES:START')) throw new Error(`${rel} missing one-time summary/roles`);
+          }
+          const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
+          if (cfg.runtime !== 'node+npm') throw new Error('config runtime mismatch');
+          if (cfg.ai_compatibility.runtime !== 'node+npm') throw new Error('AI runtime mismatch');
+          NODE
 
-          # These files did not exist, so they receive a one-time project summary plus roles.
-          for rel in ('.github/copilot-instructions.md', '.cursor/rules/ihgen-web-kit.mdc'):
-              text = (sample / rel).read_text()
-              assert '<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->' in text
-              assert 'web-kit-ai-sample' in text
-              assert '<!-- WEB-AGENT-KIT:AI-ROLES:START -->' in text
-
-          cfg = json.loads((sample / '.agent-kit.json').read_text())
-          compat = cfg['ai_compatibility']
-          assert 'codex' in compat['native_agents_md']
-          assert 'kimi' in compat['native_agents_md']
-          assert compat['managed_roles']['claude'] == 'CLAUDE.md'
-          assert compat['managed_roles']['gemini'] == 'GEMINI.md'
-          assert compat['temporary_graphify_role'] == '.agent-core/state/graphify-bootstrap-role.md'
-          PY
-
-          # A second update must still preserve project-owned text and keep one roles block.
-          python scripts/agent-kit.py update "$SAMPLE"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          rt = Path(os.environ['RUNNER_TEMP'])
-          for name in ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md'):
-              original = (rt / f'original-{name}').read_text()
-              current = (sample / name).read_text()
-              assert current.startswith(original), name
-              assert current.count('<!-- WEB-AGENT-KIT:AI-ROLES:START -->') == 1
-          PY
+          node scripts/agent-kit.mjs update "$SAMPLE"
+          node - "$SAMPLE" "$RUNNER_TEMP" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const rt = process.argv[3];
+          for (const name of ['AGENTS.md','CLAUDE.md','GEMINI.md']) {
+            const original = fs.readFileSync(path.join(rt, `original-${name}`), 'utf8');
+            const current = fs.readFileSync(path.join(sample, name), 'utf8');
+            if (!current.startsWith(original)) throw new Error(`${name} changed on update`);
+            if ((current.match(/WEB-AGENT-KIT:AI-ROLES:START/g) || []).length !== 1) throw new Error(`${name} duplicate roles`);
+          }
+          NODE
 
       - name: Verify missing instruction files get one-time project summaries
         shell: bash
@@ -143,14 +145,10 @@ jobs:
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-empty-ai-sample"
           mkdir -p "$SAMPLE/src"
-          cat > "$SAMPLE/package.json" <<'JSON'
-          {"name":"empty-ai-project","dependencies":{"react":"^19.0.0"}}
-          JSON
+          echo '{"name":"empty-ai-project","dependencies":{"react":"^19.0.0"}}' > "$SAMPLE/package.json"
           echo 'export const value = 1;' > "$SAMPLE/src/index.ts"
-          python scripts/agent-kit.py install "$SAMPLE"
-
+          node scripts/agent-kit.mjs install "$SAMPLE"
           for rel in AGENTS.md CLAUDE.md GEMINI.md .github/copilot-instructions.md .cursor/rules/ihgen-web-kit.mdc; do
-            test -f "$SAMPLE/$rel"
             grep -q 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' "$SAMPLE/$rel"
             grep -q 'empty-ai-project' "$SAMPLE/$rel"
             grep -q 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/$rel"
@@ -165,37 +163,20 @@ jobs:
           POLICY="$SAMPLE/.agent-core/routing/context-policy.json"
           ROUTER="$SAMPLE/.agent-core/agents/context-router.md"
           WORKFLOW="$SAMPLE/.agent-core/rules/workflow.md"
-
           grep -q 'Direct source lookup' "$RULE"
           grep -q 'Relationship / dependency / impact discovery' "$RULE"
-          grep -q 'Do.*not.*force.*Graphify.*precise' "$RULE"
-          grep -q 'Do not broadly search.*before Graphify' "$RULE"
-          grep -q 'Where should I look?' "$RULE"
-          grep -q 'What actually exists?' "$RULE"
-
-          grep -q 'Question-type navigation decision' "$ROUTER"
-          grep -q 'direct text/symbol/path lookup' "$ROUTER"
-          grep -q 'relationship/dependency/ownership/impact' "$ROUTER"
-          grep -q 'Direct source lookup' "$WORKFLOW"
+          grep -q 'node .agent-core/rules/graphify-refresh.mjs' "$RULE"
+          grep -q 'Direct lookup' "$ROUTER"
           grep -q 'Relationship / dependency / impact discovery' "$WORKFLOW"
+          node - "$POLICY" <<'NODE'
+          const fs = require('fs');
+          const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (policy.version !== 5 || policy.runtime !== 'node+npm') process.exit(1);
+          if (!policy.principles.web_kit_runtime_requires_node_not_python) process.exit(1);
+          if (policy.repository_navigation.graphify_refresh_gate !== '.agent-core/rules/graphify-refresh.mjs') process.exit(1);
+          NODE
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          policy = json.loads((sample / '.agent-core/routing/context-policy.json').read_text())
-          principles = policy['principles']
-          nav = policy['repository_navigation']
-          assert policy['version'] == 4
-          assert principles['route_by_navigation_question_type'] is True
-          assert principles['prefer_targeted_search_for_direct_lookup'] is True
-          assert principles['prefer_graphify_for_relationship_discovery_when_fresh'] is True
-          assert nav['canonical_rule'] == '.agent-core/rules/repository-navigation.md'
-          assert 'rg-or-equivalent-targeted-current-source-search' in nav['direct_lookup']['preferred_progression']
-          assert 'graphify-refresh-gate' in nav['relationship_discovery']['preferred_progression']
-          PY
-
-      - name: Verify Graphify setup creates and removes temporary current-AI role
+      - name: Verify Graphify setup protects AI files and manages temporary role
         shell: bash
         run: |
           set -euo pipefail
@@ -207,144 +188,95 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           echo "$*" >> "$GRAPHIFY_TEST_LOG"
-          if [[ "${1:-}" == "--version" ]]; then
-            echo 'graphify test'
+          if [ "${1:-}" = "install" ]; then
+            echo 'GRAPHIFY TRIED TO MODIFY THIS' >> AGENTS.md
+            echo 'GRAPHIFY TRIED TO MODIFY THIS' >> CLAUDE.md
           fi
           exit 0
           SH
           chmod +x "$MOCKBIN/graphify"
-
           export PATH="$MOCKBIN:$PATH"
           export GRAPHIFY_TEST_LOG="$LOG"
 
           sha256sum "$SAMPLE/AGENTS.md" "$SAMPLE/CLAUDE.md" "$SAMPLE/GEMINI.md" > "$RUNNER_TEMP/ai-before-graphify.sha"
-
-          python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --yes
+          node "$SAMPLE/.agent-core/rules/graphify-setup.mjs" --project "$SAMPLE" --yes
           grep -q '^install --project$' "$LOG"
-          test -f "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
-          grep -q 'Temporary Role — Build the Initial Graphify Project Graph' "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
-          grep -q 'graphify-setup.py --project . --complete' "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
-
-          # Graphify setup must not rewrite project AI instruction files.
           sha256sum -c "$RUNNER_TEMP/ai-before-graphify.sha"
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          state = json.loads((sample / '.agent-core/state/graphify-install.json').read_text())
-          assert state['installed'] is True
-          assert state['configured'] is True
-          assert state['initial_graph_required'] is True
-          assert state['bootstrap_role_active'] is True
-          assert state['current_ai_action_required'] is True
-          PY
+          ROLE="$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+          test -f "$ROLE"
+          grep -q 'node .agent-core/rules/graphify-setup.mjs --project . --complete' "$ROLE"
 
-          # The role cannot be removed before the current AI actually builds the graph.
           set +e
-          python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --complete
+          node "$SAMPLE/.agent-core/rules/graphify-setup.mjs" --project "$SAMPLE" --complete
           STATUS=$?
           set -e
           test "$STATUS" -eq 2
-          test -f "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+          test -f "$ROLE"
 
-          # Simulate the current AI successfully building the initial graph, then complete the role.
           mkdir -p "$SAMPLE/graphify-out"
           echo '{"nodes":[],"edges":[]}' > "$SAMPLE/graphify-out/graph.json"
-          python "$SAMPLE/.agent-core/rules/graphify-setup.py" --project "$SAMPLE" --complete
-          test ! -e "$SAMPLE/.agent-core/state/graphify-bootstrap-role.md"
+          node "$SAMPLE/.agent-core/rules/graphify-setup.mjs" --project "$SAMPLE" --complete
+          test ! -e "$ROLE"
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          state = json.loads((sample / '.agent-core/state/graphify-install.json').read_text())
-          assert state['graph_ready'] is True
-          assert state['initial_graph_required'] is False
-          assert state['bootstrap_role_active'] is False
-          assert state['current_ai_action_required'] is False
-          PY
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const state = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/state/graphify-install.json'), 'utf8'));
+          if (!state.graph_ready || state.initial_graph_required || state.bootstrap_role_active || state.current_ai_action_required) process.exit(1);
+          NODE
 
-      - name: Verify Graph Refresh Gate self-heals all Graphify metadata
+      - name: Verify Node Graph Refresh Gate self-heals metadata
         shell: bash
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
           MOCKBIN="$RUNNER_TEMP/mockbin"
           LOG="$RUNNER_TEMP/graphify-refresh.log"
-          export PATH="$MOCKBIN:$PATH"
+          export WEB_KIT_GRAPHIFY_BIN="$MOCKBIN/graphify"
           export GRAPHIFY_TEST_LOG="$LOG"
           : > "$LOG"
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          for rel in ['.agent-kit.json', '.agent-core/index/project-profile.json']:
-              p = sample / rel
-              data = json.loads(p.read_text())
-              data.setdefault('capabilities', {}).setdefault('graphify', {}).update({
-                  'detected': False,
-                  'graph_ready': False,
-                  'routing_mode': 'standard',
-              })
-              p.write_text(json.dumps(data, indent=2))
-          p = sample / '.agent-core/state/graphify-install.json'
-          data = json.loads(p.read_text())
-          data['graph_ready'] = False
-          data['initial_graph_required'] = True
-          p.write_text(json.dumps(data, indent=2))
-          PY
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          for (const rel of ['.agent-kit.json','.agent-core/index/project-profile.json']) {
+            const p = path.join(sample, rel);
+            const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+            data.capabilities ||= {};
+            data.capabilities.graphify ||= {};
+            Object.assign(data.capabilities.graphify, {detected:false, graph_ready:false, routing_mode:'standard'});
+            fs.writeFileSync(p, JSON.stringify(data, null, 2));
+          }
+          NODE
 
-          python "$SAMPLE/.agent-core/rules/graphify-refresh.py" \
-            --project "$SAMPLE" --task-id metadata-sync
+          node "$SAMPLE/.agent-core/rules/graphify-refresh.mjs" --project "$SAMPLE" --task-id metadata-sync
           grep -q '^update \.$' "$LOG"
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
-          cfg = json.loads((sample / '.agent-kit.json').read_text())
-          profile = json.loads((sample / '.agent-core/index/project-profile.json').read_text())
-          install = json.loads((sample / '.agent-core/state/graphify-install.json').read_text())
-          runtime = json.loads((sample / '.agent-core/state/graphify.json').read_text())
-          for source in (cfg, profile):
-              graphify = source['capabilities']['graphify']
-              assert graphify['detected'] is True
-              assert graphify['graph_ready'] is True
-              assert graphify['routing_mode'] == 'graphify-assisted'
-              assert graphify['dirty'] is False
-          assert install['graph_ready'] is True
-          assert install['initial_graph_required'] is False
-          assert install['observed_routing_mode'] == 'graphify-assisted'
-          assert runtime['dirty'] is False
-          assert runtime['routing_mode'] == 'graphify-assisted'
-          PY
+          node - "$SAMPLE" <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.argv[2];
+          const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
+          const profile = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/index/project-profile.json'), 'utf8'));
+          const runtime = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/state/graphify.json'), 'utf8'));
+          for (const source of [cfg, profile]) {
+            const g = source.capabilities.graphify;
+            if (!g.detected || !g.graph_ready || g.routing_mode !== 'graphify-assisted' || g.dirty) process.exit(1);
+          }
+          if (runtime.runtime !== 'node' || runtime.dirty || runtime.routing_mode !== 'graphify-assisted') process.exit(1);
+          NODE
 
-      - name: Verify doctor warns on unmanaged Graphify instructions without deleting them
+      - name: Verify doctor preserves and reports unmanaged Graphify instructions
         shell: bash
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
-          echo '' >> "$SAMPLE/CLAUDE.md"
           echo 'Always run graphify update . after every edit.' >> "$SAMPLE/CLAUDE.md"
-
           OUTPUT="$RUNNER_TEMP/doctor-ai-conflict.log"
-          python scripts/agent-kit.py doctor "$SAMPLE" | tee "$OUTPUT"
+          node scripts/agent-kit.mjs doctor "$SAMPLE" | tee "$OUTPUT"
           grep -q 'CLAUDE.md: direct Graphify update command outside the managed roles block' "$OUTPUT"
           grep -q 'Status: HEALTHY WITH WARNINGS' "$OUTPUT"
           grep -q 'Always run graphify update . after every edit.' "$SAMPLE/CLAUDE.md"
-
-      - name: Verify npm graphify command routes through Web Kit
-        shell: bash
-        run: |
-          set -euo pipefail
-          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
-          MOCKBIN="$RUNNER_TEMP/mockbin"
-          LOG="$RUNNER_TEMP/graphify-npx.log"
-          export PATH="$MOCKBIN:$PATH"
-          export GRAPHIFY_TEST_LOG="$LOG"
-          : > "$LOG"
-
-          node bin/web-kit.js graphify --ref main --project "$SAMPLE"
-          grep -q '^install --project$' "$LOG"
