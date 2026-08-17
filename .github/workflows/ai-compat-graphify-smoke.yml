@@ -111,8 +111,8 @@ jobs:
           grep -q 'Relationship / dependency / impact discovery' "$RULE"
           grep -q 'Do.*not.*force.*Graphify.*precise' "$RULE"
           grep -q 'Do not broadly search.*before Graphify' "$RULE"
-          grep -q 'Graphify.*Where should I look' "$RULE"
-          grep -q 'targeted search.*What actually exists' "$RULE"
+          grep -q 'Where should I look?' "$RULE"
+          grep -q 'What actually exists?' "$RULE"
 
           grep -q 'Question-type navigation decision' "$ROUTER"
           grep -q 'direct text/symbol/path lookup' "$ROUTER"
