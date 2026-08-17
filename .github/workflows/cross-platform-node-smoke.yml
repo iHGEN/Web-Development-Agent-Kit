@@ -1,0 +1,136 @@
+name: Cross-platform Node Smoke
+
+on:
+  push:
+    paths:
+      - "package.json"
+      - "bin/**"
+      - "bootstrap/remote-install.mjs"
+      - "scripts/**"
+      - "pack/**"
+      - ".github/workflows/cross-platform-node-smoke.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "bin/**"
+      - "bootstrap/remote-install.mjs"
+      - "scripts/**"
+      - "pack/**"
+      - ".github/workflows/cross-platform-node-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate Node entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check bin/web-kit.js
+          node --check bootstrap/remote-install.mjs
+          node --check scripts/agent-kit.mjs
+          node --check scripts/project-profile.mjs
+          node --check scripts/ai-compat.mjs
+          node --check pack/rules/graphify-setup.mjs
+          node --check pack/rules/graphify-refresh.mjs
+
+      - name: Pack npm CLI
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARBALL="$(npm pack --silent)"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Create project fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-cross-platform"
+          export SAMPLE
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.env.SAMPLE;
+          fs.mkdirSync(path.join(sample, 'src'), {recursive:true});
+          fs.writeFileSync(path.join(sample, 'package.json'), JSON.stringify({
+            name: 'web-kit-cross-platform',
+            dependencies: {react: '^19.0.0'},
+            devDependencies: {typescript: '^5.0.0'}
+          }, null, 2));
+          fs.writeFileSync(path.join(sample, 'tsconfig.json'), '{}');
+          fs.writeFileSync(path.join(sample, 'src', 'App.tsx'), 'export const App = () => null;');
+          fs.writeFileSync(path.join(sample, 'AGENTS.md'), '# Existing project AGENTS\n\nKeep this line.\n');
+          NODE
+
+      - name: Install from packaged CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-cross-platform"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" install \
+            --ref main \
+            --project "$SAMPLE"
+
+      - name: Verify installed project
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-cross-platform"
+          export SAMPLE
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const sample = process.env.SAMPLE;
+          const required = [
+            'AGENTS.md',
+            'CLAUDE.md',
+            'GEMINI.md',
+            '.agent-kit.json',
+            '.agent-kit-source.json',
+            '.agent-core/index/project-profile.json',
+            '.agent-core/rules/workflow.md',
+            '.agent-core/rules/repository-navigation.md',
+            '.agent-core/rules/graphify-setup.mjs',
+            '.agent-core/rules/graphify-refresh.mjs',
+            '.agent-core/bin/web-kit-update.mjs'
+          ];
+          for (const rel of required) {
+            if (!fs.existsSync(path.join(sample, rel))) throw new Error(`missing ${rel}`);
+          }
+          const agents = fs.readFileSync(path.join(sample, 'AGENTS.md'), 'utf8');
+          if (!agents.startsWith('# Existing project AGENTS\n\nKeep this line.\n')) throw new Error('project AGENTS content was overwritten');
+          if (!agents.includes('WEB-AGENT-KIT:AI-ROLES:START')) throw new Error('roles block missing');
+          if (fs.existsSync(path.join(sample, 'AGENTS.web-kit.md'))) throw new Error('legacy AGENTS.web-kit.md created');
+          const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
+          if (cfg.runtime !== 'node+npm') throw new Error('runtime mismatch');
+          NODE
+
+      - name: Run doctor
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-cross-platform"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" doctor --project "$SAMPLE"
