@@ -2,6 +2,12 @@
 
 The Web Development Agent Kit is **assistant-neutral**. The engineering lifecycle, routing rules, validators, skills, Graph Refresh Gate, and project profile do not belong to any model vendor.
 
+## Runtime contract
+
+Web Kit requires **Node.js + npm only**. Web-Kit-managed installation, discovery, routing, doctor, AI-role management, and Graphify freshness helpers run with Node.js.
+
+A system Python installation is not required by Web Kit. Graphify is optional; if Graphify requires Python internally, Web Kit may bootstrap `uv` and let `uv` manage Graphify's Python runtime separately. If Graphify cannot be installed or used, standard routing remains fully functional.
+
 ## Canonical sources
 
 Installed projects use:
@@ -43,9 +49,9 @@ later Web-Kit update
   -> refresh only the Web-Kit roles block
 ```
 
-`AGENTS.web-kit.md` is a legacy artifact from older releases. New installs do not create it and it is not canonical. If an old project already contains it, Web Kit leaves it untouched and `doctor` may report it as legacy.
+`AGENTS.web-kit.md` is a legacy artifact from older releases. New installs do not create it and it is not canonical. If an old project already contains it, Web Kit leaves it untouched.
 
-The old `--force-agents` option is retained only for CLI compatibility and MUST NOT overwrite existing AI instruction files.
+The old `--force-agents` option may be accepted only for compatibility and MUST NOT overwrite existing AI instruction files.
 
 ## Managed roles
 
@@ -58,7 +64,8 @@ The roles block tells the current assistant to:
 - respect independent plan/handoff/final validators;
 - use targeted source search for direct lookup;
 - use refresh-gated Graphify for relationship/impact navigation when fresh;
-- keep source/diff/tests/build/runtime authoritative over Graphify.
+- keep source/diff/tests/build/runtime authoritative over Graphify;
+- invoke Web-Kit helpers with Node.js, never requiring project users to install Python for Web Kit itself.
 
 Existing content outside the roles markers is project-owned and must be preserved.
 
@@ -75,7 +82,7 @@ Every managed AI roles block contains a permanent instruction to check for this 
 The temporary role instructs the AI to verify `graphify-out/graph.json`, then run:
 
 ```bash
-python .agent-core/rules/graphify-setup.py --project . --complete
+node .agent-core/rules/graphify-setup.mjs --project . --complete
 ```
 
 Completion:
@@ -88,7 +95,7 @@ Completion:
 
 If the graph is not built yet, completion refuses to remove the role.
 
-Graphify setup therefore never needs to rewrite `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or other project-owned AI instruction content after the roles block is installed.
+Graphify setup protects project AI instruction files around repo-local Graphify registration, so `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, and Cursor rules remain project-owned outside the Web-Kit roles block.
 
 ## Generic assistants
 
