@@ -8,6 +8,8 @@ on:
       - "bin/**"
       - "scripts/**"
       - "pack/rules/**"
+      - "pack/agents/**"
+      - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/ai-compat-graphify-smoke.yml"
   pull_request:
@@ -17,6 +19,8 @@ on:
       - "bin/**"
       - "scripts/**"
       - "pack/rules/**"
+      - "pack/agents/**"
+      - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/ai-compat-graphify-smoke.yml"
   workflow_dispatch:
@@ -71,6 +75,7 @@ jobs:
           test -f "$SAMPLE/.agent-core/rules/ai-compatibility.md"
           test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
           test -f "$SAMPLE/.agent-core/rules/graphify-refresh.py"
+          test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
 
           grep -q 'Existing Claude instructions' "$SAMPLE/CLAUDE.md"
           grep -q 'Existing Gemini instructions' "$SAMPLE/GEMINI.md"
@@ -90,6 +95,45 @@ jobs:
           assert 'kimi' in compat['native_agents_md']
           assert compat['managed_bridges']['claude'] == 'CLAUDE.md'
           assert compat['managed_bridges']['gemini'] == 'GEMINI.md'
+          PY
+
+      - name: Verify question-aware repository navigation policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-ai-sample"
+          RULE="$SAMPLE/.agent-core/rules/repository-navigation.md"
+          POLICY="$SAMPLE/.agent-core/routing/context-policy.json"
+          ROUTER="$SAMPLE/.agent-core/agents/context-router.md"
+          WORKFLOW="$SAMPLE/.agent-core/rules/workflow.md"
+
+          grep -q 'Direct source lookup' "$RULE"
+          grep -q 'Relationship / dependency / impact discovery' "$RULE"
+          grep -q 'Do.*not.*force.*Graphify.*precise' "$RULE"
+          grep -q 'Do not broadly search.*before Graphify' "$RULE"
+          grep -q 'Graphify.*Where should I look' "$RULE"
+          grep -q 'targeted search.*What actually exists' "$RULE"
+
+          grep -q 'Question-type navigation decision' "$ROUTER"
+          grep -q 'direct text/symbol/path lookup' "$ROUTER"
+          grep -q 'relationship/dependency/ownership/impact' "$ROUTER"
+          grep -q 'Direct source lookup' "$WORKFLOW"
+          grep -q 'Relationship / dependency / impact discovery' "$WORKFLOW"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sample = Path(os.environ['RUNNER_TEMP']) / 'web-kit-ai-sample'
+          policy = json.loads((sample / '.agent-core/routing/context-policy.json').read_text())
+          principles = policy['principles']
+          nav = policy['repository_navigation']
+          assert policy['version'] == 4
+          assert principles['route_by_navigation_question_type'] is True
+          assert principles['prefer_targeted_search_for_direct_lookup'] is True
+          assert principles['prefer_graphify_for_relationship_discovery_when_fresh'] is True
+          assert nav['canonical_rule'] == '.agent-core/rules/repository-navigation.md'
+          assert 'rg-or-equivalent-targeted-current-source-search' in nav['direct_lookup']['preferred_progression']
+          assert 'graphify-refresh-gate' in nav['relationship_discovery']['preferred_progression']
           PY
 
       - name: Verify Graphify setup is opt-in and project-local
