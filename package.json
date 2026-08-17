@@ -8,8 +8,11 @@
   },
   "files": [
     "bin",
-    "bootstrap/remote-install.py"
+    "bootstrap/remote-install.mjs"
   ],
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  },
   "engines": {
     "node": ">=18"
   },
