@@ -102,24 +102,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-sample"
           npx --yes "./${{ steps.pack.outputs.tarball }}" install \
             --ref main \
-            --project "$RUNNER_TEMP/web-kit-sample"
+            --project "$SAMPLE"
 
-          test -f "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit.json"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-kit-source.json"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/index/project-profile.json"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/rules/workflow.md"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/rules/graphify-refresh.py"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/rules/repository-navigation.md"
-          test -f "$RUNNER_TEMP/web-kit-sample/.agent-core/bin/remote-install.py"
+          test -f "$SAMPLE/AGENTS.md"
+          test -f "$SAMPLE/CLAUDE.md"
+          test -f "$SAMPLE/GEMINI.md"
+          test -f "$SAMPLE/.github/copilot-instructions.md"
+          test -f "$SAMPLE/.cursor/rules/ihgen-web-kit.mdc"
+          test ! -e "$SAMPLE/AGENTS.web-kit.md"
+          test -f "$SAMPLE/.agent-kit.json"
+          test -f "$SAMPLE/.agent-kit-source.json"
+          test -f "$SAMPLE/.agent-core/index/project-profile.json"
+          test -f "$SAMPLE/.agent-core/rules/workflow.md"
+          test -f "$SAMPLE/.agent-core/rules/graphify-refresh.py"
+          test -f "$SAMPLE/.agent-core/rules/graphify-setup.py"
+          test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
+          test -f "$SAMPLE/.agent-core/bin/remote-install.py"
 
-          grep -q "web-kit-smoke-app" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
-          grep -q "Project Agent Context" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
-          grep -q ".agent-core/rules/workflow.md" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
-          grep -q "Graph Refresh Gate" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
-          grep -q "Repository navigation decision" "$RUNNER_TEMP/web-kit-sample/AGENTS.md"
+          grep -q "web-kit-smoke-app" "$SAMPLE/AGENTS.md"
+          grep -q "WEB-AGENT-KIT:PROJECT-SUMMARY:START" "$SAMPLE/AGENTS.md"
+          grep -q "WEB-AGENT-KIT:AI-ROLES:START" "$SAMPLE/AGENTS.md"
+          grep -q ".agent-core/rules/workflow.md" "$SAMPLE/AGENTS.md"
+          grep -q ".agent-core/rules/repository-navigation.md" "$SAMPLE/AGENTS.md"
+          grep -q "graphify-bootstrap-role.md" "$SAMPLE/AGENTS.md"
 
           python - <<'PY'
           import json, os
@@ -130,6 +138,9 @@ jobs:
           assert graphify["detected"] is False
           assert graphify["graph_ready"] is False
           assert graphify["routing_mode"] == "standard"
+          cfg = json.loads((sample / '.agent-kit.json').read_text())
+          assert cfg['ai_compatibility']['canonical_instructions'] == 'AGENTS.md'
+          assert cfg['ai_compatibility']['managed_roles']['claude'] == 'CLAUDE.md'
           PY
 
       - name: Test smart mode on current installation
@@ -178,9 +189,12 @@ jobs:
           assert graphify["local_mcp_configured"] is True
           assert graphify["routing_mode"] == "graphify-assisted"
           assert config["capabilities"]["graphify"]["routing_mode"] == "graphify-assisted"
+          agents = (sample / 'AGENTS.md').read_text()
+          assert agents.count('<!-- WEB-AGENT-KIT:AI-ROLES:START -->') == 1
+          # Initial project summary is intentionally not rewritten by updates.
+          assert 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' in agents
           PY
 
-          grep -q "Routing mode.*graphify-assisted" "$SAMPLE/AGENTS.md"
           grep -q "Direct source lookup" "$SAMPLE/.agent-core/rules/workflow.md"
           grep -q "Relationship / dependency / impact discovery" "$SAMPLE/.agent-core/rules/workflow.md"
           grep -q "Graph Refresh Gate" "$SAMPLE/.agent-core/rules/workflow.md"
