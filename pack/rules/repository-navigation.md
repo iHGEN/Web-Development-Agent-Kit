@@ -3,6 +3,12 @@
 This rule is a supporting rule for the canonical lifecycle in `.agent-core/rules/workflow.md`.
 It defines **how to choose repository-navigation tools** without creating an alternate workflow.
 
+## Runtime
+
+Web Kit runtime helpers use Node.js. A system Python installation is not required for repository navigation or the Graph Refresh Gate.
+
+Graphify remains optional. If Graphify needs Python internally, Web Kit's Graphify setup may bootstrap `uv` and let `uv` manage that runtime separately.
+
 ## Core authority
 
 Current repository source is the behavioral source of truth.
@@ -54,7 +60,7 @@ Prefer Graphify when it is ready and fresh because the graph can narrow the rela
 Before the first Graphify query for a task, run:
 
 ```bash
-python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
 Use Graphify only when `.agent-core/state/graphify.json` reports both:
