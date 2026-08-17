@@ -42,12 +42,18 @@ Options:
   --repo <owner/repo>    Override source repository.
   --source <zip-url>     Use a direct ZIP source instead of GitHub.
   --sha256 <hash>        Verify downloaded archive.
-  --force-agents         Replace a non-managed AGENTS.md during explicit install.
+  --force-agents         Deprecated compatibility flag; existing AI instruction files are never overwritten.
   --allow-downgrade      Explicitly permit install/update to an older semantic version.
   --install-graphify     After Web-Kit setup, install/register optional Graphify support.
 
+AI instruction files are non-destructive:
+  - existing AGENTS.md / CLAUDE.md / GEMINI.md / Copilot / Cursor instructions stay intact;
+  - Web Kit adds or refreshes only its marked roles block;
+  - missing instruction files are created once with a compact project summary plus roles.
+
 Graphify is optional. Without it, Web Kit uses the normal routed-context loop.
-With it and a ready graph, Web Kit uses the Graphify-assisted loop to reduce broad repository reads.
+If Graphify is installed but no graph exists, Web Kit activates a temporary current-AI role to build it.
+After the graph is built, that temporary role removes itself through the completion command.
 
 Examples:
   npx @ihgen/web-kit
@@ -314,9 +320,9 @@ if (result.error) {
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 if (action === "install") {
-  console.log(`\n✓ Web Development Agent Kit installed.\n✓ Project-aware instructions and cross-AI bridges generated.\n✓ Agents, routing, validators, and detected skills are ready.\n`);
+  console.log(`\n✓ Web Development Agent Kit installed.\n✓ Existing AI instruction files were preserved; Web-Kit managed roles were added/refreshed.\n✓ Missing AI instruction files were initialized with a compact project summary plus roles.\n✓ Agents, routing, validators, and detected skills are ready.\n`);
 } else if (action === "update") {
-  console.log(`\n✓ Web Development Agent Kit updated/refreshed.\n✓ Project discovery, cross-AI bridges, and managed workflow regenerated.\n✓ Detected skills and managed agent files are synchronized.\n`);
+  console.log(`\n✓ Web Development Agent Kit updated/refreshed.\n✓ Existing AI/project instructions remained intact outside Web-Kit managed role blocks.\n✓ Project profile, detected skills, routing, and managed agent files are synchronized.\n`);
 } else if (action === "doctor") {
   console.log(`\n✓ Web Development Agent Kit health check completed.\n✓ No automatic downgrade was performed.\n`);
 }
