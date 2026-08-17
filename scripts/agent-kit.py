@@ -2,7 +2,7 @@
 from pathlib import Path
 import argparse, json, os, shutil, subprocess, sys, re
 from project_profile import apply_project_profile
-from ai_compat import apply_ai_compatibility
+from ai_compat import apply_ai_compatibility, find_unmanaged_graphify_conflicts
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 PACK = KIT_ROOT / "pack"
@@ -306,6 +306,11 @@ def doctor(project):
     project = project.resolve()
     expected, evidence = detect(project)
     cfg = load_json(project / ".agent-kit.json")
+    profile = load_json(project / ".agent-core" / "index" / "project-profile.json")
+    graph_state = load_json(project / ".agent-core" / "state" / "graphify.json")
+    install_state = load_json(project / ".agent-core" / "state" / "graphify-install.json")
+    actual_graph_ready = (project / "graphify-out" / "graph.json").is_file()
+
     installed = sorted(
         p.name for p in (project / ".agents" / "skills").iterdir()
         if p.is_dir() and (p / "SKILL.md").exists()
@@ -322,6 +327,44 @@ def doctor(project):
     ]
     bridges_ok = all(path.exists() for path in bridge_paths)
 
+    warnings = []
+    cfg_graphify = cfg.get("capabilities", {}).get("graphify", {}) if cfg else {}
+    profile_graphify = profile.get("capabilities", {}).get("graphify", {}) if profile else {}
+
+    for key in ("detected", "graph_ready", "routing_mode"):
+        if cfg_graphify and profile_graphify and cfg_graphify.get(key) != profile_graphify.get(key):
+            warnings.append(
+                f"Graphify metadata mismatch for {key}: .agent-kit.json={cfg_graphify.get(key)!r}, "
+                f"project-profile.json={profile_graphify.get(key)!r}"
+            )
+
+    if cfg_graphify and cfg_graphify.get("graph_ready") != actual_graph_ready:
+        warnings.append(
+            f".agent-kit.json Graphify graph_ready={cfg_graphify.get('graph_ready')!r} "
+            f"but graphify-out/graph.json presence is {actual_graph_ready}"
+        )
+    if profile_graphify and profile_graphify.get("graph_ready") != actual_graph_ready:
+        warnings.append(
+            f"project-profile.json Graphify graph_ready={profile_graphify.get('graph_ready')!r} "
+            f"but graphify-out/graph.json presence is {actual_graph_ready}"
+        )
+    if install_state and install_state.get("graph_ready") != actual_graph_ready:
+        warnings.append(
+            f"graphify-install.json graph_ready={install_state.get('graph_ready')!r} "
+            f"but graphify-out/graph.json presence is {actual_graph_ready}"
+        )
+    if actual_graph_ready and not graph_state:
+        warnings.append("Graphify graph exists but .agent-core/state/graphify.json freshness state is missing")
+
+    assistant_paths = {
+        "CLAUDE.md": project / "CLAUDE.md",
+        "GEMINI.md": project / "GEMINI.md",
+        "GitHub Copilot": project / ".github" / "copilot-instructions.md",
+    }
+    for label, path in assistant_paths.items():
+        for issue in find_unmanaged_graphify_conflicts(path):
+            warnings.append(f"{label}: {issue}; canonical Graph Refresh Gate should control Graphify refresh/use")
+
     print(f"Web Agent Kit Doctor — {project}")
     print(f"Detected skills: {', '.join(expected)}")
     print(f"Installed skills: {', '.join(installed) if installed else '(none)'}")
@@ -332,12 +375,26 @@ def doctor(project):
     print(f"Routing policy: {'OK' if (project/'.agent-core/routing/context-policy.json').exists() else 'MISSING'}")
     print(f"Root instructions: {'OK' if (project/'AGENTS.md').exists() or (project/'AGENTS.web-kit.md').exists() else 'MISSING'}")
     print(f"Cross-AI bridges: {'OK' if bridges_ok else 'MISSING'}")
+    print(f"Graphify graph: {'READY' if actual_graph_ready else 'NOT READY'}")
     if missing:
         print("Missing skills: " + ", ".join(missing))
     if stale:
         print("Installed but no longer detected: " + ", ".join(stale))
-    if not missing and agent_files and cfg and bridges_ok and (project/'.agent-core/index/project-profile.json').exists():
-        print("Status: HEALTHY")
+    if warnings:
+        print("Warnings:")
+        for warning in warnings:
+            print("  - " + warning)
+        print("Metadata repair: run the canonical Graph Refresh Gate once; it synchronizes Graphify metadata without changing app code.")
+
+    healthy = (
+        not missing
+        and agent_files
+        and cfg
+        and bridges_ok
+        and (project / ".agent-core" / "index" / "project-profile.json").exists()
+    )
+    if healthy:
+        print("Status: HEALTHY WITH WARNINGS" if warnings else "Status: HEALTHY")
         return 0
     print("Status: NEEDS ATTENTION")
     return 1
