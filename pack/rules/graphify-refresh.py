@@ -25,6 +25,10 @@ IGNORED_PARTS = {
     ".git", ".agent-core", ".agents", "graphify-out", "node_modules", "vendor",
     "bin", "obj", ".next", "dist", "build", "coverage", ".cache", ".idea", ".vscode"
 }
+IGNORED_FILES = {
+    ".agent-kit.json",
+    ".agent-kit-source.json",
+}
 MAX_CONTENT_HASH_BYTES = 5 * 1024 * 1024
 
 
@@ -144,7 +148,7 @@ def sync_graphify_metadata(project, state):
 
 def ignored(rel):
     rel = Path(rel)
-    return any(part in IGNORED_PARTS for part in rel.parts)
+    return rel.as_posix() in IGNORED_FILES or any(part in IGNORED_PARTS for part in rel.parts)
 
 
 def run_git(project, args):
