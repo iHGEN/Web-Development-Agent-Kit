@@ -36,6 +36,31 @@ def upsert_section(path, section):
     path.write_text(content, encoding="utf-8")
 
 
+def unmanaged_bridge_text(path):
+    path = Path(path)
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if BRIDGE_START not in text or BRIDGE_END not in text:
+        return text
+    before = text.split(BRIDGE_START, 1)[0]
+    after = text.split(BRIDGE_END, 1)[1]
+    return before + "\n" + after
+
+
+def find_unmanaged_graphify_conflicts(path):
+    """Report project-owned instructions that may bypass the canonical refresh gate."""
+    lower = unmanaged_bridge_text(path).lower()
+    patterns = {
+        "graphify update": "direct Graphify update command outside the managed bridge",
+        "graphify query": "Graphify-first query instruction outside the managed bridge",
+        "/graphify .": "direct Graphify build/query command outside the managed bridge",
+        "always use graphify": "unconditional Graphify-first instruction outside the managed bridge",
+        "graphify first": "Graphify-first instruction outside the managed bridge",
+    }
+    return [message for needle, message in patterns.items() if needle in lower]
+
+
 def bridge_markdown(canonical_file, assistant_name):
     return f"""{BRIDGE_START}
 ## iHGEN Web Development Agent Kit — {assistant_name} bridge
@@ -47,10 +72,11 @@ Before repository-changing work:
 1. Read `{canonical_file}` for project context and Web-Kit authority.
 2. Follow `.agent-core/rules/workflow.md` as the installed canonical lifecycle.
 3. Use `.agent-core/index/project-profile.json` and `.agent-core/routing/context-policy.json` for routed context instead of broad repository ingestion.
-4. If `graphify-out/graph.json` exists, run the Graph Refresh Gate before relying on Graphify: `python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>`.
-5. Use Graphify only when `.agent-core/state/graphify.json` reports `routing_mode: graphify-assisted` and `dirty: false`; otherwise use the standard repository-navigation branch.
-6. Graphify is navigation evidence only. Current source, diffs, tests, and runtime evidence remain authoritative.
-7. Preserve any user/project-specific instructions in this file; this bridge only connects them to the shared Web-Kit workflow.
+4. If Graphify may be used, run the Graph Refresh Gate first: `python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>`.
+5. Never run `graphify update .` directly as a substitute for the gate. The gate owns refresh cadence, metadata synchronization, and standard-mode fallback.
+6. Use Graphify only when `.agent-core/state/graphify.json` reports `routing_mode: graphify-assisted` and `dirty: false`; otherwise use the standard repository-navigation branch.
+7. Graphify is navigation evidence only. Current source, diffs, tests, and runtime evidence remain authoritative.
+8. Preserve any user/project-specific instructions in this file, but if they conflict with the canonical lifecycle, the Web-Kit lifecycle controls Web-Kit-managed work and `doctor` should report the conflict.
 
 Codex and Kimi consume `AGENTS.md` directly. Claude, Gemini, Cursor, GitHub Copilot, and other assistants use managed bridge files so the same workflow is applied without duplicating the rules.
 {BRIDGE_END}"""
