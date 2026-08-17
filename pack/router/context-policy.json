@@ -1,11 +1,14 @@
 {
-  "version": 3,
+  "version": 4,
   "mode": "strict-routed-context",
   "principles": {
     "default_deny_repository_reads": true,
     "lazy_load_skills": true,
     "lazy_expand_code_context": true,
     "prefer_index_before_source": true,
+    "route_by_navigation_question_type": true,
+    "prefer_targeted_search_for_direct_lookup": true,
+    "prefer_graphify_for_relationship_discovery_when_fresh": true,
     "prefer_graphify_when_project_graph_ready": true,
     "require_graphify_freshness_before_use": true,
     "refresh_graphify_once_after_code_changing_step": true,
@@ -20,9 +23,47 @@
   },
   "repository_navigation": {
     "capability_source": ".agent-core/index/project-profile.json",
+    "canonical_rule": ".agent-core/rules/repository-navigation.md",
     "graphify_refresh_gate": ".agent-core/rules/graphify-refresh.py",
     "graphify_state": ".agent-core/state/graphify.json",
     "graphify_refresh_command": "graphify update .",
+    "question_type_rule": "Choose navigation by the question being answered, not by tool availability alone. Exact text/symbol/path lookups use targeted current-source search first. Relationship, dependency, ownership, path-tracing, and impact questions prefer fresh Graphify when available, then verify exact source.",
+    "direct_lookup": {
+      "examples": [
+        "where is this function defined",
+        "find this exact error message",
+        "where is this endpoint implemented",
+        "find references to this exact symbol",
+        "inspect the current implementation of this file"
+      ],
+      "preferred_progression": [
+        "project-profile-when-needed",
+        "rg-or-equivalent-targeted-current-source-search",
+        "exact-file-or-symbol",
+        "read-current-source"
+      ],
+      "rule": "Use rg when shell access and ripgrep are available; otherwise use the assistant's equivalent targeted current-source search. Do not force a Graphify query for a precise lookup just because a graph exists."
+    },
+    "relationship_discovery": {
+      "examples": [
+        "what calls this function",
+        "what depends on this service",
+        "what components are connected to this API",
+        "what could be affected by changing this interface",
+        "trace this endpoint through service to database",
+        "which modules are related to this feature"
+      ],
+      "preferred_progression": [
+        "project-profile",
+        "graphify-refresh-gate",
+        "narrow-graphify-query-path-or-neighbors",
+        "small-candidate-symbol-set",
+        "verify-exact-source-symbol-or-range",
+        "targeted-search-for-gaps",
+        "evidence-backed-expansion"
+      ],
+      "rule": "Prefer Graphify only when the graph is ready, the freshness gate passes, routing_mode is graphify-assisted, and dirty is false. Otherwise immediately use standard targeted repository navigation."
+    },
     "standard": [
       "project-profile",
       "repository-index",
@@ -43,7 +84,13 @@
     ],
     "graphify_runtime_rule": "Before the first Graphify use in a task, run the managed Graph Refresh Gate. After every completed code-changing step, run it once before Handoff Validator or another agent uses Graphify. The gate skips Graphify when repository state is unchanged and runs one incremental graphify update . only when relevant repository state changed.",
     "graphify_fallback_rule": "If Graphify refresh/query is unavailable, fails, times out, is stale/incomplete, or conflicts with source, record task-local standard fallback and continue without blocking the task. Do not repeatedly retry the same failed capability in one task unless explicitly requested.",
-    "source_authority_rule": "Graphify narrows where to read. Current repository source, current diff, tests, and runtime evidence remain authoritative."
+    "source_authority_rule": "Graphify answers where to look. Targeted search and exact source answer what currently exists. Current repository source, current diff, tests/build checks, and runtime evidence remain authoritative over Graphify and structural indexes.",
+    "mental_model": {
+      "graphify": "Where should I look?",
+      "targeted_search_and_source": "What actually exists?",
+      "diff": "What changed?",
+      "tests_build_runtime": "Does the relevant behavior actually work?"
+    }
   },
   "task_sizes": {
     "small": {
@@ -72,6 +119,8 @@
     "Expand context only when current source or a task-relevant fresh Graphify relationship identifies a dependency, symbol, contract, test, configuration, or ownership boundary that is necessary to complete or validate the task.",
     "Every expansion must record why the additional file/symbol is needed.",
     "Do not recursively read every import/dependency or expand every graph neighbor.",
+    "Do not run broad repository search before Graphify when the current question is primarily relationship/impact discovery and Graphify is fresh; use the graph to narrow first.",
+    "Do not force Graphify before an exact text/symbol/path lookup; targeted current-source search is cheaper and more direct for that question type.",
     "Do not read generated, vendor, build, coverage, dependency-cache, Graphify output, or binary output unless the task explicitly targets it.",
     "If the hard candidate-file cap would be exceeded, return to the Captain for a scope/context review before reading more."
   ],
