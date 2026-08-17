@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import argparse, json, os, shutil, subprocess, sys, re
-from project_profile import apply_project_profile
-from ai_compat import apply_ai_compatibility, find_unmanaged_graphify_conflicts
+from project_profile import build_project_profile
+from ai_compat import apply_ai_compatibility, find_unmanaged_graphify_conflicts, ROLE_START
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 PACK = KIT_ROOT / "pack"
@@ -238,6 +238,26 @@ def render_config(skills, evidence):
     }
 
 
+def save_project_profile(project):
+    profile = build_project_profile(project, KIT_ROOT, VERSION)
+    profile_path = project / ".agent-core" / "index" / "project-profile.json"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+
+    cfg_path = project / ".agent-kit.json"
+    cfg = load_json(cfg_path)
+    if cfg:
+        cfg["project"] = {
+            "name": profile["name"],
+            "directory": profile["directory"],
+            "domain": profile["domain"],
+            "technology_groups": profile["technology_groups"],
+        }
+        cfg["capabilities"] = profile["capabilities"]
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return profile
+
+
 def install(project, force_agents=False):
     project = project.resolve()
     skills, evidence = detect(project)
@@ -252,15 +272,6 @@ def install(project, force_agents=False):
     skill_root.mkdir(parents=True, exist_ok=True)
     for skill in skills:
         copy_tree(PACK / "skills" / skill, skill_root / skill)
-
-    agents_template = (KIT_ROOT / "AGENTS.template.md").read_text(encoding="utf-8")
-    agents_path = project / "AGENTS.md"
-    if agents_path.exists() and not force_agents:
-        (project / "AGENTS.web-kit.md").write_text(agents_template, encoding="utf-8")
-        agents_note = "preserved existing AGENTS.md; wrote AGENTS.web-kit.md"
-    else:
-        agents_path.write_text(agents_template, encoding="utf-8")
-        agents_note = "wrote AGENTS.md"
 
     (project / ".agent-kit.json").write_text(
         json.dumps(render_config(skills, evidence), indent=2),
@@ -283,22 +294,18 @@ def install(project, force_agents=False):
     catalog_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(PACK / "router" / "skill-catalog.json", catalog_dir / "skill-catalog.json")
 
-    profile_result = apply_project_profile(
-        project,
-        kit_root=KIT_ROOT,
-        version=VERSION,
-        force_agents=force_agents
-    )
-    agents_note = profile_result["action"]
-    compatibility = apply_ai_compatibility(project, profile_result["path"])
+    profile = save_project_profile(project)
+    compatibility = apply_ai_compatibility(project, project / "AGENTS.md", profile)
+
+    if force_agents:
+        print("Note: --force-agents is deprecated. Existing AI instruction files are never replaced; only Web-Kit managed role blocks are updated.")
 
     print(f"Web Agent Kit {VERSION} installed")
-    print(f"Project: {profile_result['profile']['name']}")
+    print(f"Project: {profile['name']}")
     print(f"Project directory: {project}")
     print(f"Agents: {len(list((core / 'agents').glob('*.md')))}")
     print("Skills: " + ", ".join(skills))
-    print("AGENTS: " + agents_note)
-    print("AI compatibility: Codex/Kimi native AGENTS + Claude/Gemini/Cursor/Copilot bridges")
+    print("AI instruction policy: existing files preserved; managed roles only")
     print("Canonical instructions: " + compatibility["canonical_instructions"])
 
 
@@ -319,13 +326,14 @@ def doctor(project):
     missing = sorted(set(expected) - set(installed))
     stale = sorted(set(installed) - set(expected))
     agent_files = list((project / ".agent-core" / "agents").glob("*.md")) if (project / ".agent-core" / "agents").exists() else []
-    bridge_paths = [
+    role_paths = [
+        project / "AGENTS.md",
         project / "CLAUDE.md",
         project / "GEMINI.md",
         project / ".github" / "copilot-instructions.md",
         project / ".cursor" / "rules" / "ihgen-web-kit.mdc",
     ]
-    bridges_ok = all(path.exists() for path in bridge_paths)
+    roles_ok = all(path.exists() and ROLE_START in path.read_text(encoding="utf-8", errors="ignore") for path in role_paths)
 
     warnings = []
     cfg_graphify = cfg.get("capabilities", {}).get("graphify", {}) if cfg else {}
@@ -355,6 +363,8 @@ def doctor(project):
         )
     if actual_graph_ready and not graph_state:
         warnings.append("Graphify graph exists but .agent-core/state/graphify.json freshness state is missing")
+    if (project / "AGENTS.web-kit.md").exists():
+        warnings.append("Legacy AGENTS.web-kit.md exists from an older Web Kit; 1.1.10+ leaves it untouched and no longer uses it as canonical instructions")
 
     assistant_paths = {
         "CLAUDE.md": project / "CLAUDE.md",
@@ -373,8 +383,8 @@ def doctor(project):
     print(f"Project index: {'OK' if (project/'.agent-core/index/project-index.json').exists() else 'MISSING'}")
     print(f"Project profile: {'OK' if (project/'.agent-core/index/project-profile.json').exists() else 'MISSING'}")
     print(f"Routing policy: {'OK' if (project/'.agent-core/routing/context-policy.json').exists() else 'MISSING'}")
-    print(f"Root instructions: {'OK' if (project/'AGENTS.md').exists() or (project/'AGENTS.web-kit.md').exists() else 'MISSING'}")
-    print(f"Cross-AI bridges: {'OK' if bridges_ok else 'MISSING'}")
+    print(f"Root instructions: {'OK' if (project/'AGENTS.md').exists() else 'MISSING'}")
+    print(f"Cross-AI managed roles: {'OK' if roles_ok else 'MISSING'}")
     print(f"Graphify graph: {'READY' if actual_graph_ready else 'NOT READY'}")
     if missing:
         print("Missing skills: " + ", ".join(missing))
@@ -390,7 +400,7 @@ def doctor(project):
         not missing
         and agent_files
         and cfg
-        and bridges_ok
+        and roles_ok
         and (project / ".agent-core" / "index" / "project-profile.json").exists()
     )
     if healthy:
@@ -453,7 +463,7 @@ def main():
     p = sub.add_parser("install")
     p.add_argument("project", nargs="?", default=".")
     p.add_argument("--force-agents", action="store_true",
-                   help="Overwrite existing AGENTS.md instead of writing AGENTS.web-kit.md")
+                   help="Deprecated compatibility flag; existing AI instruction files are never overwritten")
 
     p = sub.add_parser("graphify")
     p.add_argument("project", nargs="?", default=".")
