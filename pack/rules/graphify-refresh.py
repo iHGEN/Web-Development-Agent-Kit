@@ -9,7 +9,18 @@ import shutil
 import subprocess
 
 STATE_REL = Path(".agent-core/state/graphify.json")
+INSTALL_STATE_REL = Path(".agent-core/state/graphify-install.json")
+PROFILE_REL = Path(".agent-core/index/project-profile.json")
+CONFIG_REL = Path(".agent-kit.json")
 GRAPH_REL = Path("graphify-out/graph.json")
+GRAPHIFY_MCP_CONFIGS = (
+    ".mcp.json",
+    "mcp.json",
+    ".cursor/mcp.json",
+    ".gemini/settings.json",
+    ".vscode/mcp.json",
+    ".codex/config.toml",
+)
 IGNORED_PARTS = {
     ".git", ".agent-core", ".agents", "graphify-out", "node_modules", "vendor",
     "bin", "obj", ".next", "dist", "build", "coverage", ".cache", ".idea", ".vscode"
@@ -34,6 +45,101 @@ def write_json_atomic(path, data):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _looks_like_graphify_code_mcp(text):
+    lower = text.lower()
+    return (
+        "graphify.serve" in lower
+        or "graphify-mcp" in lower
+        or ("graphify" in lower and "graphify-out/graph.json" in lower)
+    )
+
+
+def graphify_config_files(project):
+    hits = []
+    for rel in GRAPHIFY_MCP_CONFIGS:
+        path = project / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if _looks_like_graphify_code_mcp(text):
+            hits.append(rel)
+    return sorted(hits)
+
+
+def sync_graphify_metadata(project, state):
+    """Keep generated/project Graphify metadata aligned with runtime freshness state."""
+    graph_ready = (project / GRAPH_REL).is_file()
+    config_hits = graphify_config_files(project)
+    install_path = project / INSTALL_STATE_REL
+    install_state = load_json(install_path)
+    configured_by_setup = bool(install_state.get("configured"))
+    detected = graph_ready or bool(config_hits) or configured_by_setup
+
+    runtime_mode = state.get("routing_mode", "standard")
+    dirty = bool(state.get("dirty", False))
+    fallback = bool(state.get("fallback_for_task", False))
+    if not graph_ready or dirty or fallback:
+        runtime_mode = "standard"
+
+    capability = {
+        "detected": detected,
+        "graph_ready": graph_ready,
+        "graph_path": GRAPH_REL.as_posix() if graph_ready else None,
+        "local_mcp_configured": bool(config_hits),
+        "config_files": config_hits,
+        "routing_mode": runtime_mode,
+        "fallback_mode": "standard",
+        "runtime_tool_required": graph_ready,
+        "source_authority": "repository source",
+        "dirty": dirty if graph_ready else False,
+        "fallback_for_task": fallback,
+        "fallback_task_id": state.get("fallback_task_id"),
+        "last_refresh_status": state.get("last_refresh_status"),
+        "runtime_state_path": STATE_REL.as_posix(),
+        "synced_at": now_iso(),
+    }
+
+    if graph_ready:
+        capability["note"] = (
+            "Graphify graph snapshot detected. Use graph-assisted navigation only when the "
+            "Graph Refresh Gate reports a clean graph; verify behavior from exact source."
+        )
+    elif detected:
+        capability["note"] = (
+            "Graphify project integration detected but no graph snapshot is ready. "
+            "Use standard routing until graphify-out/graph.json exists."
+        )
+    else:
+        capability["note"] = "Graphify not detected in this project; use standard repository routing."
+
+    profile_path = project / PROFILE_REL
+    profile = load_json(profile_path)
+    if profile:
+        profile.setdefault("capabilities", {})["graphify"] = capability
+        write_json_atomic(profile_path, profile)
+
+    cfg_path = project / CONFIG_REL
+    cfg = load_json(cfg_path)
+    if cfg:
+        cfg.setdefault("capabilities", {})["graphify"] = capability
+        write_json_atomic(cfg_path, cfg)
+
+    if install_state or graph_ready or configured_by_setup:
+        install_state.update({
+            "graph_ready": graph_ready,
+            "initial_graph_required": not graph_ready,
+            "observed_routing_mode": runtime_mode,
+            "observed_dirty": capability["dirty"],
+            "observed_fallback_for_task": fallback,
+            "observed_last_refresh_status": state.get("last_refresh_status"),
+            "synced_at": now_iso(),
+        })
+        write_json_atomic(install_path, install_state)
 
 
 def ignored(rel):
@@ -177,6 +283,7 @@ def base_state(project, fingerprint):
 def save_state(project, state):
     state["updated_at"] = now_iso()
     write_json_atomic(project / STATE_REL, state)
+    sync_graphify_metadata(project, state)
 
 
 def initialize(project):
@@ -213,6 +320,7 @@ def status(project):
     state["dirty"] = state["graph_ready"] and (
         state.get("last_successful_fingerprint") != fingerprint["fingerprint"]
     )
+    sync_graphify_metadata(project, state)
     print(json.dumps(state, indent=2))
     return 0
 
