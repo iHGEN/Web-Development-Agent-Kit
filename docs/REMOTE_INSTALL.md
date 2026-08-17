@@ -1,69 +1,60 @@
-# Install the Web Development Agent Kit From a Link
+# Install Web Development Agent Kit Remotely
 
-Project-aware `AGENTS.md` generation is versioned as `1.1.2` on `main`.
+## Requirement
 
-Installation now discovers the target project's name, detected stack, shallow structure, manifests/configuration, test roots, and migration/data roots before finalizing agent instructions. The generated project context is placed at the top of `AGENTS.md`, with the canonical Web-Kit workflow and roles underneath it.
+Web Kit requires **Node.js + npm/npx only**. A system Python installation is not required.
 
-Until the `v1.1.2` tag is created, use `main`. After tagging, prefer the pinned release command for reproducible installs.
+## Recommended install
 
-## Current main — works immediately
+Inside the target project:
+
+```bash
+npx @ihgen/web-kit
+```
+
+Or explicitly:
+
+```bash
+npx @ihgen/web-kit install --project .
+```
+
+To test the latest GitHub `main` before a release tag exists:
+
+```bash
+npx @ihgen/web-kit install \
+  --repo iHGEN/Web-Development-Agent-Kit \
+  --ref main \
+  --project .
+```
+
+## Thin bootstrap scripts
+
+The repository still includes convenience bootstrap scripts, but they simply delegate to npm/npx and do not use Python.
 
 ### Linux / macOS / WSL
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
-  | bash -s -- \
-      --repo iHGEN/Web-Development-Agent-Kit \
-      --ref main \
-      --project .
+  | bash -s -- --project . --repo iHGEN/Web-Development-Agent-Kit --ref main
 ```
 
 ### Windows PowerShell
 
 ```powershell
-$installer="$env:TEMP\web-agent-kit-install.ps1"
-
+$installer = "$env:TEMP\web-kit-install.ps1"
 Invoke-WebRequest `
   "https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.ps1" `
   -OutFile $installer
 
 & $installer `
+  -Project "." `
   -Repo "iHGEN/Web-Development-Agent-Kit" `
-  -Ref "main" `
-  -Project "."
+  -Ref "main"
 ```
 
-## Recommended stable install after creating tag `v1.1.2`
-
-### Linux / macOS / WSL
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.2/bootstrap/install.sh \
-  | bash -s -- \
-      --repo iHGEN/Web-Development-Agent-Kit \
-      --ref v1.1.2 \
-      --project .
-```
-
-### Windows PowerShell
-
-```powershell
-$installer="$env:TEMP\web-agent-kit-install.ps1"
-
-Invoke-WebRequest `
-  "https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/v1.1.2/bootstrap/install.ps1" `
-  -OutFile $installer
-
-& $installer `
-  -Repo "iHGEN/Web-Development-Agent-Kit" `
-  -Ref "v1.1.2" `
-  -Project "."
-```
-
-## What gets generated in the target project
+## What is generated
 
 ```text
-AGENTS.md
 .agent-kit.json
 .agent-kit-source.json
 .agent-core/
@@ -73,6 +64,9 @@ AGENTS.md
 ├── registry/
 ├── routing/
 ├── catalog/
+├── state/
+├── bin/
+│   └── web-kit-update.mjs
 └── index/
     ├── project-index.json
     └── project-profile.json
@@ -80,40 +74,79 @@ AGENTS.md
 └── skills/
 ```
 
-`project-profile.json` is the machine-readable copy used for routing. The generated project context at the top of `AGENTS.md` is the human/agent-readable copy.
-
-## Direct ZIP URL
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/iHGEN/Web-Development-Agent-Kit/main/bootstrap/install.sh \
-  | bash -s -- \
-      --source https://your-host/web-dev-agent-kit-v1.1.2.zip \
-      --project .
-```
-
-## Update without keeping the kit locally
-
-A remote install records `.agent-kit-source.json` and installs:
+AI instruction files follow a non-destructive policy:
 
 ```text
-.agent-core/bin/remote-install.py
+file exists
+  -> preserve project/user content
+  -> add/update only Web Kit roles block
+
+file missing
+  -> create once with compact project summary
+  -> add roles block
 ```
 
-Run later using the remembered source/ref:
+Managed targets include `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, GitHub Copilot instructions, and Cursor rules.
+
+## Updating later
+
+Recommended:
 
 ```bash
-python .agent-core/bin/remote-install.py --project .
+npx @ihgen/web-kit update --project .
 ```
 
-Updating also regenerates the project-aware profile and managed `AGENTS.md` so material stack/structure changes can be reflected.
-
-To intentionally move to the next pinned version:
+Installed projects also receive:
 
 ```bash
-python .agent-core/bin/remote-install.py \
-  --repo iHGEN/Web-Development-Agent-Kit \
-  --ref v1.1.2 \
+node .agent-core/bin/web-kit-update.mjs
+```
+
+The updater uses npm/npx. It does not require Python.
+
+## Direct ZIP/source override
+
+```bash
+npx @ihgen/web-kit install \
+  --source https://your-host/web-kit.zip \
   --project .
 ```
 
-For important projects, pin a release tag or commit instead of `main`, and optionally verify a published SHA-256 checksum.
+Optional SHA-256 verification:
+
+```bash
+npx @ihgen/web-kit install \
+  --source https://your-host/web-kit.zip \
+  --sha256 <expected-sha256> \
+  --project .
+```
+
+## Optional Graphify
+
+```bash
+npx @ihgen/web-kit graphify
+```
+
+If Graphify is absent, Web Kit can bootstrap `uv`; `uv` manages Graphify's Python runtime. If setup fails, standard routing remains available.
+
+If the initial graph is missing, the current AI receives `.agent-core/state/graphify-bootstrap-role.md`. After creating `graphify-out/graph.json`, it completes the temporary role with:
+
+```bash
+node .agent-core/rules/graphify-setup.mjs --project . --complete
+```
+
+## Release pinning
+
+For reproducible production use, publish a matching npm version and GitHub tag:
+
+```text
+@ihgen/web-kit@X.Y.Z
+        ↓
+iHGEN/Web-Development-Agent-Kit@vX.Y.Z
+```
+
+Then use:
+
+```bash
+npx @ihgen/web-kit@X.Y.Z
+```
