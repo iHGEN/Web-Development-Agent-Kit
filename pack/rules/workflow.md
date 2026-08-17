@@ -4,11 +4,13 @@ This file is the **single authoritative lifecycle** for the Web Development Agen
 
 Shorter checklists may summarize one phase, but they MUST NOT replace or bypass this workflow.
 
-The lifecycle has two repository-navigation modes:
-- `standard` — lightweight project profile/index/search/symbol routing;
-- `graphify-assisted` — a fresh Graphify project graph is used to narrow repository exploration before exact source verification.
+Repository-navigation tool selection is governed by the supporting rule `.agent-core/rules/repository-navigation.md`.
 
-Graphify is a navigation and relationship aid. Current repository source, current diffs, tests, and runtime evidence remain authoritative.
+The lifecycle has two repository-navigation capabilities:
+- `standard` — lightweight project profile/index/targeted current-source search/symbol routing;
+- `graphify-assisted` — a fresh Graphify project graph can narrow relationship/dependency/impact exploration before exact source verification.
+
+Graphify is a navigation and relationship aid. Current repository source, current diffs, tests/build checks, and runtime evidence remain authoritative.
 
 ## Phase 0 — User Intake
 
@@ -30,7 +32,7 @@ Classification controls discovery breadth, context/token budget, expected depend
 
 Assign a task ID that is reused by the Graph Refresh Gate and task-local fallback state.
 
-## Phase 2 — Repository Navigation Mode, Freshness, and Index
+## Phase 2 — Repository Navigation Mode, Question Type, Freshness, and Index
 
 **Owner:** Repository Indexer + Context Router
 
@@ -38,20 +40,32 @@ Read the generated project profile first, including `capabilities.graphify`.
 
 Always build or reuse the lightweight structural repository index so the workflow has a cheap deterministic fallback.
 
-### Standard branch
+Before selecting a navigation tool, classify the repository question being answered.
 
-Use standard routing when:
-- Graphify is not detected;
-- Graphify configuration exists but `graphify-out/graph.json` is not ready;
-- Graphify refresh/query capability is unavailable;
-- the Graph Refresh Gate reports standard fallback for the current task;
-- Graphify evidence is stale/incomplete for the needed decision or conflicts with current source.
+### Direct source lookup
 
-Preferred progression:
+For precise questions such as:
+- where is this function defined;
+- find this exact error message;
+- where is this endpoint implemented;
+- find references to this exact symbol;
+- inspect the current implementation of this file/path.
 
-`project profile -> repository index -> targeted search -> exact symbol/range -> full file only when needed -> evidence-backed dependency expansion`
+Use targeted current-source search first (`rg` when shell/ripgrep are available, otherwise the runtime's equivalent targeted search):
 
-### Graphify-assisted branch
+`targeted current-source search -> exact file/symbol -> current source`
+
+Do not force Graphify before a precise lookup merely because a graph exists.
+
+### Relationship / dependency / impact discovery
+
+For questions such as:
+- what calls this function;
+- what depends on this service;
+- what components are connected to this API;
+- what could be affected by changing this interface;
+- trace endpoint -> service -> database;
+- find related owners/contracts around changed symbols.
 
 When the generated profile reports a ready Graphify graph, **do not query it before confirming freshness**.
 
@@ -71,24 +85,42 @@ Use Graphify only when the state reports:
 - `routing_mode: graphify-assisted`;
 - `dirty: false`.
 
-The gate fingerprints the relevant repository state. The first use of an untracked freshness state causes one incremental refresh. Later calls skip Graphify when the repository state is unchanged.
-
-When fresh, use Graphify only to reduce repository exploration, for example to:
+When fresh, use narrow Graphify operations to reduce repository exploration, for example to:
 - locate feature owners and likely entry symbols;
 - inspect direct callers/callees/neighbors;
 - trace a relationship path between relevant concepts;
 - identify a small affected relationship/community slice;
 - map changed symbols to nearby contracts during validation.
 
-Do not load the complete Graphify graph into model context.
+Then inspect exact current source before planning, editing, or asserting behavior.
 
-Before planning, editing, or asserting behavior, verify the relevant exact source symbol/range. Graph relationships are routing evidence, not behavioral proof.
+Do not broadly search the repository before Graphify when the current question is primarily relationship/impact discovery and a fresh graph can first reduce the candidate set.
 
-If refresh/query fails, times out, is unavailable, or cannot safely answer the routing question, record task-local fallback and continue with the standard branch. Do not repeatedly retry a failed Graphify capability in the same task unless explicitly requested.
+### Standard fallback
+
+Use standard routing when:
+- Graphify is not detected;
+- Graphify configuration exists but `graphify-out/graph.json` is not ready;
+- Graphify refresh/query capability is unavailable;
+- the Graph Refresh Gate reports standard fallback for the current task;
+- Graphify evidence is stale/incomplete for the needed decision or conflicts with current source.
 
 Preferred progression:
 
-`project profile -> Graph Refresh Gate -> narrow Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search for gaps -> full file only when needed -> evidence-backed expansion`
+`project profile -> repository index -> targeted current-source search -> exact symbol/range -> full file only when needed -> evidence-backed dependency expansion`
+
+Graphify must never block the task.
+
+Do not load the complete Graphify graph into model context.
+
+Mental model:
+
+```text
+Graphify = Where should I look?
+targeted search + source = What actually exists?
+diff = What changed?
+tests / build / runtime = Does the relevant behavior actually work?
+```
 
 ## Phase 3 — Initial Context Routing
 
@@ -98,7 +130,8 @@ Create the smallest discovery Context Packet needed to understand the request sa
 
 Route only:
 - relevant slice of the original user intent;
-- selected repository-navigation mode;
+- selected repository-navigation capability;
+- current navigation question type when it affects tool selection;
 - Graphify freshness/fallback state when relevant;
 - structural index facts still needed;
 - compact Graphify findings when actually used;
@@ -133,7 +166,11 @@ Discovery is strictly read-only.
 
 Start from the requested feature entry points and expand only to dependencies that could realistically be touched or are necessary to understand/validate the feature.
 
-In `graphify-assisted` mode, use only fresh narrow graph relationships to choose what source to inspect first. In `standard` mode, or when graph evidence is insufficient, use targeted repository search.
+For each discovery question:
+- use targeted current-source search first for direct text/symbol/path lookup;
+- for relationship/dependency/ownership/impact questions, prefer fresh Graphify first when it can narrow the candidate set;
+- after Graphify identifies candidates, verify exact source symbols/ranges before relying on them;
+- use targeted search after Graphify only for gaps or source verification, not as an automatic broad pre-pass.
 
 Search/verify before creating anything new:
 - existing functions and utilities;
@@ -226,7 +263,8 @@ Before every approved implementation step, the Context Router creates a **fresh 
 Packet includes only:
 - relevant original intent/acceptance criteria;
 - approved step;
-- selected repository-navigation mode;
+- selected repository-navigation capability;
+- navigation question type when relevant;
 - Graphify freshness state when relevant;
 - exact candidate files/symbols/contracts;
 - compact verified discovery findings;
@@ -304,7 +342,9 @@ After the Graph Refresh Gate, compare:
 - downstream interface/contract;
 - approved scope.
 
-If Graphify-assisted mode remains fresh, the validator may query a small relationship slice around changed symbols to locate potentially affected callers/contracts, then verifies any material finding against current source/diff/tests.
+If Graphify-assisted mode remains fresh and the validator needs relationship/impact discovery, it may query a small relationship slice around changed symbols to locate potentially affected callers/contracts, then verifies any material finding against current source/diff/tests.
+
+For direct lookup during validation, use targeted current-source search instead of forcing Graphify.
 
 ### FAIL
 
@@ -376,7 +416,7 @@ Possible gates include:
 
 Do not run every specialist for every trivial task.
 
-When Graphify-assisted mode is fresh, specialist reviewers may use narrow graph queries to discover relevant callers, boundaries, reachable components, or contracts around the final diff. All findings that affect PASS/FAIL must still be verified against current source/diff/tests.
+When Graphify-assisted mode is fresh, specialist reviewers may use narrow graph queries for relationship-oriented discovery around the final diff. Direct symbol/text lookups still use targeted current-source search. All findings that affect PASS/FAIL must be verified against current source/diff/tests.
 
 If a specialist causes a code fix, the owning worker must run the Graph Refresh Gate before the fix is handed back for validation.
 
@@ -429,11 +469,17 @@ The Context Router / Token Governor runs throughout the lifecycle, not only once
 
 It is invoked before discovery, before each implementation step, for evidence-backed context expansion, before specialist validation when required, and during handoff/failure recovery when new context is necessary.
 
-### Standard routing progression
+### Direct lookup progression
+
+For exact text/symbol/path questions:
+
+`targeted current-source search (rg when available) -> exact file/symbol -> current source`
+
+### Standard relationship fallback progression
 
 `project profile -> repository index -> targeted search -> symbol/range -> full file only when needed -> evidence-backed dependency expansion`
 
-### Graphify-assisted routing progression
+### Graphify-assisted relationship progression
 
 Use only when the generated project profile reports a ready graph **and** `.agent-core/state/graphify.json` reports a fresh graph:
 
@@ -442,6 +488,11 @@ Use only when the generated project profile reports a ready graph **and** `.agen
 ### Continuous rules
 
 - default deny arbitrary repository reads;
+- choose navigation tool by question type, not tool availability alone;
+- direct text/symbol/path lookup uses targeted current-source search first;
+- relationship/dependency/ownership/impact discovery prefers fresh Graphify when useful;
+- do not broadly search before Graphify for a relationship question when Graphify can narrow first;
+- do not force Graphify before a precise direct lookup;
 - Graphify available does not mean Graphify authoritative;
 - Graphify ready does not mean Graphify fresh — enforce the refresh state;
 - refresh once per completed changed repository state, not per file write;
