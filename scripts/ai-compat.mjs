@@ -132,10 +132,11 @@ For Web-Kit-managed engineering work:
 6. Act only in the role routed for the current phase: Captain, discovery/indexing/router, architect/planner, implementation worker, specialist reviewer, Handoff Validator, or Final Integration Validator.
 7. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
 8. For exact text/symbol/path lookup, use targeted current-source search (\`rg\` or equivalent) directly.
-9. For relationship/dependency/ownership/impact discovery, use Graphify first only when the Graph Refresh Gate reports a fresh graph; then verify exact source before planning or editing.
-10. Never run \`graphify update .\` directly as a replacement for the managed Graph Refresh Gate.
-11. Current source, current diff, tests/build, and runtime evidence override Graphify/index summaries.
-12. Web Kit runtime commands use Node.js. Do not require a system Python installation for Web Kit itself.
+9. For relationship/dependency/ownership/impact discovery, run \`node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>\` before the first Graphify query. Use Graphify only when the resulting state is fresh, then verify exact source before planning or editing.
+10. After every completed code-changing step, run the same Node Graph Refresh Gate once before Handoff Validator or another agent relies on Graphify.
+11. Never run \`graphify update .\` directly as a replacement for the managed Graph Refresh Gate.
+12. Current source, current diff, tests/build, and runtime evidence override Graphify/index summaries.
+13. Web Kit runtime commands use Node.js. Do not require a system Python installation for Web Kit itself.
 
 If project-owned instructions outside this block conflict with Web-Kit workflow mechanics, preserve them but report the conflict with \`doctor\`; do not silently delete user content.
 ${ROLE_END}`;
