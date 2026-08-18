@@ -56,6 +56,9 @@ jobs:
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
           node --check pack/runtime/session-controller.mjs
+          node --check pack/runtime/context-supervisor.mjs
+          node --check pack/runtime/provider-bridge.mjs
+          node --check pack/runtime/supervisor-setup.mjs
 
       - name: Create sample project with existing AI instructions
         shell: bash
@@ -105,6 +108,9 @@ jobs:
           test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
           test -f "$SAMPLE/.agent-core/rules/context-rollover.md"
           test -f "$SAMPLE/.agent-core/bin/session-controller.mjs"
+          test -f "$SAMPLE/.agent-core/bin/context-supervisor.mjs"
+          test -f "$SAMPLE/.agent-core/bin/provider-bridge.mjs"
+          test -f "$SAMPLE/.agent-core/bin/supervisor-setup.mjs"
           test -f "$SAMPLE/.agent-core/agents/context-rollover-manager.md"
           test ! -e "$SAMPLE/.agent-core/rules/graphify-setup.py"
           test ! -e "$SAMPLE/.agent-core/rules/graphify-refresh.py"
@@ -120,7 +126,7 @@ jobs:
             if (!current.startsWith(original)) throw new Error(`${name} project content changed`);
             if (!current.includes('<!-- WEB-AGENT-KIT:AI-ROLES:START -->')) throw new Error(`${name} roles missing`);
             if (current.includes('<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->')) throw new Error(`${name} should not get generated summary`);
-            if (!current.includes('context-handoff.json') || !current.includes('WEB_KIT_SESSION_CONTROLLER=1')) throw new Error(`${name} rollover role missing`);
+            if (!current.includes('WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1') || !current.includes('WEB_KIT_SESSION_CONTROLLER=1')) throw new Error(`${name} rollover roles missing`);
             if ((current.match(/WEB-AGENT-KIT:AI-ROLES:START/g) || []).length !== 1) throw new Error(`${name} duplicate roles`);
           }
           for (const rel of ['.github/copilot-instructions.md','.cursor/rules/ihgen-web-kit.mdc']) {
@@ -130,8 +136,8 @@ jobs:
           const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
           if (cfg.runtime !== 'node+npm') throw new Error('config runtime mismatch');
           if (cfg.ai_compatibility.runtime !== 'node+npm') throw new Error('AI runtime mismatch');
-          if (cfg.ai_compatibility.context_rollover_threshold_percent !== 50) throw new Error('rollover threshold mismatch');
-          if (cfg.ai_compatibility.session_controller !== '.agent-core/bin/session-controller.mjs') throw new Error('session controller metadata mismatch');
+          if (cfg.ai_compatibility.transparent_context_rollover_threshold_percent !== 50) throw new Error('transparent rollover threshold mismatch');
+          if (cfg.ai_compatibility.explicit_session_controller_fallback !== '.agent-core/bin/session-controller.mjs') throw new Error('session fallback metadata mismatch');
           NODE
 
           node scripts/agent-kit.mjs update "$SAMPLE"
@@ -177,17 +183,18 @@ jobs:
           grep -q 'Relationship / dependency / impact discovery' "$RULE"
           grep -q 'node .agent-core/rules/graphify-refresh.mjs' "$RULE"
           grep -q 'Automatic context rollover' "$ROUTER"
-          grep -q '50% context used' "$ROLLOVER"
+          grep -q 'normal development remains' "$ROLLOVER"
           grep -q 'Relationship / dependency / impact discovery' "$WORKFLOW"
           node - "$POLICY" <<'NODE'
           const fs = require('fs');
           const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (policy.version !== 6 || policy.runtime !== 'node+npm') process.exit(1);
+          if (policy.version !== 7 || policy.runtime !== 'node+npm') process.exit(1);
           if (!policy.principles.web_kit_runtime_requires_node_not_python) process.exit(1);
-          if (!policy.principles.automatic_context_rollover_under_session_controller) process.exit(1);
+          if (!policy.principles.transparent_context_rollover_enabled_after_normal_install) process.exit(1);
           if (policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
-          if (policy.session_control.controller !== '.agent-core/bin/session-controller.mjs') process.exit(1);
-          if (!policy.session_control.supported_providers.includes('codex') || !policy.session_control.supported_providers.includes('claude')) process.exit(1);
+          if (policy.session_control.user_runtime_home !== '~/.web-kit') process.exit(1);
+          if (!policy.session_control.normal_provider_commands.includes('codex') || !policy.session_control.normal_provider_commands.includes('claude')) process.exit(1);
+          if (policy.session_control.explicit_session_controller_fallback !== '.agent-core/bin/session-controller.mjs') process.exit(1);
           if (policy.repository_navigation.graphify_refresh_gate !== '.agent-core/rules/graphify-refresh.mjs') process.exit(1);
           NODE
 
