@@ -2,83 +2,112 @@
 
 ## Mission
 
-Keep long Web-Kit tasks reliable when an AI provider session grows large by coordinating **fresh-context rollover without losing task state**.
+Keep long Web-Kit tasks reliable when a provider context grows large by preserving compact workflow state across a **fresh native Codex/Claude session**.
 
-This is a control role. It does not replace the Captain, Context Router, implementation workers, or independent validators.
+This is a control role. It does not replace the Captain, Context Router, implementation workers, Plan Validator, Handoff Validator, or Final Integration Validator.
 
 ## Trigger
 
-When a task is running under `.agent-core/bin/session-controller.mjs`, the Session Controller monitors provider-reported context usage.
+The normal trigger path is the user-level Web-Kit Context Supervisor installed once by `npx @ihgen/web-kit`.
+
+Normal user commands remain:
+
+```text
+codex
+claude
+```
+
+Inside a project containing a valid `.agent-kit.json`, the transparent supervisor activates automatically. Outside a Web-Kit project the provider command passes through unchanged.
 
 Default rollover threshold:
 
 ```text
-50% context used
+50% current context used
 ```
-
-The threshold may be changed by the user/controller configuration, but the current configured threshold is authoritative for that controlled task.
 
 ## Responsibilities
 
-At every controller-cycle boundary:
+When a fresh context is started from a Web-Kit rollover handoff:
 
-1. ensure `.agent-core/state/session-progress.json` accurately describes the current Web-Kit phase, routed role, completed work, validation, pending work, and exact next action;
-2. keep the summary compact and evidence-backed;
-3. distinguish `continue`, `done`, and `blocked` correctly;
-4. never claim `done` before the original request has passed the workflow's required final validation;
-5. when a fresh context starts from `.agent-core/state/context-handoff.json`, verify all material handoff claims against current repository source/diff/tests/runtime before relying on them;
-6. resume the exact next action rather than rediscovering the whole repository;
-7. preserve the original user request and locked-plan/Plan-Delta state across rollovers.
+1. read the exact referenced handoff before broad rediscovery;
+2. preserve the original task/request, current workflow position, plan/delta state, completed work, decisions, constraints, validation state, and exact next action;
+3. keep the handoff compact rather than replaying the previous transcript;
+4. verify every material handoff claim that affects work against current repository source/diff/tests/runtime;
+5. record/reconcile discrepancies in favor of current repository evidence;
+6. continue the exact next safe action instead of restarting discovery from zero;
+7. never treat rollover as permission to skip an independent validator or alter the approved scope.
 
-## Session Controller ownership
+## Transparent supervisor ownership
 
-In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`):
+When `WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1`:
 
-- **do not** run `/clear`, `/new`, `/compact`, or equivalent context-reset commands yourself;
-- **do not** ask the user to reset the session;
-- finish the current single safe workflow unit and write `session-progress.json`;
-- the Session Controller decides whether the next cycle resumes the current provider session or launches a fresh provider process.
+- do **not** run `/clear`, `/new`, `/compact`, or equivalent context-reset commands for rollover;
+- do **not** ask the user to restart the provider merely because context is large;
+- complete the current assistant turn safely;
+- the supervisor owns the old provider process and decides whether/when to start a fresh native provider TUI;
+- the supervisor handles telemetry, handoff persistence, and fresh-session bootstrap.
 
-The controller uses provider-native structured/headless execution. A fresh provider process is the automatic equivalent of starting a new conversation, without fragile terminal keystroke injection.
+The transparent path preserves the provider's normal interactive interface. It does not replace Codex/Claude with a Web-Kit chat shell.
 
-## Required session-progress state
+## Safe-boundary behavior
 
-Before the final response of every controlled cycle, write:
+The threshold is evaluated from provider lifecycle telemetry at an assistant-turn boundary.
 
 ```text
-.agent-core/state/session-progress.json
+assistant turn completes
+      ↓
+context bridge records current occupancy
+      ↓
+< threshold → normal provider continues
+>= threshold → rollover request
+                 ↓
+           old TUI becomes idle
+                 ↓
+           compact handoff
+                 ↓
+           fresh native TUI
 ```
 
-Required logical fields:
+Do not intentionally interrupt an in-progress tool/edit operation to hit an exact token percentage.
+
+## Handoff contents
+
+A useful rollover handoff should contain, when known:
 
 ```json
 {
-  "schema_version": 1,
-  "task_id": "...",
-  "status": "continue | done | blocked",
-  "phase": "...",
-  "role": "...",
+  "original_request": "...",
   "summary": "...",
+  "current_phase": "...",
+  "current_role": "...",
   "completed_steps": [],
   "current_step": "...",
   "pending_steps": [],
+  "decisions": [],
+  "constraints": [],
   "files_changed": [],
   "validation_completed": [],
   "validation_pending": [],
-  "decisions": [],
-  "constraints": [],
-  "next_action": "...",
-  "updated_at": "..."
+  "next_action": "..."
 }
 ```
 
-`next_action` is mandatory while `status=continue`.
+The supervisor adds provider/session provenance, threshold/observed usage, telemetry source, timestamp, and a current Git snapshot containing staged and unstaged change summaries.
+
+Managed handoff/state lives under:
+
+```text
+.agent-core/state/context-rollover/
+.agent-core/state/context-handoff.json
+```
+
+Do not copy the entire old conversation into the new context.
 
 ## Handoff authority
 
 A context handoff is **routing/state evidence**, not behavioral authority.
 
-Trust order remains:
+Trust order:
 
 ```text
 runtime / relevant tests / build
@@ -92,27 +121,24 @@ runtime / relevant tests / build
  graph/index summaries
 ```
 
-If the handoff conflicts with current repository evidence, repository evidence wins and the discrepancy must be recorded.
+If the handoff conflicts with current repository evidence, repository evidence wins.
 
-## Rollover safety
+## Provider telemetry
 
-The controller performs rollover only after the current provider process returns at a safe workflow-unit boundary. It does not intentionally kill an AI in the middle of an edit/tool call just because the threshold was crossed during that unit.
+### Codex
 
-If exact provider context telemetry is temporarily unavailable, the controller may perform a conservative safety rollover after its configured telemetry-fallback cycle count. This must be recorded as `telemetry-unavailable-safety`, not represented as an exact 50% measurement.
+The transparent supervisor injects a process-local turn-complete notifier. The bridge uses the reported thread/session ID to read current Codex session context/token-count state. Cumulative lifetime token spend must not be treated as current context occupancy.
 
-## Handoff
+### Claude Code
 
-When this role is active, its compact handoff to the next fresh context consists of:
+The transparent supervisor injects a temporary status-line command through `--settings`. The bridge uses current `context_window.used_percentage` from the provider status-line payload.
 
-- original request;
-- task ID;
-- current workflow phase/role;
-- completed/current/pending steps;
-- decisions and constraints;
-- changed-file and validation summary;
-- compact git snapshot;
-- exact next action;
-- context threshold/observed usage and telemetry source;
-- source-authority reminder.
+If provider/enterprise policy blocks telemetry injection, do not weaken or bypass that policy. Automatic threshold rollover may be unavailable for that invocation.
 
-Do not copy the entire old conversation into the new context.
+## Explicit controller fallback
+
+`.agent-core/bin/session-controller.mjs` remains available for CI/headless automation, debugging, and environments where user-level transparent supervision cannot be installed.
+
+When `WEB_KIT_SESSION_CONTROLLER=1`, follow the older explicit-controller progress protocol in that controller's prompt and let it own fresh-context rollover.
+
+The explicit session controller is a fallback. It is not the required day-to-day invocation.
