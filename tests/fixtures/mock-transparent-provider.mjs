@@ -7,20 +7,20 @@ const provider = process.env.WEB_KIT_TEST_PROVIDER;
 if (!new Set(["codex", "claude"]).has(provider)) process.exit(90);
 
 const project = process.cwd();
-const stateRoot = path.join(project, ".agent-core", "state", "transparent-test");
-fs.mkdirSync(stateRoot, { recursive: true });
-const logFile = path.join(stateRoot, `${provider}-calls.jsonl`);
 const args = process.argv.slice(2);
 const active = process.env.WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE === "1";
 const handoffMode = process.env.WEB_KIT_CONTEXT_SUPERVISOR_HANDOFF === "1";
 const isHeadless = provider === "codex" ? args.includes("exec") : args.includes("-p") || args.includes("--print");
-const call = { provider, args, active, handoffMode, isHeadless, at: new Date().toISOString() };
-fs.appendFileSync(logFile, `${JSON.stringify(call)}\n`);
 
 if (!active) {
   console.log(`${provider} passthrough`);
   process.exit(0);
 }
+
+const stateRoot = path.join(project, ".agent-core", "state", "transparent-test");
+fs.mkdirSync(stateRoot, { recursive: true });
+const logFile = path.join(stateRoot, `${provider}-calls.jsonl`);
+fs.appendFileSync(logFile, `${JSON.stringify({ provider, args, active, handoffMode, isHeadless, at: new Date().toISOString() })}\n`);
 
 function handoff() {
   return {
@@ -57,7 +57,6 @@ if (freshPrompt) {
 }
 
 if (provider === "codex") {
-  const configArgIndex = args.findIndex((arg) => arg === "-c" && String(args[args.indexOf(arg) + 1] || "").startsWith("notify="));
   let notifyValue = null;
   for (let i = 0; i < args.length - 1; i += 1) {
     if (args[i] === "-c" && String(args[i + 1]).startsWith("notify=")) notifyValue = String(args[i + 1]).slice("notify=".length);
