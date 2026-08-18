@@ -10,6 +10,9 @@ const DEFAULT_THRESHOLD = 50;
 const DEFAULT_MAX_CYCLES = 100;
 const DEFAULT_TELEMETRY_FALLBACK_CYCLES = 2;
 const SUPPORTED_PROVIDERS = new Set(["codex", "claude"]);
+const CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+const CODEX_APPROVAL_MODES = new Set(["untrusted", "on-request", "never"]);
+const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]);
 
 function nowIso() { return new Date().toISOString(); }
 function posix(value) { return value.split(path.sep).join("/"); }
@@ -220,20 +223,29 @@ function printableEvent(provider, event) {
   return "";
 }
 
-function providerArgs(provider, project, prompt, sessionId) {
+function providerArgs(provider, project, prompt, sessionId, providerOptions) {
   if (provider === "codex") {
-    return sessionId
-      ? ["exec", "resume", sessionId, "--json", "-C", project, prompt]
-      : ["exec", "--json", "-C", project, prompt];
+    const args = [
+      "--ask-for-approval", providerOptions.codexApproval,
+      "exec",
+      "--json",
+      "--sandbox", providerOptions.codexSandbox,
+      "-C", project,
+    ];
+    if (sessionId) args.push("resume", sessionId, prompt);
+    else args.push(prompt);
+    return args;
   }
-  return sessionId
-    ? ["-p", "--resume", sessionId, prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "auto"]
-    : ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "auto"];
+
+  const args = ["--permission-mode", providerOptions.claudePermissionMode, "-p", prompt];
+  if (sessionId) args.push("--resume", sessionId);
+  args.push("--output-format", "stream-json", "--verbose");
+  return args;
 }
 
-async function runProvider(provider, executable, project, prompt, sessionId, verbose) {
+async function runProvider(provider, executable, project, prompt, sessionId, verbose, providerOptions) {
   const telemetry = createTelemetry(provider);
-  const args = [...executable.prefixArgs, ...providerArgs(provider, project, prompt, sessionId)];
+  const args = [...executable.prefixArgs, ...providerArgs(provider, project, prompt, sessionId, providerOptions)];
   const child = spawn(executable.command, args, {
     cwd: project,
     env: { ...process.env, WEB_KIT_SESSION_CONTROLLER: "1" },
@@ -438,7 +450,7 @@ function rolloverPrompt(taskId, handoff) {
 async function main() {
   const args = process.argv.slice(2);
   if (hasArg(args, "--help") || hasArg(args, "-h")) {
-    console.log(`Usage:\n  node .agent-core/bin/session-controller.mjs --provider <codex|claude> --prompt "<task>" [options]\n\nOptions:\n  --project <path>                    Project root (default: .)\n  --provider <codex|claude>           AI CLI provider\n  --prompt <text>                     Original task\n  --prompt-file <path>                Read original task from file\n  --threshold <percent>               Rollover threshold (default: 50)\n  --max-cycles <n>                    Safety cap (default: 100)\n  --telemetry-fallback-cycles <n>     Force a conservative rollover after N telemetry-missing cycles (default: 2)\n  --task-id <id>                      Override generated task id\n  --verbose                           Show raw provider JSON/stderr\n\nThe controller uses provider headless/structured mode. It resumes the provider session below threshold and launches a fresh provider process after a validated context handoff at/above the threshold.`);
+    console.log(`Usage:\n  node .agent-core/bin/session-controller.mjs --provider <codex|claude> --prompt "<task>" [options]\n\nOptions:\n  --project <path>                    Project root (default: .)\n  --provider <codex|claude>           AI CLI provider\n  --prompt <text>                     Original task\n  --prompt-file <path>                Read original task from file\n  --threshold <percent>               Rollover threshold (default: 50)\n  --max-cycles <n>                    Safety cap (default: 100)\n  --telemetry-fallback-cycles <n>     Conservative rollover after N telemetry-missing cycles (default: 2)\n  --task-id <id>                      Override generated task id\n  --codex-sandbox <mode>              read-only | workspace-write | danger-full-access (default: workspace-write)\n  --codex-approval <mode>             untrusted | on-request | never (default: never for controlled automation)\n  --claude-permission-mode <mode>     default | acceptEdits | plan | auto | dontAsk | bypassPermissions (default: auto)\n  --verbose                           Show raw provider JSON/stderr\n\nEnvironment overrides:\n  WEB_KIT_CODEX_SANDBOX\n  WEB_KIT_CODEX_APPROVAL\n  WEB_KIT_CLAUDE_PERMISSION_MODE\n\nThe controller uses provider headless/structured mode. It resumes the provider session below threshold and launches a fresh provider process after a validated context handoff at/above the threshold. It never silently selects danger-full-access or bypassPermissions.`);
     return 0;
   }
 
@@ -449,8 +461,16 @@ async function main() {
   const maxCycles = Math.floor(clampNumber(getArg(args, "--max-cycles"), DEFAULT_MAX_CYCLES, 1, 1000));
   const telemetryFallbackCycles = Math.floor(clampNumber(getArg(args, "--telemetry-fallback-cycles"), DEFAULT_TELEMETRY_FALLBACK_CYCLES, 1, 100));
   const verbose = hasArg(args, "--verbose");
+  const providerOptions = {
+    codexSandbox: getArg(args, "--codex-sandbox") || process.env.WEB_KIT_CODEX_SANDBOX || "workspace-write",
+    codexApproval: getArg(args, "--codex-approval") || process.env.WEB_KIT_CODEX_APPROVAL || "never",
+    claudePermissionMode: getArg(args, "--claude-permission-mode") || process.env.WEB_KIT_CLAUDE_PERMISSION_MODE || "auto",
+  };
 
   if (!SUPPORTED_PROVIDERS.has(provider)) throw new Error(`Unsupported provider: ${provider || "(missing)"}. Supported: codex, claude.`);
+  if (!CODEX_SANDBOX_MODES.has(providerOptions.codexSandbox)) throw new Error(`Invalid --codex-sandbox: ${providerOptions.codexSandbox}`);
+  if (!CODEX_APPROVAL_MODES.has(providerOptions.codexApproval)) throw new Error(`Invalid --codex-approval: ${providerOptions.codexApproval}`);
+  if (!CLAUDE_PERMISSION_MODES.has(providerOptions.claudePermissionMode)) throw new Error(`Invalid --claude-permission-mode: ${providerOptions.claudePermissionMode}`);
   if (!originalPrompt) throw new Error("Missing task prompt. Use --prompt, --prompt-file, or place the prompt after --.");
   if (!fs.existsSync(path.join(project, ".agent-core", "rules", "workflow.md"))) throw new Error("Web Kit is not installed in this project. Run `npx @ihgen/web-kit` first.");
 
@@ -483,22 +503,28 @@ async function main() {
     provider_session_id: null,
     original_request_hash: sha12(originalPrompt),
     provider_executable_source: executable.source,
+    provider_options: provider === "codex"
+      ? { sandbox: providerOptions.codexSandbox, approval: providerOptions.codexApproval }
+      : { permission_mode: providerOptions.claudePermissionMode },
     started_at: nowIso(),
     updated_at: nowIso(),
   });
 
-  console.log(`\nWeb Kit Automatic Session Controller\nProvider: ${provider}\nTask: ${taskId}\nContext rollover threshold: ${threshold}%\nProvider resolution: ${executable.source}\n`);
+  console.log(`\nWeb Kit Automatic Session Controller\nProvider: ${provider}\nTask: ${taskId}\nContext rollover threshold: ${threshold}%\nProvider resolution: ${executable.source}\nPermissions: ${provider === "codex" ? `sandbox=${providerOptions.codexSandbox}, approval=${providerOptions.codexApproval}` : `permission-mode=${providerOptions.claudePermissionMode}`}\n`);
 
   while (cycle < maxCycles) {
     cycle += 1;
     const progressSignatureBefore = fileSignature(progressFile);
     console.log(`\n── Controller cycle ${cycle}${sessionId ? ` · resume ${sessionId}` : " · fresh context"} ──\n`);
-    const run = await runProvider(provider, executable, project, nextPrompt, sessionId, verbose);
+    const run = await runProvider(provider, executable, project, nextPrompt, sessionId, verbose, providerOptions);
     if (run.exitCode !== 0) {
       const state = readJson(controllerStateFile, {});
       Object.assign(state, { status: "provider_error", cycle, provider_session_id: sessionId, provider_exit_code: run.exitCode, provider_stderr: run.stderr.slice(-8000), updated_at: nowIso() });
       atomicWriteJson(controllerStateFile, state);
       console.error(`\n${provider} exited with code ${run.exitCode}. Controller state was saved.`);
+      if (provider === "claude" && /permission|auto mode|disableautomode/i.test(run.stderr)) {
+        console.error(`Claude permission mode '${providerOptions.claudePermissionMode}' was rejected or blocked. Configure that mode in Claude Code or explicitly retry with --claude-permission-mode acceptEdits/dontAsk as appropriate. Web Kit will never silently switch to bypassPermissions.`);
+      }
       return run.exitCode || 1;
     }
 
