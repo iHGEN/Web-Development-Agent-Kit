@@ -5,6 +5,7 @@ This file is the **single authoritative lifecycle** for the Web Development Agen
 Shorter checklists may summarize one phase, but they MUST NOT replace or bypass this workflow.
 
 Repository-navigation tool selection is governed by the supporting rule `.agent-core/rules/repository-navigation.md`.
+Automatic provider-session rollover is governed by the supporting rule `.agent-core/rules/context-rollover.md`.
 
 ## Runtime contract
 
@@ -13,6 +14,7 @@ Web Kit itself requires **Node.js + npm only**. A system Python installation is 
 - Run managed Web-Kit helpers with `node`.
 - Graphify is optional and may use Python internally; when Graphify is requested and Python is not already available, Web Kit may bootstrap `uv` and let `uv` manage Graphify's Python runtime.
 - Absence of Python, `uv`, or Graphify must never block the standard Web-Kit workflow.
+- Automatic context rollover uses `.agent-core/bin/session-controller.mjs` and currently has tested provider adapters for Codex CLI and Claude Code.
 
 The lifecycle has two repository-navigation capabilities:
 - `standard` — lightweight project profile/index/targeted current-source search/symbol routing;
@@ -20,15 +22,72 @@ The lifecycle has two repository-navigation capabilities:
 
 Graphify is a navigation and relationship aid. Current repository source, current diffs, tests/build checks, and runtime evidence remain authoritative.
 
+## Session Controller overlay — automatic fresh contexts
+
+The Session Controller changes **provider-session lifetime only**. It does not change this engineering lifecycle, approvals, plan state, ownership, or validation requirements.
+
+Default controlled-session threshold:
+
+```text
+50% current context usage
+```
+
+When a task is launched through:
+
+```bash
+node .agent-core/bin/session-controller.mjs --provider codex --threshold 50 --prompt "<task>"
+```
+
+or:
+
+```bash
+node .agent-core/bin/session-controller.mjs --provider claude --threshold 50 --prompt "<task>"
+```
+
+the current AI completes **one safe Web-Kit workflow unit per controller cycle** and writes `.agent-core/state/session-progress.json` before returning control.
+
+The controller then evaluates provider context usage:
+
+```text
+below threshold
+  -> resume the same provider session
+
+threshold reached
+  -> do not interrupt an in-progress edit/tool call
+  -> finish the current safe workflow unit
+  -> validate/write compact context handoff
+  -> start a genuinely fresh provider process/session
+  -> fresh context reads the handoff first
+  -> verify material handoff claims against current source/diff/tests/runtime
+  -> resume the exact recorded next action
+```
+
+Managed rollover state:
+
+```text
+.agent-core/state/session-controller.json
+.agent-core/state/session-progress.json
+.agent-core/state/context-handoff.json
+.agent-core/state/handoffs/
+```
+
+The Context Rollover Manager is an always-available control role. A context handoff is routing/state evidence, not behavioral authority.
+
+In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), the AI MUST NOT run `/clear`, `/new`, `/compact`, or ask the user to reset context. The Node Session Controller owns the fresh-context transition. The controller uses provider structured/headless modes rather than fragile terminal-keystroke injection.
+
+If exact provider context telemetry is unavailable, a configured conservative fallback rollover may be used. It must be recorded as `telemetry-unavailable-safety`, never represented as an exact 50% measurement.
+
+A controlled task may report `done` only after the original request has passed the required final validation below. `blocked` is reserved for a genuine user/permission dependency.
+
 ## Phase 0 — User Intake
 
 **Owner:** Web Orchestrator / Captain
 
 1. Receive the user request.
 2. Record the original prompt verbatim before interpretation.
-3. Keep the original prompt attached to the task for the entire lifecycle.
+3. Keep the original prompt attached to the task for the entire lifecycle, including across context rollovers.
 
-The original user request is authoritative over all later interpretations.
+The original user request is authoritative over all later interpretations and context-handoff summaries.
 
 ## Phase 1 — Task Classification
 
@@ -38,7 +97,7 @@ Classify the task as `SMALL`, `MEDIUM`, or `LARGE`.
 
 Classification controls discovery breadth, context/token budget, expected dependency depth, likely agent team, and validation depth. It does not change user scope.
 
-Assign a task ID that is reused by the Graph Refresh Gate and task-local fallback state.
+Assign a task ID that is reused by the Graph Refresh Gate, task-local fallback state, Session Controller state, and context handoffs.
 
 ## Phase 2 — Repository Navigation Mode, Question Type, Freshness, and Index
 
@@ -146,6 +205,8 @@ Route only:
 - likely entry points/candidate symbols;
 - relevant detected project skills;
 - context budget and expansion/fallback policy.
+
+After a Session Controller rollover, reconstruct this minimum packet from the validated compact handoff plus current repository evidence. Do not forward the previous full transcript.
 
 No worker receives unrestricted repository context or the full Graphify graph.
 
@@ -264,6 +325,8 @@ When every required registered step is approved:
 
 A locked plan defines what is allowed to change. It is not permission to improvise.
 
+The locked-plan version and any later Plan Delta state must survive context rollovers through compact session progress/handoffs.
+
 ## Phase 11 — Per-step Context Routing
 
 Before every approved implementation step, the Context Router creates a **fresh implementation Context Packet** for that step only.
@@ -296,6 +359,8 @@ The worker:
 - may request specific evidence-backed context expansion;
 - runs the step-local checks/tests required by the plan;
 - records actual files/symbols changed and validation performed.
+
+A controlled Session Controller cycle must not batch multiple independent approved implementation steps merely to avoid a rollover. One approved implementation step plus its required local gate/handoff is a valid safe workflow unit.
 
 ## Phase 13 — Graph Refresh Gate
 
@@ -371,6 +436,8 @@ For each remaining step:
 `Context Router -> Selected Worker -> Implement Step -> Graph Refresh Gate -> Handoff Validator`
 
 The next step begins only after its dependencies have passed handoff validation.
+
+A provider-session rollover may occur between these safe workflow units without changing the Execution Registry or implementation sequence.
 
 ## Phase 16 — Plan Delta Loop
 
@@ -471,11 +538,13 @@ Captain:
 - reports known limitations or intentionally deferred non-goals;
 - declares `DONE`.
 
+Under the Session Controller, only now may `.agent-core/state/session-progress.json` be written with `status: done`.
+
 ## Continuous Context/Token Routing
 
 The Context Router / Token Governor runs throughout the lifecycle, not only once.
 
-It is invoked before discovery, before each implementation step, for evidence-backed context expansion, before specialist validation when required, and during handoff/failure recovery when new context is necessary.
+It is invoked before discovery, before each implementation step, for evidence-backed context expansion, before specialist validation when required, during handoff/failure recovery, and after a controlled fresh-context rollover to rebuild only the minimal next packet.
 
 ### Direct lookup progression
 
@@ -493,6 +562,22 @@ Use only when the generated project profile reports a ready graph **and** `.agen
 
 `project profile -> Graph Refresh Gate -> narrow Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search for gaps -> full file only when needed -> evidence-backed expansion`
 
+### Controlled-session rollover progression
+
+```text
+one safe workflow unit
+  -> session-progress.json
+  -> read provider current-context telemetry
+  -> below threshold: resume same provider session
+  -> threshold reached: validate context-handoff.json
+  -> fresh provider process/session
+  -> verify handoff against current repository evidence
+  -> rebuild minimum Context Packet
+  -> continue same canonical lifecycle
+```
+
+Do not copy the full previous transcript into a fresh provider context.
+
 ### Continuous rules
 
 - default deny arbitrary repository reads;
@@ -509,6 +594,9 @@ Use only when the generated project profile reports a ready graph **and** `.agen
 - Graphify refresh/query failure must fall back to standard routing, not block the task;
 - installed skill != active skill;
 - compact findings/handoffs instead of forwarding full transcripts;
+- context-handoff summaries are not behavioral authority and must be source-verified in a fresh context;
+- when the Session Controller is active, do not manually `/clear`, `/new`, or `/compact`; let the controller own rollover;
+- never interrupt an active implementation/tool call solely to hit the threshold exactly; roll over at the next safe workflow-unit boundary;
 - reuse evidence-linked summaries when sufficient;
 - validate diffs first after implementation;
 - never save tokens by omitting context required for correctness, security, or user intent.
