@@ -1,6 +1,6 @@
 # Web Development Agent Kit
 
-A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
+A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, automatic fresh-context rollover, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
 
 ## Runtime requirement
 
@@ -40,7 +40,90 @@ npx @ihgen/web-kit update
 npx @ihgen/web-kit doctor
 npx @ihgen/web-kit scan
 npx @ihgen/web-kit graphify
+npx @ihgen/web-kit session codex --prompt "<task>"
+npx @ihgen/web-kit session claude --prompt "<task>"
 ```
+
+## Automatic context rollover
+
+Long Codex/Claude tasks can run under Web Kit's Node Session Controller. The default rollover threshold is **50% current context usage**.
+
+Codex:
+
+```bash
+npx @ihgen/web-kit session codex \
+  --threshold 50 \
+  --prompt "Implement the requested feature"
+```
+
+Claude Code:
+
+```bash
+npx @ihgen/web-kit session claude \
+  --threshold 50 \
+  --prompt "Implement the requested feature"
+```
+
+You can also use a task file:
+
+```bash
+npx @ihgen/web-kit session claude \
+  --prompt-file ./task.md
+```
+
+Flow:
+
+```text
+start provider session
+      ↓
+execute one safe Web-Kit workflow unit
+      ↓
+write session-progress.json
+      ↓
+current context < 50% ?
+   /                  \
+ YES                  NO
+  ↓                    ↓
+resume same       validate compact handoff
+provider session        ↓
+                   context-handoff.json
+                         ↓
+                  fresh provider process
+                         ↓
+                  read compact handoff
+                         ↓
+             verify source / diff / tests
+                         ↓
+                 continue exact next step
+```
+
+The controller does **not** fake terminal keystrokes for `/clear` or `/new`. It owns Codex/Claude through their structured/headless execution modes and starts a genuinely fresh provider process/session when rollover is required.
+
+In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), the active AI is instructed not to run `/clear`, `/new`, `/compact`, or ask the user to reset context. Web Kit handles it automatically.
+
+Rollover happens at the next **safe workflow-unit boundary**, not by intentionally killing an AI in the middle of an edit or tool call.
+
+Managed state:
+
+```text
+.agent-core/state/session-controller.json
+.agent-core/state/session-progress.json
+.agent-core/state/context-handoff.json
+.agent-core/state/handoffs/
+```
+
+The **Context Rollover Manager** role maintains compact state. A rollover handoff is routing/state evidence only: current repository source, current diff, tests/build, and runtime evidence remain authoritative.
+
+If exact provider context telemetry is temporarily unavailable, the controller can make a conservative safety rollover after the configured number of missing-telemetry cycles. That is recorded separately instead of pretending an exact 50% measurement was observed.
+
+Current automatic provider adapters:
+
+```text
+Codex CLI   ✅
+Claude Code ✅
+```
+
+Other assistants still use the same Web-Kit engineering workflow; a provider adapter can be added later without duplicating the lifecycle.
 
 ## Non-destructive AI instruction files
 
@@ -99,6 +182,8 @@ Other assistants ─┘
        .agent-core/rules/workflow.md
                   ↓
  .agent-core/rules/repository-navigation.md
+                  ↓
+   .agent-core/rules/context-rollover.md
 ```
 
 The assistant-specific files contain roles and project-owned instructions, not separate copies of the engineering workflow.
@@ -115,7 +200,8 @@ Installation performs lightweight project discovery and records:
 - test roots;
 - migration/data roots;
 - Graphify capability;
-- AI compatibility/role metadata.
+- AI compatibility/role metadata;
+- automatic context-rollover metadata.
 
 Machine-readable profile:
 
@@ -296,6 +382,8 @@ Captain closure against original request
 DONE
 ```
 
+Automatic context rollover is an overlay around these workflow units; it does not skip or replace any phase, plan approval, handoff validation, or final integration gate.
+
 Material evidence that invalidates a locked plan enters the Plan Delta validation loop. Agents do not silently improvise outside the approved plan.
 
 ## Context/token routing
@@ -308,6 +396,7 @@ Rules include:
 - installed skill does not mean active skill;
 - fresh Context Packet per approved implementation step;
 - compact evidence-linked handoffs instead of full transcripts;
+- validated compact context-rollover handoffs instead of replaying the whole prior conversation;
 - diff-first implementation review;
 - never put the entire Graphify graph into model context;
 - Graphify failure falls back to standard routing without blocking work;
@@ -327,10 +416,12 @@ node scripts/agent-kit.mjs catalog
 node scripts/agent-kit.mjs add-skill /path/to/project <skill-name>
 ```
 
-Installed projects also receive a Node updater:
+Installed projects also receive Node helpers:
 
 ```bash
 node .agent-core/bin/web-kit-update.mjs
+node .agent-core/bin/session-controller.mjs --provider codex --prompt "<task>"
+node .agent-core/bin/session-controller.mjs --provider claude --prompt "<task>"
 ```
 
 The recommended public entry point remains:
