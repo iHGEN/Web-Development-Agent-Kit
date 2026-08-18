@@ -14,6 +14,10 @@ const bootstrap = join(__dirname, "..", "bootstrap", "remote-install.mjs");
 const COMMANDS = new Set(["install", "update", "doctor", "scan"]);
 const SESSION_SETUP_VALUE_OPTIONS = new Set(["--project", "--ref", "--repo", "--source", "--sha256"]);
 const SESSION_SETUP_FLAGS = new Set(["--allow-downgrade", "--install-graphify"]);
+const SESSION_CONTROLLER_VALUE_OPTIONS = new Set([
+  "--prompt", "--prompt-file", "--threshold", "--max-cycles", "--telemetry-fallback-cycles", "--task-id",
+  "--codex-sandbox", "--codex-approval", "--claude-permission-mode",
+]);
 
 function printHelp() {
   console.log(`
@@ -56,7 +60,17 @@ Automatic session options:
   --max-cycles <n>                    Controller safety cap. Default: 100.
   --telemetry-fallback-cycles <n>     Conservative rollover after missing telemetry. Default: 2.
   --task-id <id>                      Optional stable task id.
+  --codex-sandbox <mode>              Default: workspace-write.
+  --codex-approval <mode>             Default: never for controlled automation.
+  --claude-permission-mode <mode>     Default: auto.
   --verbose                           Show raw provider telemetry/stderr.
+
+Provider permission defaults:
+  Codex  -> workspace-write sandbox + never approval pauses.
+  Claude -> auto permission mode.
+
+Web Kit never silently selects Codex danger-full-access or Claude bypassPermissions. You may explicitly
+choose a different supported mode when your environment requires it.
 
 AI instruction files are non-destructive:
   - existing AGENTS.md / CLAUDE.md / GEMINI.md / Copilot / Cursor instructions stay intact;
@@ -79,7 +93,9 @@ Examples:
   npx @ihgen/web-kit update --install-graphify
   npx @ihgen/web-kit graphify
   npx @ihgen/web-kit session codex --threshold 50 --prompt "Implement authenticated dashboard API"
+  npx @ihgen/web-kit session codex --codex-sandbox workspace-write --codex-approval never --prompt "Fix the tests"
   npx @ihgen/web-kit session claude --threshold 50 --prompt-file ./task.md
+  npx @ihgen/web-kit session claude --claude-permission-mode auto --prompt "Implement the feature"
   npx @ihgen/web-kit install --ref main
 
 Package version: ${VERSION}
@@ -186,9 +202,7 @@ function parseSessionInvocation(rawArgs) {
     }
     if (arg.startsWith("--provider=")) continue;
     controllerArgs.push(arg);
-    if (["--prompt", "--prompt-file", "--threshold", "--max-cycles", "--telemetry-fallback-cycles", "--task-id"].includes(arg) && i + 1 < rest.length) {
-      controllerArgs.push(rest[++i]);
-    }
+    if (SESSION_CONTROLLER_VALUE_OPTIONS.has(arg) && i + 1 < rest.length) controllerArgs.push(rest[++i]);
   }
   return { provider, setupArgs, controllerArgs };
 }
