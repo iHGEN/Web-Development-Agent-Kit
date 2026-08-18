@@ -24,6 +24,24 @@ if (count === 1 && isResume) process.exit(91);
 if (count === 2 && !isResume) process.exit(92);
 if (count === 3 && isResume) process.exit(93);
 
+if (provider === "codex") {
+  if (args[0] !== "--ask-for-approval" || args[1] !== "never" || args[2] !== "exec") process.exit(94);
+  const sandbox = args.indexOf("--sandbox");
+  if (sandbox < 0 || args[sandbox + 1] !== "workspace-write") process.exit(95);
+  if (!args.includes("--json")) process.exit(96);
+  const cd = args.indexOf("-C");
+  if (cd < 0 || path.resolve(args[cd + 1]) !== project) process.exit(97);
+  const resume = args.indexOf("resume");
+  if (isResume && (resume < cd || args[resume + 1] !== "codex-session-1")) process.exit(98);
+} else {
+  if (args[0] !== "--permission-mode" || args[1] !== "auto") process.exit(99);
+  if (!args.includes("-p") || !args.includes("--verbose")) process.exit(100);
+  const output = args.indexOf("--output-format");
+  if (output < 0 || args[output + 1] !== "stream-json") process.exit(101);
+  const resume = args.indexOf("--resume");
+  if (isResume && args[resume + 1] !== "claude-session-1") process.exit(102);
+}
+
 const done = count === 3;
 fs.writeFileSync(path.join(stateDir, "session-progress.json"), `${JSON.stringify({
   schema_version: 1,
