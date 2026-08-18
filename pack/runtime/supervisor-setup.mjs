@@ -51,7 +51,7 @@ function writeShims(base, binDir) {
 function installProfiles(binDir, home) {
   if (process.env.WEB_KIT_DISABLE_SHELL_PROFILE === "1") return [];
   const written = [];
-  const posixBlock = `${START}\n# Added by iHGEN Web Kit. Transparent only inside projects containing .agent-kit.json.\ncase ":$PATH:" in\n  *:${binDir}:*) ;;\n  *) export PATH=${shellQuote(binDir)}:$PATH ;;\nesac\n${END}`;
+  const posixBlock = `${START}\n# Added by iHGEN Web Kit. Transparent only inside projects containing .agent-kit.json.\n__ihgen_web_kit_bin=${shellQuote(binDir)}\ncase ":$PATH:" in\n  *":$__ihgen_web_kit_bin:"*) ;;\n  *) export PATH="$__ihgen_web_kit_bin:$PATH" ;;\nesac\nunset __ihgen_web_kit_bin\n${END}`;
   const profiles = new Set([path.join(home, ".bashrc"), path.join(home, ".zshrc"), path.join(home, ".profile")]);
   if (process.platform === "win32" && (process.env.MSYSTEM || process.env.SHELL?.includes("bash"))) profiles.add(path.join(home, ".bash_profile"));
   for (const file of profiles) if (writeProfile(file, posixBlock)) written.push(file);
@@ -118,8 +118,11 @@ function status() {
   const base = webKitHome();
   const binDir = path.join(base, "bin");
   const config = readJson(path.join(base, "config.json"), {});
+  const shims = ["codex", "claude"].map((provider) => process.platform === "win32" ? path.join(binDir, `${provider}.cmd`) : path.join(binDir, provider));
   return {
-    installed: fs.existsSync(path.join(base, "context-supervisor.mjs")) && fs.existsSync(path.join(base, "provider-bridge.mjs")),
+    installed: fs.existsSync(path.join(base, "context-supervisor.mjs"))
+      && fs.existsSync(path.join(base, "provider-bridge.mjs"))
+      && shims.every((file) => fs.existsSync(file)),
     enabled: config.enabled !== false,
     threshold_percent: Number(config.threshold_percent || 50),
     base,
