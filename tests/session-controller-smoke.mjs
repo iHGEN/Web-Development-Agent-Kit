@@ -42,6 +42,14 @@ function verify(provider, project, expectedPercent) {
 
   assert(controller.status === "done", `${provider}: controller status ${controller.status}`);
   assert(controller.rollovers === 1, `${provider}: expected one rollover, got ${controller.rollovers}`);
+  if (provider === "codex") {
+    assert(controller.provider_options?.sandbox === "workspace-write", "codex: default sandbox must be workspace-write");
+    assert(controller.provider_options?.approval === "never", "codex: default approval must be never");
+    assert(controller.provider_options?.sandbox !== "danger-full-access", "codex: controller silently selected danger-full-access");
+  } else {
+    assert(controller.provider_options?.permission_mode === "auto", "claude: default permission mode must be auto");
+    assert(controller.provider_options?.permission_mode !== "bypassPermissions", "claude: controller silently selected bypassPermissions");
+  }
   assert(handoff.status === "consumed", `${provider}: handoff was not consumed`);
   assert(handoff.rollover_reason === "context-threshold", `${provider}: wrong rollover reason`);
   assert(Math.round(handoff.observed_context_percent) === expectedPercent, `${provider}: expected ${expectedPercent}% context, got ${handoff.observed_context_percent}`);
