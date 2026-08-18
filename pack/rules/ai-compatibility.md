@@ -1,10 +1,10 @@
 # Cross-AI Compatibility Policy
 
-The Web Development Agent Kit is **assistant-neutral**. The engineering lifecycle, routing rules, validators, skills, Graph Refresh Gate, and project profile do not belong to any model vendor.
+The Web Development Agent Kit is **assistant-neutral**. The engineering lifecycle, routing rules, validators, skills, Graph Refresh Gate, project profile, and context-rollover contract do not belong to any model vendor.
 
 ## Runtime contract
 
-Web Kit requires **Node.js + npm only**. Web-Kit-managed installation, discovery, routing, doctor, AI-role management, and Graphify freshness helpers run with Node.js.
+Web Kit requires **Node.js + npm only**. Web-Kit-managed installation, discovery, routing, doctor, AI-role management, Graphify freshness helpers, and the Session Controller run with Node.js.
 
 A system Python installation is not required by Web Kit. Graphify is optional; if Graphify requires Python internally, Web Kit may bootstrap `uv` and let `uv` manage Graphify's Python runtime separately. If Graphify cannot be installed or used, standard routing remains fully functional.
 
@@ -15,6 +15,8 @@ Installed projects use:
 - root AI instructions / native AGENTS consumers: `AGENTS.md`;
 - canonical lifecycle: `.agent-core/rules/workflow.md`;
 - canonical repository navigation rule: `.agent-core/rules/repository-navigation.md`;
+- automatic context rollover rule: `.agent-core/rules/context-rollover.md`;
+- automatic Session Controller: `.agent-core/bin/session-controller.mjs`;
 - routing policy: `.agent-core/routing/context-policy.json`;
 - project profile: `.agent-core/index/project-profile.json`.
 
@@ -59,15 +61,63 @@ The roles block tells the current assistant to:
 
 - follow `.agent-core/rules/workflow.md`;
 - follow `.agent-core/rules/repository-navigation.md`;
+- follow `.agent-core/rules/context-rollover.md` when running under the automatic Session Controller;
 - use the project profile and routed context policy;
 - act only in the role selected for the current phase;
 - respect independent plan/handoff/final validators;
 - use targeted source search for direct lookup;
 - use refresh-gated Graphify for relationship/impact navigation when fresh;
-- keep source/diff/tests/build/runtime authoritative over Graphify;
+- keep source/diff/tests/build/runtime authoritative over Graphify and context-handoff summaries;
 - invoke Web-Kit helpers with Node.js, never requiring project users to install Python for Web Kit itself.
 
 Existing content outside the roles markers is project-owned and must be preserved.
+
+## Automatic Session Controller
+
+Fully automatic context switching is currently implemented for **Codex CLI and Claude Code** through a provider-neutral Node controller:
+
+```text
+.agent-core/bin/session-controller.mjs
+```
+
+Default rollover threshold:
+
+```text
+50% current context usage
+```
+
+The controller owns provider processes through their structured/headless modes.
+
+```text
+below threshold
+  -> resume the current provider session
+
+threshold reached after one safe workflow unit
+  -> validate/write compact context handoff
+  -> start a new provider process/session
+  -> inject/read the handoff
+  -> verify handoff claims from current repository evidence
+  -> continue exact workflow position
+```
+
+The controller deliberately does not emulate terminal keystrokes for provider slash commands. In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`) the assistant must not run `/clear`, `/new`, `/compact`, or ask the user to reset context. The controller owns the fresh-context transition.
+
+Controlled state is stored under `.agent-core/state/`:
+
+```text
+session-controller.json
+session-progress.json
+context-handoff.json
+handoffs/
+```
+
+The Context Rollover Manager is a Web-Kit control role. It preserves workflow state, not full conversation history.
+
+Context handoffs are routing/state evidence only. Current repository source, current diff, tests/build, and runtime evidence remain authoritative.
+
+Automatic rollover must occur only at a safe workflow-unit boundary. Do not intentionally terminate a provider in the middle of a code edit/tool call merely because context crosses the threshold during that unit.
+
+Provider adapters may be added for other assistants later without creating a second engineering workflow. Unsupported providers continue to use their normal interactive mode until a tested adapter exists.
 
 ## Temporary Graphify bootstrap role
 
@@ -105,9 +155,10 @@ For any other coding assistant:
 2. otherwise point its project-instruction mechanism at the canonical Web-Kit lifecycle/rules;
 3. respect the same temporary Graphify bootstrap role when present;
 4. use Graphify only when installed and freshness-gated;
-5. fall back to standard routed context if Graphify is unavailable.
+5. fall back to standard routed context if Graphify is unavailable;
+6. use manual/native context handling unless a tested Session Controller provider adapter exists.
 
-The workflow must never require a specific model family.
+The engineering workflow must never require a specific model family.
 
 ## Graphify is model-independent
 
