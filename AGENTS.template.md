@@ -50,6 +50,12 @@ Repository navigation is governed by:
 .agent-core/rules/repository-navigation.md
 ```
 
+Automatic provider-session rollover is governed by:
+
+```text
+.agent-core/rules/context-rollover.md
+```
+
 Machine-readable project metadata is:
 
 ```text
@@ -60,6 +66,60 @@ Machine-readable project metadata is:
 ```
 
 The original user request remains authoritative over later interpretations.
+
+## Automatic context rollover
+
+For long tasks, Web Kit can own Codex or Claude through the installed Node Session Controller:
+
+```bash
+node .agent-core/bin/session-controller.mjs \
+  --provider codex \
+  --threshold 50 \
+  --prompt "<task>"
+```
+
+or:
+
+```bash
+node .agent-core/bin/session-controller.mjs \
+  --provider claude \
+  --threshold 50 \
+  --prompt "<task>"
+```
+
+The npm launcher may expose the same flow through `npx @ihgen/web-kit session ...`.
+
+Default behavior:
+
+```text
+provider context < 50%
+  -> complete one safe workflow unit
+  -> persist session-progress.json
+  -> resume the same provider session
+
+provider context >= 50%
+  -> complete the current safe workflow unit
+  -> persist + validate compact context handoff
+  -> start a genuinely fresh provider process/session
+  -> fresh context reads the handoff
+  -> verify it against current source/diff/tests/runtime
+  -> continue the exact recorded next action
+```
+
+Controller state:
+
+```text
+.agent-core/state/session-controller.json
+.agent-core/state/session-progress.json
+.agent-core/state/context-handoff.json
+.agent-core/state/handoffs/
+```
+
+The controller does not inject terminal keystrokes for `/clear` or `/new`. In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), the AI must not run `/clear`, `/new`, `/compact`, or ask the user to reset context. The controller owns fresh-context creation.
+
+The Context Rollover Manager is an always-available control role. Context handoffs are routing/state evidence only; current source, current diff, tests/build, and runtime evidence remain authoritative.
+
+Rollover is evaluated only after a safe workflow-unit boundary, not by intentionally killing an AI in the middle of an edit/tool call.
 
 ## Repository navigation
 
@@ -191,6 +251,20 @@ Captain closure against original request
 DONE
 ```
 
+When the Session Controller is active, the lifecycle above is unchanged. Provider sessions are only containers around workflow units:
+
+```text
+one safe workflow unit
+  ↓
+session progress
+  ↓
+context threshold decision
+  ├─ below threshold -> resume same provider session
+  └─ threshold reached -> validated handoff -> fresh provider session
+  ↓
+continue same canonical lifecycle
+```
+
 No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
 
 Material new evidence that invalidates the locked plan requires a Plan Delta and independent revalidation before affected work continues.
@@ -202,6 +276,7 @@ Material new evidence that invalidates the locked plan requires a Plan Delta and
 - Route a fresh Context Packet for one approved step at a time.
 - Installed skill does not mean active skill.
 - Use compact evidence-linked findings instead of forwarding full transcripts.
+- Use a validated compact rollover handoff instead of copying the full previous conversation into a fresh provider session.
 - Use diff-first context after implementation.
 - Never load the full Graphify graph into model context.
 - Token optimization never overrides correctness, security, or user intent.
