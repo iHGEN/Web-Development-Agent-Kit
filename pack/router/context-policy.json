@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "mode": "strict-routed-context",
   "runtime": "node+npm",
   "principles": {
@@ -22,12 +22,13 @@
     "handoff_uses_summary_not_full_history": true,
     "original_prompt_always_available_to_captain": true,
     "web_kit_runtime_requires_node_not_python": true,
-    "automatic_context_rollover_under_session_controller": true,
+    "transparent_context_rollover_enabled_after_normal_install": true,
     "default_context_rollover_threshold_percent": 50,
-    "rollover_only_at_safe_workflow_unit_boundary": true,
+    "rollover_only_at_safe_provider_turn_boundary": true,
     "validate_handoff_before_fresh_provider_session": true,
     "fresh_session_verifies_handoff_against_repository": true,
-    "controller_owns_context_reset_in_controlled_sessions": true,
+    "transparent_supervisor_preserves_native_provider_ui": true,
+    "outside_web_kit_projects_provider_command_passes_through": true,
     "controller_never_silently_escalates_provider_permissions": true
   },
   "repository_navigation": {
@@ -103,40 +104,44 @@
     }
   },
   "session_control": {
-    "enabled_when_launched_by_controller": true,
-    "controller": ".agent-core/bin/session-controller.mjs",
+    "normal_install_installs_user_supervisor": true,
+    "user_runtime_home": "~/.web-kit",
+    "shim_bin": "~/.web-kit/bin",
+    "normal_provider_commands": ["codex", "claude"],
+    "supported_providers": ["codex", "claude"],
+    "project_activation_marker": ".agent-kit.json",
     "canonical_rule": ".agent-core/rules/context-rollover.md",
     "control_agent": "context-rollover-manager",
-    "supported_providers": ["codex", "claude"],
     "default_rollover_threshold_percent": 50,
     "threshold_min_percent": 10,
     "threshold_max_percent": 90,
+    "global_config": "~/.web-kit/config.json",
+    "project_override": ".agent-kit.json#context_rollover.threshold_percent",
+    "transparent_supervisor": "~/.web-kit/context-supervisor.mjs",
+    "provider_bridge": "~/.web-kit/provider-bridge.mjs",
+    "installed_supervisor_setup": ".agent-core/bin/supervisor-setup.mjs",
+    "explicit_session_controller_fallback": ".agent-core/bin/session-controller.mjs",
+    "state_root": ".agent-core/state/context-rollover/",
+    "compatibility_handoff_state": ".agent-core/state/context-handoff.json",
+    "activation_rule": "When the normal codex/claude command is invoked below a Web-Kit project, the user-level shim transparently starts the native provider under supervision. Outside a Web-Kit project, administrative/noninteractive commands, or when supervision is disabled, pass the real provider the original arguments unchanged.",
+    "safe_boundary": "Evaluate threshold from provider lifecycle telemetry at an assistant-turn boundary. Do not intentionally terminate the provider in the middle of an edit/tool call merely because usage crossed the threshold during that turn.",
+    "handoff_rule": "At/above threshold, end the now-idle old TUI, attempt one read-only/programmatic resume solely to produce a compact JSON handoff, combine it with current repository/Git state, validate the handoff, then start a genuinely fresh native provider TUI with a short prompt pointing to the handoff.",
+    "fresh_context_rule": "The fresh provider reads the exact handoff first, verifies material claims against current source/diff/tests/runtime, reconciles mismatches in favor of repository evidence, avoids repeating completed work, and resumes the recorded next action.",
+    "authority_rule": "Context handoff is routing/state evidence only. Current source, current diff, relevant tests/build, and runtime evidence override the handoff.",
+    "provider_process_rule": "The transparent supervisor preserves the normal interactive provider UI. It does not emulate /clear or /new terminal keystrokes and does not require the developer to launch Web Kit for every AI session.",
     "codex": {
-      "default_sandbox": "workspace-write",
-      "default_approval": "never",
-      "allowed_sandbox_modes": ["read-only", "workspace-write", "danger-full-access"],
-      "allowed_approval_modes": ["untrusted", "on-request", "never"],
-      "never_silently_select": ["danger-full-access"]
+      "telemetry": "process-local agent-turn-complete notify bridge plus current local Codex session context/token-count state",
+      "configuration_injection": "temporary CLI -c notify override",
+      "preserve_existing_notify": true
     },
     "claude": {
-      "default_permission_mode": "auto",
-      "allowed_permission_modes": ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"],
-      "never_silently_select": ["bypassPermissions"]
+      "telemetry": "temporary statusLine bridge using context_window.used_percentage",
+      "configuration_injection": "temporary command-line --settings overlay",
+      "preserve_existing_statusline_best_effort": true
     },
-    "safe_boundary": "Evaluate rollover only after the active provider finishes one safe Web-Kit workflow unit and persists session-progress.json. Do not intentionally interrupt a provider in the middle of an edit/tool call.",
-    "progress_state": ".agent-core/state/session-progress.json",
-    "controller_state": ".agent-core/state/session-controller.json",
-    "handoff_state": ".agent-core/state/context-handoff.json",
-    "handoff_archive": ".agent-core/state/handoffs/",
-    "handoff_rule": "Before creating a fresh provider session, validate a compact handoff containing original request, workflow progress, decisions/constraints, changed/validated scope, repository snapshot, exact next action, rollover reason, and context telemetry provenance.",
-    "fresh_context_rule": "The first cycle of a fresh provider session reads the pending handoff before broad discovery, verifies material claims against current source/diff/tests/runtime, reconciles mismatches, and resumes the exact recorded next action.",
-    "authority_rule": "Context handoff is routing/state evidence only. Current source, current diff, relevant tests/build, and runtime evidence override the handoff.",
-    "provider_process_rule": "The controller uses provider structured/headless modes. Below threshold it resumes the current provider session; at/above threshold it launches a genuinely fresh provider process/session and injects the validated handoff. It does not emulate /clear or /new terminal keystrokes.",
-    "permission_rule": "Controlled automation must be able to progress without hidden privilege escalation. Codex defaults to workspace-write with approval=never. Claude defaults to auto permission mode. Any stronger unrestricted mode requires explicit user configuration; Web Kit never silently selects Codex danger-full-access or Claude bypassPermissions.",
-    "controlled_ai_rule": "When WEB_KIT_SESSION_CONTROLLER=1, the AI must not run /clear, /new, /compact, or ask the user to reset context. It completes one safe workflow unit and writes session-progress.json; the controller owns rollover.",
-    "telemetry_rule": "Use provider-reported current context occupancy when available. Do not use cumulative lifetime token spend as current context percentage. If telemetry remains unavailable for the configured fallback cycle count, use a conservative telemetry-unavailable-safety rollover and record that it was not an exact threshold measurement.",
-    "done_rule": "session-progress status=done is valid only after the original request passes the canonical workflow's required final validation.",
-    "blocked_rule": "status=blocked stops the controller and preserves state only for a genuine user/permission dependency."
+    "controlled_ai_rule": "When WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1, the AI finishes its current turn normally and must not manually /clear, /new, /compact, or ask the user to restart due to context pressure. The outer supervisor owns rollover.",
+    "managed_policy_rule": "If provider/enterprise policy prevents telemetry injection, do not weaken or bypass it. The provider remains usable; transparent threshold rollover may be unavailable for that invocation.",
+    "fallback_rule": "The explicit .agent-core/bin/session-controller.mjs and npm session command remain available for CI/headless automation, debugging, and environments where transparent user-level shims cannot be installed."
   },
   "runtime_policy": {
     "required": ["node", "npm"],
@@ -145,8 +150,8 @@
     "graphify_python_managed_by_uv": true,
     "graphify_setup": ".agent-core/rules/graphify-setup.mjs",
     "graphify_completion_command": "node .agent-core/rules/graphify-setup.mjs --project . --complete",
-    "session_controller_requires_provider_cli": true,
-    "session_controller_provider_clis": ["codex", "claude"]
+    "transparent_context_supervisor_requires_provider_cli": true,
+    "transparent_context_supervisor_provider_clis": ["codex", "claude"]
   },
   "task_sizes": {
     "small": {
@@ -179,7 +184,7 @@
     "Do not force Graphify before an exact text/symbol/path lookup; targeted current-source search is cheaper and more direct for that question type.",
     "Do not read generated, vendor, build, coverage, dependency-cache, Graphify output, or binary output unless the task explicitly targets it.",
     "If the hard candidate-file cap would be exceeded, return to the Captain for a scope/context review before reading more.",
-    "Do not solve context pressure by forwarding the full prior transcript to a fresh session; use the validated compact handoff and re-read only evidence required for correctness."
+    "Do not solve context pressure by replaying the full prior transcript to a fresh session; use the validated compact handoff and re-read only evidence required for correctness."
   ],
   "excluded_paths": [
     ".git/**",
