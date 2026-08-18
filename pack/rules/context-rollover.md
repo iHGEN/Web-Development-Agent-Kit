@@ -32,19 +32,68 @@ node .agent-core/bin/session-controller.mjs \
   --prompt "<task>"
 ```
 
-The npm launcher may invoke the same controller through `npx @ihgen/web-kit session ...`.
+The npm launcher invokes the same controller through:
+
+```bash
+npx @ihgen/web-kit session codex --prompt "<task>"
+npx @ihgen/web-kit session claude --prompt "<task>"
+```
 
 ## Provider strategy
 
-The controller owns the provider process.
+The controller owns the provider process through supported structured/headless CLI modes.
 
 ### Codex
 
-Use Codex's structured/headless execution path. Continue below threshold by resuming the current Codex thread. At rollover, start a new `codex exec` thread with the validated Web-Kit handoff.
+Use Codex non-interactive `exec` mode. Below threshold, resume the current Codex thread. At rollover, start a new `codex exec` thread with the validated Web-Kit handoff.
+
+Default controlled automation permissions are intentionally bounded:
+
+```text
+sandbox  = workspace-write
+approval = never
+```
+
+This allows the controller to continue code-changing workflow units without stopping for interactive approval while keeping Codex inside its workspace-write sandbox by default.
+
+Overrides:
+
+```bash
+--codex-sandbox read-only|workspace-write|danger-full-access
+--codex-approval untrusted|on-request|never
+```
+
+Web Kit MUST NOT silently select `danger-full-access`.
 
 ### Claude
 
-Use Claude Code's programmatic/stream-JSON execution path. Continue below threshold by resuming the current Claude session. At rollover, start a new `claude -p` session with the validated Web-Kit handoff.
+Use Claude Code programmatic/stream-JSON mode. Below threshold, resume the current Claude session. At rollover, start a fresh `claude -p` session with the validated Web-Kit handoff.
+
+Default controlled automation permission mode:
+
+```text
+permission-mode = auto
+```
+
+Override when the user's Claude configuration requires another supported mode:
+
+```bash
+--claude-permission-mode default|acceptEdits|plan|auto|dontAsk|bypassPermissions
+```
+
+Web Kit MUST NOT silently select `bypassPermissions`. If `auto` is disabled or rejected by the user's Claude configuration, stop with a clear provider error and let the user explicitly choose/configure an appropriate mode.
+
+### Permission principle
+
+The Session Controller is automatic, but automatic does not mean unrestricted.
+
+```text
+Codex default  -> workspace-write + no interactive approval pauses
+Claude default -> auto permission mode
+
+never silently -> Codex danger-full-access
+never silently -> Claude bypassPermissions
+```
 
 The automatic controller does **not** emulate terminal keystrokes for `/clear` or `/new`. Starting a fresh provider process/session is more reliable and cross-platform.
 
@@ -52,17 +101,19 @@ The automatic controller does **not** emulate terminal keystrokes for `/clear` o
 
 Do not terminate an AI in the middle of an edit/tool call merely because usage crosses the threshold during an active unit.
 
-Each provider cycle is instructed to complete exactly one safe Web-Kit workflow unit and persist `session-progress.json`. The controller evaluates context after that unit returns.
+Each provider cycle is instructed to complete exactly one safe Web-Kit workflow unit and freshly persist `session-progress.json`. The controller evaluates context only after that unit returns.
 
 ```text
 provider cycle
   -> complete one safe workflow unit
-  -> write session-progress.json
+  -> freshly write session-progress.json
   -> provider returns
   -> controller reads context telemetry
   -> below threshold: resume same provider session
   -> threshold reached: validate/write handoff, start fresh provider session
 ```
+
+Stale `session-progress.json` from a previous controller cycle is rejected. If the provider fails to rewrite it, the controller records a recovery state instead of trusting stale progress.
 
 ## Required state
 
@@ -100,6 +151,7 @@ Before a fresh session is launched, the controller validates that the handoff co
 - original user request;
 - current progress state;
 - compact repository/git snapshot;
+- both staged and unstaged change summaries when Git is available;
 - exact next action;
 - timestamp;
 - authority reminder.
@@ -147,6 +199,6 @@ When status is `blocked`, the controller stops and preserves state because the t
 
 ## Uncontrolled interactive sessions
 
-If the user launches Codex/Claude directly rather than through Web Kit's Session Controller, Web Kit cannot reliably own or replace that terminal process.
+If the user launches Codex/Claude directly rather than through Web Kit's Session Controller, Web Kit cannot reliably own or replace that already-running terminal process.
 
 In that case, the Context Rollover Manager may prepare a handoff and advise the provider's normal fresh-session command, but this is a fallback. Fully automatic rollover requires the Session Controller to own the provider process from the beginning.
