@@ -10,6 +10,7 @@ on:
       - "scripts/**"
       - "pack/agents/**"
       - "pack/rules/**"
+      - "pack/runtime/**"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/npm-cli-smoke.yml"
@@ -22,6 +23,7 @@ on:
       - "scripts/**"
       - "pack/agents/**"
       - "pack/rules/**"
+      - "pack/runtime/**"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/npm-cli-smoke.yml"
@@ -56,6 +58,11 @@ jobs:
           node --check scripts/ai-compat.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
+          node --check pack/runtime/session-controller.mjs
+          node bin/web-kit.js --help | grep -q 'session codex'
+          node bin/web-kit.js --help | grep -q 'session claude'
+          node bin/web-kit.js --help | grep -q 'codex-sandbox'
+          node bin/web-kit.js --help | grep -q 'claude-permission-mode'
 
       - name: Prove Web Kit does not call Python
         shell: bash
@@ -132,6 +139,9 @@ jobs:
           test -f "$SAMPLE/.agent-core/rules/graphify-refresh.mjs"
           test -f "$SAMPLE/.agent-core/rules/graphify-setup.mjs"
           test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
+          test -f "$SAMPLE/.agent-core/rules/context-rollover.md"
+          test -f "$SAMPLE/.agent-core/agents/context-rollover-manager.md"
+          test -f "$SAMPLE/.agent-core/bin/session-controller.mjs"
           test -f "$SAMPLE/.agent-core/bin/web-kit-update.mjs"
           test ! -e "$SAMPLE/.agent-core/rules/graphify-refresh.py"
           test ! -e "$SAMPLE/.agent-core/rules/graphify-setup.py"
@@ -140,6 +150,8 @@ jobs:
           grep -q 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' "$SAMPLE/AGENTS.md"
           grep -q 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/AGENTS.md"
           grep -q 'graphify-refresh.mjs' "$SAMPLE/AGENTS.md"
+          grep -q 'WEB_KIT_SESSION_CONTROLLER=1' "$SAMPLE/AGENTS.md"
+          grep -q 'context-handoff.json' "$SAMPLE/AGENTS.md"
 
           node - "$SAMPLE" <<'NODE'
           const fs = require('fs');
@@ -147,11 +159,15 @@ jobs:
           const sample = process.argv[2];
           const profile = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/index/project-profile.json'), 'utf8'));
           const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
+          const policy = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/routing/context-policy.json'), 'utf8'));
           if (profile.capabilities.graphify.detected !== false) process.exit(1);
           if (profile.capabilities.graphify.graph_ready !== false) process.exit(1);
           if (profile.capabilities.graphify.routing_mode !== 'standard') process.exit(1);
           if (cfg.runtime !== 'node+npm') process.exit(1);
           if (cfg.ai_compatibility.runtime !== 'node+npm') process.exit(1);
+          if (cfg.ai_compatibility.context_rollover_threshold_percent !== 50) process.exit(1);
+          if (cfg.ai_compatibility.session_controller !== '.agent-core/bin/session-controller.mjs') process.exit(1);
+          if (policy.version !== 6 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
           NODE
 
       - name: Test non-destructive update
@@ -176,6 +192,8 @@ jobs:
           npx --yes "./${{ steps.pack.outputs.tarball }}" --project "$RUNNER_TEMP/web-kit-sample" | tee "$OUTPUT"
           grep -q 'Decision:  doctor' "$OUTPUT"
           grep -q 'Runtime:   Node.js' "$OUTPUT"
+          grep -q 'Session Controller: OK' "$OUTPUT"
+          grep -q 'Context rollover rule: OK' "$OUTPUT"
 
       - name: Test Graphify detection and Node freshness gate
         shell: bash
