@@ -34,6 +34,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    env:
+      WEB_KIT_USER_HOME: ${{ runner.temp }}/web-kit-user-home
+      WEB_KIT_HOME: ${{ runner.temp }}/web-kit-user-home/.web-kit
 
     steps:
       - name: Checkout
@@ -56,6 +59,9 @@ jobs:
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
           node --check pack/runtime/session-controller.mjs
+          node --check pack/runtime/context-supervisor.mjs
+          node --check pack/runtime/provider-bridge.mjs
+          node --check pack/runtime/supervisor-setup.mjs
 
       - name: Pack npm CLI
         id: pack
@@ -91,11 +97,12 @@ jobs:
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-cross-platform"
+          mkdir -p "$WEB_KIT_USER_HOME"
           npx --yes "./${{ steps.pack.outputs.tarball }}" install \
             --ref main \
             --project "$SAMPLE"
 
-      - name: Verify installed project
+      - name: Verify installed project and user supervisor
         shell: bash
         run: |
           set -euo pipefail
@@ -119,19 +126,33 @@ jobs:
             '.agent-core/rules/graphify-refresh.mjs',
             '.agent-core/agents/context-rollover-manager.md',
             '.agent-core/bin/session-controller.mjs',
+            '.agent-core/bin/context-supervisor.mjs',
+            '.agent-core/bin/provider-bridge.mjs',
+            '.agent-core/bin/supervisor-setup.mjs',
             '.agent-core/bin/web-kit-update.mjs'
           ];
-          for (const rel of required) {
-            if (!fs.existsSync(path.join(sample, rel))) throw new Error(`missing ${rel}`);
-          }
+          for (const rel of required) if (!fs.existsSync(path.join(sample, rel))) throw new Error(`missing ${rel}`);
+
           const agents = fs.readFileSync(path.join(sample, 'AGENTS.md'), 'utf8');
           if (!agents.startsWith('# Existing project AGENTS\n\nKeep this line.\n')) throw new Error('project AGENTS content was overwritten');
           if (!agents.includes('WEB-AGENT-KIT:AI-ROLES:START')) throw new Error('roles block missing');
-          if (!agents.includes('WEB_KIT_SESSION_CONTROLLER=1')) throw new Error('automatic rollover role missing');
+          if (!agents.includes('WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1')) throw new Error('transparent rollover role missing');
           if (fs.existsSync(path.join(sample, 'AGENTS.web-kit.md'))) throw new Error('legacy AGENTS.web-kit.md created');
+
           const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
           if (cfg.runtime !== 'node+npm') throw new Error('runtime mismatch');
-          if (cfg.ai_compatibility.context_rollover_threshold_percent !== 50) throw new Error('rollover threshold mismatch');
+          if (cfg.ai_compatibility.transparent_context_rollover_threshold_percent !== 50) throw new Error('rollover threshold mismatch');
+
+          const webHome = process.env.WEB_KIT_HOME;
+          for (const rel of ['context-supervisor.mjs','provider-bridge.mjs','supervisor-setup.mjs','config.json']) {
+            if (!fs.existsSync(path.join(webHome, rel))) throw new Error(`missing user supervisor ${rel}`);
+          }
+          const shimExt = process.platform === 'win32' ? '.cmd' : '';
+          for (const provider of ['codex','claude']) {
+            if (!fs.existsSync(path.join(webHome, 'bin', provider + shimExt))) throw new Error(`missing ${provider} shim`);
+          }
+          const userCfg = JSON.parse(fs.readFileSync(path.join(webHome, 'config.json'), 'utf8'));
+          if (userCfg.threshold_percent !== 50 || userCfg.enabled !== true) throw new Error('user supervisor config mismatch');
           NODE
 
       - name: Run doctor
