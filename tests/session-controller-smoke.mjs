@@ -83,3 +83,5 @@ for (const provider of ["codex", "claude"]) {
 }
 
 console.log("Automatic Session Controller smoke: PASS");
+
+// CI-only branch trigger; not intended for merge.
