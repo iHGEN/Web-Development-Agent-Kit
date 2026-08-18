@@ -59,10 +59,11 @@ jobs:
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
           node --check pack/runtime/session-controller.mjs
+          node --check pack/runtime/context-supervisor.mjs
+          node --check pack/runtime/provider-bridge.mjs
+          node --check pack/runtime/supervisor-setup.mjs
           node bin/web-kit.js --help | grep -q 'session codex'
           node bin/web-kit.js --help | grep -q 'session claude'
-          node bin/web-kit.js --help | grep -q 'codex-sandbox'
-          node bin/web-kit.js --help | grep -q 'claude-permission-mode'
 
       - name: Prove Web Kit does not call Python
         shell: bash
@@ -70,7 +71,9 @@ jobs:
           set -euo pipefail
           MOCK="$RUNNER_TEMP/no-python"
           LOG="$RUNNER_TEMP/python-calls.log"
-          mkdir -p "$MOCK"
+          USER_HOME="$RUNNER_TEMP/web-kit-user-home"
+          WEB_HOME="$USER_HOME/.web-kit"
+          mkdir -p "$MOCK" "$USER_HOME"
           : > "$LOG"
           for name in python python3 py; do
             cat > "$MOCK/$name" <<'SH'
@@ -82,6 +85,8 @@ jobs:
           done
           echo "$MOCK" >> "$GITHUB_PATH"
           echo "WEB_KIT_PYTHON_CALL_LOG=$LOG" >> "$GITHUB_ENV"
+          echo "WEB_KIT_USER_HOME=$USER_HOME" >> "$GITHUB_ENV"
+          echo "WEB_KIT_HOME=$WEB_HOME" >> "$GITHUB_ENV"
 
       - name: Validate npm package contents
         shell: bash
@@ -124,7 +129,8 @@ jobs:
           TARBALL="./${{ steps.pack.outputs.tarball }}"
 
           npx --yes "$TARBALL" scan --ref main --project "$SAMPLE"
-          npx --yes "$TARBALL" install --ref main --project "$SAMPLE"
+          INSTALL_LOG="$RUNNER_TEMP/install.log"
+          npx --yes "$TARBALL" install --ref main --project "$SAMPLE" | tee "$INSTALL_LOG"
 
           test -f "$SAMPLE/AGENTS.md"
           test -f "$SAMPLE/CLAUDE.md"
@@ -142,16 +148,28 @@ jobs:
           test -f "$SAMPLE/.agent-core/rules/context-rollover.md"
           test -f "$SAMPLE/.agent-core/agents/context-rollover-manager.md"
           test -f "$SAMPLE/.agent-core/bin/session-controller.mjs"
+          test -f "$SAMPLE/.agent-core/bin/context-supervisor.mjs"
+          test -f "$SAMPLE/.agent-core/bin/provider-bridge.mjs"
+          test -f "$SAMPLE/.agent-core/bin/supervisor-setup.mjs"
           test -f "$SAMPLE/.agent-core/bin/web-kit-update.mjs"
           test ! -e "$SAMPLE/.agent-core/rules/graphify-refresh.py"
           test ! -e "$SAMPLE/.agent-core/rules/graphify-setup.py"
           test ! -e "$SAMPLE/.agent-core/bin/remote-install.py"
 
+          test -f "$WEB_KIT_HOME/context-supervisor.mjs"
+          test -f "$WEB_KIT_HOME/provider-bridge.mjs"
+          test -f "$WEB_KIT_HOME/supervisor-setup.mjs"
+          test -x "$WEB_KIT_HOME/bin/codex"
+          test -x "$WEB_KIT_HOME/bin/claude"
+          grep -q 'ihgen-web-kit-context-supervisor' "$WEB_KIT_USER_HOME/.bashrc"
+          grep -q 'Transparent context supervisor: enabled' "$INSTALL_LOG"
+          grep -q 'use `codex` or `claude` normally' "$INSTALL_LOG"
+
           grep -q 'WEB-AGENT-KIT:PROJECT-SUMMARY:START' "$SAMPLE/AGENTS.md"
           grep -q 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/AGENTS.md"
           grep -q 'graphify-refresh.mjs' "$SAMPLE/AGENTS.md"
+          grep -q 'WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1' "$SAMPLE/AGENTS.md"
           grep -q 'WEB_KIT_SESSION_CONTROLLER=1' "$SAMPLE/AGENTS.md"
-          grep -q 'context-handoff.json' "$SAMPLE/AGENTS.md"
 
           node - "$SAMPLE" <<'NODE'
           const fs = require('fs');
@@ -165,12 +183,13 @@ jobs:
           if (profile.capabilities.graphify.routing_mode !== 'standard') process.exit(1);
           if (cfg.runtime !== 'node+npm') process.exit(1);
           if (cfg.ai_compatibility.runtime !== 'node+npm') process.exit(1);
-          if (cfg.ai_compatibility.context_rollover_threshold_percent !== 50) process.exit(1);
-          if (cfg.ai_compatibility.session_controller !== '.agent-core/bin/session-controller.mjs') process.exit(1);
-          if (policy.version !== 6 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
+          if (cfg.ai_compatibility.transparent_context_rollover_threshold_percent !== 50) process.exit(1);
+          if (cfg.ai_compatibility.explicit_session_controller_fallback !== '.agent-core/bin/session-controller.mjs') process.exit(1);
+          if (policy.version !== 7 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
+          if (!policy.session_control.normal_install_installs_user_supervisor) process.exit(1);
           NODE
 
-      - name: Test non-destructive update
+      - name: Test non-destructive update and supervisor idempotence
         shell: bash
         run: |
           set -euo pipefail
@@ -183,6 +202,7 @@ jobs:
           test "$BEFORE" = "$AFTER"
           grep -q 'PROJECT OWNED CLAUDE RULE' "$SAMPLE/CLAUDE.md"
           test "$(grep -c 'WEB-AGENT-KIT:AI-ROLES:START' "$SAMPLE/CLAUDE.md")" -eq 1
+          test "$(grep -c '>>> ihgen-web-kit-context-supervisor >>>' "$WEB_KIT_USER_HOME/.bashrc")" -eq 1
 
       - name: Test smart mode on current installation
         shell: bash
