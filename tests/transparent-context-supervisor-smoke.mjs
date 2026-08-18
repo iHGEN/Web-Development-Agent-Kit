@@ -11,7 +11,8 @@ const fixture = path.join(repo, "tests", "fixtures", "mock-transparent-provider.
 if (process.platform !== "win32") fs.chmodSync(fixture, 0o755);
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 45_000, ...options });
+  const shell = options.shell ?? (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command));
+  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 45_000, ...options, shell });
   if (result.error || result.status !== 0) {
     console.error(result.stdout || "");
     console.error(result.stderr || "");
@@ -35,6 +36,18 @@ const commonEnv = {
   WEB_KIT_DISABLE_SHELL_PROFILE: "0"
 };
 
+function realProvider(provider) {
+  if (process.platform !== "win32") return fixture;
+  const wrapper = path.join(tempHome, `${provider}-real.cmd`);
+  const node = process.execPath.replace(/"/g, '""');
+  const script = fixture.replace(/"/g, '""');
+  fs.writeFileSync(wrapper, `@echo off\r\n"${node}" "${script}" %*\r\n`, "utf8");
+  return wrapper;
+}
+function shimPath(provider) {
+  return path.join(webKitHome, "bin", process.platform === "win32" ? `${provider}.cmd` : provider);
+}
+
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-transparent-project-"));
 fs.mkdirSync(path.join(project, "src"), { recursive: true });
 fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ name: "transparent-supervisor-smoke" }, null, 2));
@@ -49,8 +62,8 @@ assert(firstStatus.enabled === true, "transparent supervisor was not enabled");
 assert(firstStatus.threshold_percent === 50, "default transparent threshold is not 50");
 assert(fs.existsSync(path.join(webKitHome, "context-supervisor.mjs")), "user supervisor missing");
 assert(fs.existsSync(path.join(webKitHome, "provider-bridge.mjs")), "user provider bridge missing");
-assert(fs.existsSync(path.join(webKitHome, "bin", "codex")), "codex shim missing");
-assert(fs.existsSync(path.join(webKitHome, "bin", "claude")), "claude shim missing");
+assert(fs.existsSync(shimPath("codex")), "codex shim missing");
+assert(fs.existsSync(shimPath("claude")), "claude shim missing");
 
 const bashrc = path.join(tempHome, ".bashrc");
 const existing = "# project-owned shell content\n";
@@ -63,10 +76,10 @@ assert((bashText.match(/>>> ihgen-web-kit-context-supervisor >>>/g) || []).lengt
 
 for (const provider of ["codex", "claude"]) {
   const envName = provider === "codex" ? "WEB_KIT_REAL_CODEX_BIN" : "WEB_KIT_REAL_CLAUDE_BIN";
-  const shim = path.join(webKitHome, "bin", provider);
+  const shim = shimPath(provider);
   const env = {
     ...commonEnv,
-    [envName]: fixture,
+    [envName]: realProvider(provider),
     WEB_KIT_TEST_PROVIDER: provider,
     CODEX_HOME: path.join(tempHome, ".codex")
   };
@@ -81,7 +94,10 @@ for (const provider of ["codex", "claude"]) {
   assert(fs.existsSync(path.join(project, ".agent-core", "state", "transparent-test", `${provider}-fresh.txt`)), `${provider}: fresh-context bootstrap prompt not received`);
 
   const handoffRoot = path.join(project, ".agent-core", "state", "context-rollover", "handoffs");
-  const latest = fs.readdirSync(handoffRoot).filter((name) => name.endsWith("-latest.json")).map((name) => path.join(handoffRoot, name)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  const latest = fs.readdirSync(handoffRoot)
+    .filter((name) => name.endsWith("-latest.json"))
+    .map((name) => path.join(handoffRoot, name))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
   const handoff = readJson(latest);
   assert(handoff.provider === provider, `${provider}: wrong handoff provider`);
   assert(Math.round(handoff.observed_context_percent) === 60, `${provider}: expected 60% rollover`);
@@ -93,11 +109,11 @@ for (const provider of ["codex", "claude"]) {
 const outside = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-transparent-outside-"));
 const outsideEnv = {
   ...commonEnv,
-  WEB_KIT_REAL_CODEX_BIN: fixture,
+  WEB_KIT_REAL_CODEX_BIN: realProvider("codex"),
   WEB_KIT_TEST_PROVIDER: "codex"
 };
-const pass = run(path.join(webKitHome, "bin", "codex"), ["hello"], { cwd: outside, env: outsideEnv });
+const pass = run(shimPath("codex"), ["hello"], { cwd: outside, env: outsideEnv });
 assert(pass.stdout.includes("codex passthrough"), "outside Web-Kit project did not pass through to real provider");
 assert(!fs.existsSync(path.join(outside, ".agent-core")), "outside pass-through created Web-Kit project state");
 
-console.log("Transparent Context Supervisor smoke: PASS");
+console.log(`Transparent Context Supervisor smoke: PASS (${process.platform})`);
