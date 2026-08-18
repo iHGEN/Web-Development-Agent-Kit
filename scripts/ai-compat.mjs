@@ -126,17 +126,21 @@ For Web-Kit-managed engineering work:
 
 1. Follow \`.agent-core/rules/workflow.md\` as the single lifecycle.
 2. Follow \`.agent-core/rules/repository-navigation.md\` for question-aware repository navigation.
-3. Read \`.agent-core/index/project-profile.json\` first for lightweight project routing metadata.
-4. Use \`.agent-core/routing/context-policy.json\` to keep context bounded and activate only the roles/skills needed for the current step.
-5. If \`.agent-core/state/graphify-bootstrap-role.md\` exists, treat it as a **temporary current-AI role** and execute it before normal Graphify-assisted repository work. After the graph is built, follow that role's completion command; successful completion deletes the temporary role.
-6. Act only in the role routed for the current phase: Captain, discovery/indexing/router, architect/planner, implementation worker, specialist reviewer, Handoff Validator, or Final Integration Validator.
-7. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
-8. For exact text/symbol/path lookup, use targeted current-source search (\`rg\` or equivalent) directly.
-9. For relationship/dependency/ownership/impact discovery, run \`node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>\` before the first Graphify query. Use Graphify only when the resulting state is fresh, then verify exact source before planning or editing.
-10. After every completed code-changing step, run the same Node Graph Refresh Gate once before Handoff Validator or another agent relies on Graphify.
-11. Never run \`graphify update .\` directly as a replacement for the managed Graph Refresh Gate.
-12. Current source, current diff, tests/build, and runtime evidence override Graphify/index summaries.
-13. Web Kit runtime commands use Node.js. Do not require a system Python installation for Web Kit itself.
+3. Follow \`.agent-core/rules/context-rollover.md\` when the task is running under the automatic Session Controller.
+4. Read \`.agent-core/index/project-profile.json\` first for lightweight project routing metadata.
+5. Use \`.agent-core/routing/context-policy.json\` to keep context bounded and activate only the roles/skills needed for the current step.
+6. If \`.agent-core/state/graphify-bootstrap-role.md\` exists, treat it as a **temporary current-AI role** and execute it before normal Graphify-assisted repository work. After the graph is built, follow that role's completion command; successful completion deletes the temporary role.
+7. Act only in the role routed for the current phase: Captain, discovery/indexing/router, architect/planner, implementation worker, specialist reviewer, Context Rollover Manager, Handoff Validator, or Final Integration Validator.
+8. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
+9. For exact text/symbol/path lookup, use targeted current-source search (\`rg\` or equivalent) directly.
+10. For relationship/dependency/ownership/impact discovery, run \`node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>\` before the first Graphify query. Use Graphify only when the resulting state is fresh, then verify exact source before planning or editing.
+11. After every completed code-changing step, run the same Node Graph Refresh Gate once before Handoff Validator or another agent relies on Graphify.
+12. Never run \`graphify update .\` directly as a replacement for the managed Graph Refresh Gate.
+13. Current source, current diff, tests/build, and runtime evidence override Graphify/index/handoff summaries.
+14. When \`WEB_KIT_SESSION_CONTROLLER=1\`, complete exactly one safe workflow unit per controller cycle and write/update \`.agent-core/state/session-progress.json\` before the final response. Use \`status=done\` only after required final validation passes.
+15. If \`.agent-core/state/context-handoff.json\` is pending for the active controlled task, read it first in the fresh context, then verify its material claims against current repository evidence before continuing its recorded next action.
+16. In a controlled session, do not run \`/clear\`, \`/new\`, \`/compact\`, or ask the user to reset context. The Node Session Controller owns automatic rollover and fresh-provider-process creation.
+17. Web Kit runtime commands use Node.js. Do not require a system Python installation for Web Kit itself.
 
 If project-owned instructions outside this block conflict with Web-Kit workflow mechanics, preserve them but report the conflict with \`doctor\`; do not silently delete user content.
 ${ROLE_END}`;
@@ -169,6 +173,10 @@ export function applyAiCompatibility(project, profile = null) {
     canonical_instructions: "AGENTS.md",
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
+    automatic_context_rollover_rule: ".agent-core/rules/context-rollover.md",
+    session_controller: ".agent-core/bin/session-controller.mjs",
+    context_rollover_threshold_percent: 50,
+    session_controller_providers: ["codex", "claude"],
     temporary_graphify_role: ".agent-core/state/graphify-bootstrap-role.md",
     native_agents_md: ["codex", "kimi", "agents-md-compatible"],
     managed_roles: {
