@@ -67,59 +67,84 @@ Machine-readable project metadata is:
 
 The original user request remains authoritative over later interpretations.
 
-## Automatic context rollover
+## Transparent automatic context rollover
 
-For long tasks, Web Kit can own Codex or Claude through the installed Node Session Controller:
-
-```bash
-node .agent-core/bin/session-controller.mjs \
-  --provider codex \
-  --threshold 50 \
-  --prompt "<task>"
-```
-
-or:
+The normal public installation command:
 
 ```bash
-node .agent-core/bin/session-controller.mjs \
-  --provider claude \
-  --threshold 50 \
-  --prompt "<task>"
+npx @ihgen/web-kit
 ```
 
-The npm launcher may expose the same flow through `npx @ihgen/web-kit session ...`.
+also installs a lightweight user-level supervisor under `~/.web-kit`. After opening a new terminal once, the normal provider commands remain the day-to-day UX:
+
+```bash
+codex
+claude
+```
+
+The developer does not need to launch a Web-Kit session command for each task.
+
+The shims activate only when the current directory is inside a project with a valid `.agent-kit.json`. Outside a Web-Kit project the real provider receives the original invocation unchanged.
 
 Default behavior:
 
 ```text
-provider context < 50%
-  -> complete one safe workflow unit
-  -> persist session-progress.json
-  -> resume the same provider session
+normal codex / claude native TUI
+        ↓
+assistant turn completes
+        ↓
+current context < 50%
+  -> continue same native provider session
 
-provider context >= 50%
-  -> complete the current safe workflow unit
-  -> persist + validate compact context handoff
-  -> start a genuinely fresh provider process/session
-  -> fresh context reads the handoff
-  -> verify it against current source/diff/tests/runtime
-  -> continue the exact recorded next action
+current context >= 50%
+  -> safe turn boundary reached
+  -> end the now-idle old TUI
+  -> generate compact read-only handoff
+  -> combine with current Git/repository state
+  -> validate handoff
+  -> start a genuinely fresh native provider TUI
+  -> read the exact handoff
+  -> verify against current source/diff/tests/runtime
+  -> continue the recorded next action
 ```
 
-Controller state:
+The supervisor does not inject terminal keystrokes for `/clear` or `/new` and does not replace the provider's native interactive UI.
+
+When `WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1`, the active AI must not run `/clear`, `/new`, `/compact`, or ask the user to restart because of context pressure. Finish the current turn safely and let the outer supervisor own fresh-context creation.
+
+Transparent rollover state lives under:
 
 ```text
-.agent-core/state/session-controller.json
-.agent-core/state/session-progress.json
+.agent-core/state/context-rollover/
 .agent-core/state/context-handoff.json
-.agent-core/state/handoffs/
 ```
-
-The controller does not inject terminal keystrokes for `/clear` or `/new`. In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), the AI must not run `/clear`, `/new`, `/compact`, or ask the user to reset context. The controller owns fresh-context creation.
 
 The Context Rollover Manager is an always-available control role. Context handoffs are routing/state evidence only; current source, current diff, tests/build, and runtime evidence remain authoritative.
 
-Rollover is evaluated only after a safe workflow-unit boundary, not by intentionally killing an AI in the middle of an edit/tool call.
+### Provider monitoring
+
+Codex uses a process-local turn-complete notifier plus the active Codex session's local context/token-count state.
+
+Claude Code uses a temporary `--settings` overlay containing a status-line bridge that reads current `context_window.used_percentage`.
+
+Do not rewrite provider configuration files merely to monitor context. Preserve existing notify/status-line behavior when possible, and never weaken enterprise/managed provider policy to force monitoring.
+
+### Explicit Session Controller fallback
+
+The deterministic/headless fallback remains installed at:
+
+```text
+.agent-core/bin/session-controller.mjs
+```
+
+and may be exposed through:
+
+```bash
+npx @ihgen/web-kit session codex --prompt "<task>"
+npx @ihgen/web-kit session claude --prompt "<task>"
+```
+
+Use that for CI, debugging, or environments where user-level transparent shims cannot be installed. It is not the normal developer UX.
 
 ## Repository navigation
 
@@ -251,19 +276,7 @@ Captain closure against original request
 DONE
 ```
 
-When the Session Controller is active, the lifecycle above is unchanged. Provider sessions are only containers around workflow units:
-
-```text
-one safe workflow unit
-  ↓
-session progress
-  ↓
-context threshold decision
-  ├─ below threshold -> resume same provider session
-  └─ threshold reached -> validated handoff -> fresh provider session
-  ↓
-continue same canonical lifecycle
-```
+Transparent context rollover is an outer provider-session overlay around the lifecycle above. It never skips or replaces plan approval, per-step handoff validation, specialist validation, Plan Delta control, or final integration validation.
 
 No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
 
