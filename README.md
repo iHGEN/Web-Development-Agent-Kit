@@ -1,6 +1,6 @@
 # Web Development Agent Kit
 
-A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, automatic fresh-context rollover, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
+A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, transparent fresh-context rollover, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
 
 ## Runtime requirement
 
@@ -19,6 +19,8 @@ If Graphify or uv cannot be installed, Web Kit continues normally in standard ro
 
 ## Quick start
 
+Install/update Web Kit in the project:
+
 ```bash
 npx @ihgen/web-kit
 ```
@@ -32,7 +34,7 @@ Installed version = CLI version -> doctor
 Installed version > CLI version -> no downgrade; doctor
 ```
 
-Explicit commands:
+Explicit maintenance commands:
 
 ```bash
 npx @ihgen/web-kit install
@@ -40,90 +42,154 @@ npx @ihgen/web-kit update
 npx @ihgen/web-kit doctor
 npx @ihgen/web-kit scan
 npx @ihgen/web-kit graphify
+```
+
+## Transparent automatic context rollover
+
+The normal Web-Kit install also installs a small user-level supervisor under `~/.web-kit` and adds its shim directory to the user's shell PATH.
+
+Open a new terminal once after the first setup. From then on, **use the AI exactly as usual**:
+
+```bash
+cd my-project
+codex
+```
+
+or:
+
+```bash
+cd my-project
+claude
+```
+
+There is no required daily `npx`, `wk`, `session`, or `--prompt` command.
+
+### Activation behavior
+
+```text
+normal codex / claude
+        ↓
+~/.web-kit/bin transparent shim
+        ↓
+Web-Kit project found above CWD?
+      /                         \
+    NO                           YES
+     ↓                            ↓
+real provider unchanged     native provider TUI
+                                  ↓
+                         context supervisor active
+```
+
+Outside projects containing a valid `.agent-kit.json`, the shim simply passes the original provider command through.
+
+Provider administrative/noninteractive commands also pass through rather than being forced into interactive rollover control.
+
+### Default threshold
+
+```text
+50% current context used
+```
+
+At a safe assistant-turn boundary:
+
+```text
+native Codex / Claude
+        ↓
+assistant turn completes
+        ↓
+measure current context
+        ↓
+      < 50%
+        └── continue the same native session
+
+      >= 50%
+        ↓
+finish current turn safely
+        ↓
+end the now-idle old TUI
+        ↓
+prepare compact read-only handoff
+        ↓
+validate + save repository snapshot
+        ↓
+start a genuinely fresh native provider TUI
+        ↓
+read exact handoff
+        ↓
+verify source / diff / tests / runtime
+        ↓
+continue the recorded next action
+```
+
+Web Kit does **not** fake `/clear` or `/new` terminal keystrokes and does not replace Codex/Claude with a custom chat UI.
+
+The threshold is checked at a provider turn boundary, so Web Kit does not intentionally kill an AI in the middle of an edit/tool call to hit exactly 50.000%.
+
+### Provider telemetry
+
+Codex is supervised with a process-local turn-complete notifier. The notifier gives Web Kit the active thread/session ID, which is used to read that Codex session's current context/token-count state. Existing user notify configuration is preserved on a best-effort basis.
+
+Claude Code is supervised with a temporary `--settings` overlay that installs a status-line bridge. The bridge receives the provider's current `context_window.used_percentage`; when possible it also delegates to the user's existing status-line command.
+
+No provider configuration file is rewritten just to monitor context.
+
+### Rollover state
+
+Project-local state is kept under:
+
+```text
+.agent-core/state/context-rollover/
+├── supervisors/
+├── telemetry/
+├── requests/
+└── handoffs/
+
+.agent-core/state/context-handoff.json
+```
+
+A rollover handoff is routing/state evidence only. Current repository source, current diff, relevant tests/build, and runtime evidence remain authoritative.
+
+The **Context Rollover Manager** role tells a fresh AI to verify the handoff, avoid repeating completed work, and resume the exact next safe action.
+
+### Global configuration
+
+The user-level supervisor stores defaults at:
+
+```text
+~/.web-kit/config.json
+```
+
+Default:
+
+```json
+{
+  "enabled": true,
+  "threshold_percent": 50
+}
+```
+
+A project may override the threshold using `.agent-kit.json`:
+
+```json
+{
+  "context_rollover": {
+    "threshold_percent": 50
+  }
+}
+```
+
+Use `WEB_KIT_DISABLE_CONTEXT_SUPERVISOR=1` during Web-Kit installation if user-level shims are explicitly unwanted. The core engineering workflow still installs normally.
+
+### Explicit Session Controller fallback
+
+The older explicit controller remains available for deterministic headless automation, CI, debugging, or environments where user-level transparent shims cannot be installed:
+
+```bash
 npx @ihgen/web-kit session codex --prompt "<task>"
 npx @ihgen/web-kit session claude --prompt "<task>"
 ```
 
-## Automatic context rollover
-
-Long Codex/Claude tasks can run under Web Kit's Node Session Controller. The default rollover threshold is **50% current context usage**.
-
-Codex:
-
-```bash
-npx @ihgen/web-kit session codex \
-  --threshold 50 \
-  --prompt "Implement the requested feature"
-```
-
-Claude Code:
-
-```bash
-npx @ihgen/web-kit session claude \
-  --threshold 50 \
-  --prompt "Implement the requested feature"
-```
-
-You can also use a task file:
-
-```bash
-npx @ihgen/web-kit session claude \
-  --prompt-file ./task.md
-```
-
-Flow:
-
-```text
-start provider session
-      ↓
-execute one safe Web-Kit workflow unit
-      ↓
-write session-progress.json
-      ↓
-current context < 50% ?
-   /                  \
- YES                  NO
-  ↓                    ↓
-resume same       validate compact handoff
-provider session        ↓
-                   context-handoff.json
-                         ↓
-                  fresh provider process
-                         ↓
-                  read compact handoff
-                         ↓
-             verify source / diff / tests
-                         ↓
-                 continue exact next step
-```
-
-The controller does **not** fake terminal keystrokes for `/clear` or `/new`. It owns Codex/Claude through their structured/headless execution modes and starts a genuinely fresh provider process/session when rollover is required.
-
-In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), the active AI is instructed not to run `/clear`, `/new`, `/compact`, or ask the user to reset context. Web Kit handles it automatically.
-
-Rollover happens at the next **safe workflow-unit boundary**, not by intentionally killing an AI in the middle of an edit or tool call.
-
-Managed state:
-
-```text
-.agent-core/state/session-controller.json
-.agent-core/state/session-progress.json
-.agent-core/state/context-handoff.json
-.agent-core/state/handoffs/
-```
-
-The **Context Rollover Manager** role maintains compact state. A rollover handoff is routing/state evidence only: current repository source, current diff, tests/build, and runtime evidence remain authoritative.
-
-If exact provider context telemetry is temporarily unavailable, the controller can make a conservative safety rollover after the configured number of missing-telemetry cycles. That is recorded separately instead of pretending an exact 50% measurement was observed.
-
-Current automatic provider adapters:
-
-```text
-Codex CLI   ✅
-Claude Code ✅
-```
-
-Other assistants still use the same Web-Kit engineering workflow; a provider adapter can be added later without duplicating the lifecycle.
+This is **not** the normal developer UX.
 
 ## Non-destructive AI instruction files
 
@@ -382,7 +448,7 @@ Captain closure against original request
 DONE
 ```
 
-Automatic context rollover is an overlay around these workflow units; it does not skip or replace any phase, plan approval, handoff validation, or final integration gate.
+Automatic context rollover is an outer provider-session overlay around this lifecycle; it does not skip or replace any phase, plan approval, handoff validation, or final integration gate.
 
 Material evidence that invalidates a locked plan enters the Plan Delta validation loop. Agents do not silently improvise outside the approved plan.
 
@@ -416,18 +482,27 @@ node scripts/agent-kit.mjs catalog
 node scripts/agent-kit.mjs add-skill /path/to/project <skill-name>
 ```
 
-Installed projects also receive Node helpers:
+Installed projects receive Node helpers including:
 
-```bash
-node .agent-core/bin/web-kit-update.mjs
-node .agent-core/bin/session-controller.mjs --provider codex --prompt "<task>"
-node .agent-core/bin/session-controller.mjs --provider claude --prompt "<task>"
+```text
+.agent-core/bin/session-controller.mjs
+.agent-core/bin/context-supervisor.mjs
+.agent-core/bin/provider-bridge.mjs
+.agent-core/bin/supervisor-setup.mjs
+.agent-core/bin/web-kit-update.mjs
 ```
 
-The recommended public entry point remains:
+The recommended project installation/update entry point remains:
 
 ```bash
 npx @ihgen/web-kit
+```
+
+After the first supervisor setup, normal AI entry points remain:
+
+```bash
+codex
+claude
 ```
 
 ## Release mapping
