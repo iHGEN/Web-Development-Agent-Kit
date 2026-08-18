@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import AdmZip from "adm-zip";
 
@@ -89,6 +89,29 @@ function findRoot(extract) {
   }
   throw new Error("Kit root not found in downloaded archive.");
 }
+function installTransparentSupervisor(project) {
+  if (process.env.WEB_KIT_DISABLE_CONTEXT_SUPERVISOR === "1") {
+    console.log("Transparent context supervisor: skipped by WEB_KIT_DISABLE_CONTEXT_SUPERVISOR=1");
+    return;
+  }
+  const setup = path.join(project, ".agent-core", "bin", "supervisor-setup.mjs");
+  if (!fs.existsSync(setup)) {
+    console.warn("Transparent context supervisor: setup helper is missing; normal Web Kit installation remains usable.");
+    return;
+  }
+  const version = readJson(path.join(project, ".agent-kit.json")).version || "unknown";
+  const result = spawnSync(process.execPath, [setup, "install", version], { encoding: "utf8", windowsHide: true });
+  if (result.error || result.status !== 0) {
+    console.warn(`Transparent context supervisor could not be installed: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
+    console.warn("Web Kit remains usable; automatic rollover will require the existing explicit session controller until this is fixed.");
+    return;
+  }
+  let status = null;
+  try { status = JSON.parse(String(result.stdout || "").trim()); } catch {}
+  console.log(`Transparent context supervisor: ${status?.enabled === false ? "installed but disabled" : "enabled"}`);
+  console.log(`Context threshold: ${status?.threshold_percent || 50}%`);
+  console.log("After opening a new terminal once, use `codex` or `claude` normally; no Web-Kit session command is required.");
+}
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!ACTIONS.has(args.action)) throw new Error(`Unsupported action: ${args.action}`);
@@ -136,6 +159,7 @@ async function main() {
         sha256: digest,
         runtime: "node+npm",
       });
+      installTransparentSupervisor(project);
       console.log("Remote Web Development Agent Kit action complete.");
       console.log("Runtime requirement: Node.js + npm only. A system Python installation is not required.");
       console.log("Future update: npx @ihgen/web-kit update --project .");
