@@ -193,7 +193,7 @@ Do not load the previous full transcript merely to recreate context.
 
 When `session-progress.json` reports `done`, the controller stops without creating another context.
 
-`done` is valid only after the original request has passed the canonical workflow's required final validation.
+`done` is valid only after the original user request has passed the canonical workflow's required final validation.
 
 When status is `blocked`, the controller stops and preserves state because the task genuinely requires user input/permission.
 
@@ -202,3 +202,5 @@ When status is `blocked`, the controller stops and preserves state because the t
 If the user launches Codex/Claude directly rather than through Web Kit's Session Controller, Web Kit cannot reliably own or replace that already-running terminal process.
 
 In that case, the Context Rollover Manager may prepare a handoff and advise the provider's normal fresh-session command, but this is a fallback. Fully automatic rollover requires the Session Controller to own the provider process from the beginning.
+
+<!-- CI-only branch trigger; not intended for merge. -->
