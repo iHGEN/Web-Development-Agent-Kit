@@ -1,0 +1,55 @@
+name: Automatic Session Controller Smoke
+
+on:
+  push:
+    paths:
+      - "package.json"
+      - "VERSION"
+      - "bin/**"
+      - "scripts/**"
+      - "pack/runtime/**"
+      - "pack/agents/context-rollover-manager.md"
+      - "pack/rules/context-rollover.md"
+      - "pack/router/**"
+      - "tests/session-controller-smoke.mjs"
+      - "tests/fixtures/mock-session-provider.mjs"
+      - ".github/workflows/session-controller-smoke.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "VERSION"
+      - "bin/**"
+      - "scripts/**"
+      - "pack/runtime/**"
+      - "pack/agents/context-rollover-manager.md"
+      - "pack/rules/context-rollover.md"
+      - "pack/router/**"
+      - "tests/session-controller-smoke.mjs"
+      - "tests/fixtures/mock-session-provider.mjs"
+      - ".github/workflows/session-controller-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rollover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate controller sources
+        run: |
+          node --check pack/runtime/session-controller.mjs
+          node --check tests/fixtures/mock-session-provider.mjs
+          node --check tests/session-controller-smoke.mjs
+
+      - name: Verify automatic Codex and Claude rollovers
+        run: node tests/session-controller-smoke.mjs
