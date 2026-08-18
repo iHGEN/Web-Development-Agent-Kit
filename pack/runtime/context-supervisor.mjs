@@ -95,18 +95,49 @@ function shouldPassThrough(provider, args) {
   return PASS_THROUGH_CLAUDE.has(first);
 }
 
+function resolveNodeScriptFromCmd(file) {
+  if (process.platform !== "win32" || !/\.cmd$/i.test(file)) return null;
+  let text = "";
+  try { text = fs.readFileSync(file, "utf8"); }
+  catch { return null; }
+  const matches = [...text.matchAll(/"([^"\r\n]+\.(?:mjs|cjs|js))"/gi)];
+  for (let i = matches.length - 1; i >= 0; i -= 1) {
+    let candidate = matches[i][1];
+    const base = `${path.dirname(file)}${path.sep}`;
+    candidate = candidate.replace(/%~?dp0%?/ig, base);
+    if (!path.isAbsolute(candidate)) candidate = path.resolve(path.dirname(file), candidate);
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+function providerLaunch(file, args) {
+  if (/\.(?:mjs|cjs|js)$/i.test(file)) {
+    return { command: process.execPath, args: [file, ...args], shell: false };
+  }
+  const nodeScript = resolveNodeScriptFromCmd(file);
+  if (nodeScript) {
+    return { command: process.execPath, args: [nodeScript, ...args], shell: false };
+  }
+  return { command: file, args, shell: shellLikeExecutable(file) };
+}
+
 function spawnProvider(file, args, options = {}) {
-  return spawn(file, args, {
+  const launch = providerLaunch(file, args);
+  return spawn(launch.command, launch.args, {
     windowsHide: true,
-    shell: shellLikeExecutable(file),
+    shell: launch.shell,
     ...options,
   });
 }
 
 function spawnProviderSync(file, args, options = {}) {
-  return spawnSync(file, args, {
+  const launch = providerLaunch(file, args);
+  return spawnSync(launch.command, launch.args, {
     windowsHide: true,
-    shell: shellLikeExecutable(file),
+    shell: launch.shell,
     ...options,
   });
 }
