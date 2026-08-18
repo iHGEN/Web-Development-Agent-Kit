@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "mode": "strict-routed-context",
   "runtime": "node+npm",
   "principles": {
@@ -21,7 +21,13 @@
     "prefer_diff_after_implementation": true,
     "handoff_uses_summary_not_full_history": true,
     "original_prompt_always_available_to_captain": true,
-    "web_kit_runtime_requires_node_not_python": true
+    "web_kit_runtime_requires_node_not_python": true,
+    "automatic_context_rollover_under_session_controller": true,
+    "default_context_rollover_threshold_percent": 50,
+    "rollover_only_at_safe_workflow_unit_boundary": true,
+    "validate_handoff_before_fresh_provider_session": true,
+    "fresh_session_verifies_handoff_against_repository": true,
+    "controller_owns_context_reset_in_controlled_sessions": true
   },
   "repository_navigation": {
     "capability_source": ".agent-core/index/project-profile.json",
@@ -95,13 +101,38 @@
       "tests_build_runtime": "Does the relevant behavior actually work?"
     }
   },
+  "session_control": {
+    "enabled_when_launched_by_controller": true,
+    "controller": ".agent-core/bin/session-controller.mjs",
+    "canonical_rule": ".agent-core/rules/context-rollover.md",
+    "control_agent": "context-rollover-manager",
+    "supported_providers": ["codex", "claude"],
+    "default_rollover_threshold_percent": 50,
+    "threshold_min_percent": 10,
+    "threshold_max_percent": 90,
+    "safe_boundary": "Evaluate rollover only after the active provider finishes one safe Web-Kit workflow unit and persists session-progress.json. Do not intentionally interrupt a provider in the middle of an edit/tool call.",
+    "progress_state": ".agent-core/state/session-progress.json",
+    "controller_state": ".agent-core/state/session-controller.json",
+    "handoff_state": ".agent-core/state/context-handoff.json",
+    "handoff_archive": ".agent-core/state/handoffs/",
+    "handoff_rule": "Before creating a fresh provider session, validate a compact handoff containing original request, workflow progress, decisions/constraints, changed/validated scope, repository snapshot, exact next action, rollover reason, and context telemetry provenance.",
+    "fresh_context_rule": "The first cycle of a fresh provider session reads the pending handoff before broad discovery, verifies material claims against current source/diff/tests/runtime, reconciles mismatches, and resumes the exact recorded next action.",
+    "authority_rule": "Context handoff is routing/state evidence only. Current source, current diff, relevant tests/build, and runtime evidence override the handoff.",
+    "provider_process_rule": "The controller uses provider structured/headless modes. Below threshold it resumes the current provider session; at/above threshold it launches a genuinely fresh provider process/session and injects the validated handoff. It does not emulate /clear or /new terminal keystrokes.",
+    "controlled_ai_rule": "When WEB_KIT_SESSION_CONTROLLER=1, the AI must not run /clear, /new, /compact, or ask the user to reset context. It completes one safe workflow unit and writes session-progress.json; the controller owns rollover.",
+    "telemetry_rule": "Use provider-reported current context occupancy when available. Do not use cumulative lifetime token spend as current context percentage. If telemetry remains unavailable for the configured fallback cycle count, use a conservative telemetry-unavailable-safety rollover and record that it was not an exact threshold measurement.",
+    "done_rule": "session-progress status=done is valid only after the original request passes the canonical workflow's required final validation.",
+    "blocked_rule": "status=blocked stops the controller and preserves state only for a genuine user/permission dependency."
+  },
   "runtime_policy": {
     "required": ["node", "npm"],
     "not_required": ["python", "pip", "pipx"],
     "graphify_optional": true,
     "graphify_python_managed_by_uv": true,
     "graphify_setup": ".agent-core/rules/graphify-setup.mjs",
-    "graphify_completion_command": "node .agent-core/rules/graphify-setup.mjs --project . --complete"
+    "graphify_completion_command": "node .agent-core/rules/graphify-setup.mjs --project . --complete",
+    "session_controller_requires_provider_cli": true,
+    "session_controller_provider_clis": ["codex", "claude"]
   },
   "task_sizes": {
     "small": {
@@ -133,7 +164,8 @@
     "Do not run broad repository search before Graphify when the current question is primarily relationship/impact discovery and Graphify is fresh; use the graph to narrow first.",
     "Do not force Graphify before an exact text/symbol/path lookup; targeted current-source search is cheaper and more direct for that question type.",
     "Do not read generated, vendor, build, coverage, dependency-cache, Graphify output, or binary output unless the task explicitly targets it.",
-    "If the hard candidate-file cap would be exceeded, return to the Captain for a scope/context review before reading more."
+    "If the hard candidate-file cap would be exceeded, return to the Captain for a scope/context review before reading more.",
+    "Do not solve context pressure by forwarding the full prior transcript to a fresh session; use the validated compact handoff and re-read only evidence required for correctness."
   ],
   "excluded_paths": [
     ".git/**",
