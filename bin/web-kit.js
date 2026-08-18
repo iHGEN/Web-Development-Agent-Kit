@@ -12,6 +12,8 @@ const DEFAULT_REPO = "iHGEN/Web-Development-Agent-Kit";
 const DEFAULT_REF = `v${VERSION}`;
 const bootstrap = join(__dirname, "..", "bootstrap", "remote-install.mjs");
 const COMMANDS = new Set(["install", "update", "doctor", "scan"]);
+const SESSION_SETUP_VALUE_OPTIONS = new Set(["--project", "--ref", "--repo", "--source", "--sha256"]);
+const SESSION_SETUP_FLAGS = new Set(["--allow-downgrade", "--install-graphify"]);
 
 function printHelp() {
   console.log(`
@@ -35,6 +37,8 @@ Explicit commands:
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan
   npx @ihgen/web-kit graphify
+  npx @ihgen/web-kit session codex --prompt "<task>"
+  npx @ihgen/web-kit session claude --prompt "<task>"
 
 Options:
   --project <path>       Target project. Defaults to current directory.
@@ -45,10 +49,25 @@ Options:
   --allow-downgrade      Explicitly permit install/update to an older semantic version.
   --install-graphify     After Web-Kit setup, install/register optional Graphify support.
 
+Automatic session options:
+  --prompt <text>                     Original task.
+  --prompt-file <path>                Read the task from a file.
+  --threshold <percent>               Fresh-context rollover threshold. Default: 50.
+  --max-cycles <n>                    Controller safety cap. Default: 100.
+  --telemetry-fallback-cycles <n>     Conservative rollover after missing telemetry. Default: 2.
+  --task-id <id>                      Optional stable task id.
+  --verbose                           Show raw provider telemetry/stderr.
+
 AI instruction files are non-destructive:
   - existing AGENTS.md / CLAUDE.md / GEMINI.md / Copilot / Cursor instructions stay intact;
   - Web Kit adds or refreshes only its marked roles block;
   - missing instruction files are created once with a compact project summary plus roles.
+
+Automatic context rollover:
+  - Web Kit owns Codex/Claude through their structured headless modes;
+  - below the threshold it resumes the same provider session;
+  - at/above the threshold it validates a compact handoff and starts a fresh provider process;
+  - no manual /clear or /new command is required.
 
 Graphify is optional. If Graphify is requested and Python is absent, Web Kit bootstraps uv;
 uv then manages Graphify's Python runtime. Without Graphify, Web Kit stays fully Node-only.
@@ -59,6 +78,8 @@ Examples:
   npx @ihgen/web-kit scan --project ../my-app
   npx @ihgen/web-kit update --install-graphify
   npx @ihgen/web-kit graphify
+  npx @ihgen/web-kit session codex --threshold 50 --prompt "Implement authenticated dashboard API"
+  npx @ihgen/web-kit session claude --threshold 50 --prompt-file ./task.md
   npx @ihgen/web-kit install --ref main
 
 Package version: ${VERSION}
@@ -114,6 +135,63 @@ function runGraphifySetup(projectPath) {
   }
   return result.status ?? 1;
 }
+function runSessionController(projectPath, sessionArgs) {
+  const controller = join(projectPath, ".agent-core", "bin", "session-controller.mjs");
+  if (!existsSync(controller)) {
+    console.error(`Session Controller is missing: ${controller}`);
+    console.error("Run Web Kit update first, then retry the session command.");
+    return 1;
+  }
+  const result = spawnSync(process.execPath, [controller, "--project", projectPath, ...sessionArgs], { stdio: "inherit", windowsHide: true });
+  if (result.error) {
+    console.error(`Failed to run Session Controller: ${result.error.message}`);
+    return 1;
+  }
+  return result.status ?? 1;
+}
+function parseSessionInvocation(rawArgs) {
+  if (rawArgs[0] !== "session") return null;
+  let index = 1;
+  let provider = null;
+  if (rawArgs[index] && !rawArgs[index].startsWith("-")) {
+    provider = rawArgs[index];
+    index += 1;
+  }
+  const rest = rawArgs.slice(index);
+  if (!provider) provider = getOption(rest, "--provider");
+
+  const setupArgs = [];
+  const controllerArgs = [];
+  if (provider) controllerArgs.push("--provider", provider);
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === "--") {
+      controllerArgs.push(...rest.slice(i));
+      break;
+    }
+    const setupValueName = [...SESSION_SETUP_VALUE_OPTIONS].find((name) => arg === name || arg.startsWith(`${name}=`));
+    if (setupValueName) {
+      setupArgs.push(arg);
+      if (arg === setupValueName && i + 1 < rest.length) setupArgs.push(rest[++i]);
+      continue;
+    }
+    if (SESSION_SETUP_FLAGS.has(arg)) {
+      setupArgs.push(arg);
+      continue;
+    }
+    if (arg === "--provider") {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--provider=")) continue;
+    controllerArgs.push(arg);
+    if (["--prompt", "--prompt-file", "--threshold", "--max-cycles", "--telemetry-fallback-cycles", "--task-id"].includes(arg) && i + 1 < rest.length) {
+      controllerArgs.push(rest[++i]);
+    }
+  }
+  return { provider, setupArgs, controllerArgs };
+}
 
 const rawArgs = process.argv.slice(2);
 if (rawArgs.includes("--help") || rawArgs.includes("-h") || rawArgs[0] === "help") {
@@ -125,10 +203,11 @@ if (rawArgs.includes("--version") || rawArgs.includes("-v")) {
   process.exit(0);
 }
 
-let args = [...rawArgs];
+const sessionInvocation = parseSessionInvocation(rawArgs);
+let args = sessionInvocation ? [...sessionInvocation.setupArgs] : [...rawArgs];
 let graphifyRequested = hasOption(args, "--install-graphify");
 args = removeFlag(args, "--install-graphify");
-if (args[0] === "graphify") {
+if (!sessionInvocation && args[0] === "graphify") {
   graphifyRequested = true;
   args.shift();
 }
@@ -158,16 +237,20 @@ const customSelection = Boolean(customRef || customRepo || customSource);
 const requestedVersion = customSource ? null : versionFromRef(customRef || DEFAULT_REF);
 
 let action = explicitAction;
-let smartReason = graphifyRequested
-  ? "Graphify setup requested; first ensuring the project Web Kit is current."
-  : "Explicit command requested.";
+let smartReason = sessionInvocation
+  ? "Automatic AI session requested; first ensuring the project Web Kit is current."
+  : graphifyRequested
+    ? "Graphify setup requested; first ensuring the project Web Kit is current."
+    : "Explicit command requested.";
 let useSavedSource = false;
 let newerProjectWarning = false;
 
 if (!action) {
   if (!installed) {
     action = "install";
-    smartReason = graphifyRequested ? "Web Kit is not installed; installing it before Graphify setup." : "Web Kit is not installed in this project.";
+    smartReason = sessionInvocation
+      ? "Web Kit is not installed; installing it before launching the automatic Session Controller."
+      : graphifyRequested ? "Web Kit is not installed; installing it before Graphify setup." : "Web Kit is not installed in this project.";
   } else if (customSelection) {
     const comparison = requestedVersion && installedVersion ? compareSemver(installedVersion, requestedVersion) : null;
     if (comparison !== null && comparison > 0 && !allowDowngrade) {
@@ -189,7 +272,9 @@ if (!action) {
     } else if (comparison === 0) {
       action = "doctor";
       useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
-      smartReason = graphifyRequested ? `Web Kit ${VERSION} is already installed; checking it before Graphify setup.` : `Web Kit ${VERSION} is already installed; running health check.`;
+      smartReason = sessionInvocation
+        ? `Web Kit ${VERSION} is already installed; checking it before launching the Session Controller.`
+        : graphifyRequested ? `Web Kit ${VERSION} is already installed; checking it before Graphify setup.` : `Web Kit ${VERSION} is already installed; running health check.`;
     } else if (comparison === 1) {
       action = "doctor";
       useSavedSource = Boolean(sourceConfig.source || sourceConfig.repo);
@@ -232,7 +317,7 @@ const sourceLabel = useSavedSource
   ? `remembered project source (${sourceConfig.ref || sourceConfig.source || sourceConfig.repo || "installed version"})`
   : customSource ? "custom ZIP source" : `${customRepo || DEFAULT_REPO}@${customRef || DEFAULT_REF}`;
 
-console.log(`\n╔════════════════════════════════════════╗\n║     iHGEN Web Development Agent Kit   ║\n╚════════════════════════════════════════╝\n\nMode:      ${explicitAction ? "explicit" : "smart"}\nDecision:  ${action}\nReason:    ${smartReason}\nCLI:       ${VERSION}\nRuntime:   Node.js ${process.version}\nInstalled: ${installedVersion || "not installed"}\nProject:   ${projectPath}\nSource:    ${sourceLabel}\n`);
+console.log(`\n╔════════════════════════════════════════╗\n║     iHGEN Web Development Agent Kit   ║\n╚════════════════════════════════════════╝\n\nMode:      ${sessionInvocation ? "session" : explicitAction ? "explicit" : "smart"}\nDecision:  ${action}\nReason:    ${smartReason}\nCLI:       ${VERSION}\nRuntime:   Node.js ${process.version}\nInstalled: ${installedVersion || "not installed"}\nProject:   ${projectPath}\nSource:    ${sourceLabel}\n`);
 
 const result = spawnSync(process.execPath, runnerArgs, { stdio: "inherit", windowsHide: true });
 if (result.error) {
@@ -252,6 +337,11 @@ if (action === "install") {
 if (graphifyRequested) {
   const graphifyStatus = runGraphifySetup(projectPath);
   if (graphifyStatus !== 0) process.exit(graphifyStatus);
-} else if (!graphifyOnPath()) {
+} else if (!graphifyOnPath() && !sessionInvocation) {
   console.log(`\nOptional token-saving repository graph:\n  Graphify is not installed on PATH. Web Kit will use the normal routed-context loop.\n  Python is not required. If you opt into Graphify, Web Kit can bootstrap uv and let uv manage Graphify's Python runtime.\n\n  Install/register Graphify for this project:\n\n    npx @ihgen/web-kit@${VERSION} graphify\n\n  Or combine it with an update:\n\n    npx @ihgen/web-kit@${VERSION} update --install-graphify\n`);
+}
+
+if (sessionInvocation) {
+  const sessionStatus = runSessionController(projectPath, sessionInvocation.controllerArgs);
+  process.exit(sessionStatus);
 }
