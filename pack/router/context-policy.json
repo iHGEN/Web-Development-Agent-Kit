@@ -27,7 +27,8 @@
     "rollover_only_at_safe_workflow_unit_boundary": true,
     "validate_handoff_before_fresh_provider_session": true,
     "fresh_session_verifies_handoff_against_repository": true,
-    "controller_owns_context_reset_in_controlled_sessions": true
+    "controller_owns_context_reset_in_controlled_sessions": true,
+    "controller_never_silently_escalates_provider_permissions": true
   },
   "repository_navigation": {
     "capability_source": ".agent-core/index/project-profile.json",
@@ -110,6 +111,18 @@
     "default_rollover_threshold_percent": 50,
     "threshold_min_percent": 10,
     "threshold_max_percent": 90,
+    "codex": {
+      "default_sandbox": "workspace-write",
+      "default_approval": "never",
+      "allowed_sandbox_modes": ["read-only", "workspace-write", "danger-full-access"],
+      "allowed_approval_modes": ["untrusted", "on-request", "never"],
+      "never_silently_select": ["danger-full-access"]
+    },
+    "claude": {
+      "default_permission_mode": "auto",
+      "allowed_permission_modes": ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"],
+      "never_silently_select": ["bypassPermissions"]
+    },
     "safe_boundary": "Evaluate rollover only after the active provider finishes one safe Web-Kit workflow unit and persists session-progress.json. Do not intentionally interrupt a provider in the middle of an edit/tool call.",
     "progress_state": ".agent-core/state/session-progress.json",
     "controller_state": ".agent-core/state/session-controller.json",
@@ -119,6 +132,7 @@
     "fresh_context_rule": "The first cycle of a fresh provider session reads the pending handoff before broad discovery, verifies material claims against current source/diff/tests/runtime, reconciles mismatches, and resumes the exact recorded next action.",
     "authority_rule": "Context handoff is routing/state evidence only. Current source, current diff, relevant tests/build, and runtime evidence override the handoff.",
     "provider_process_rule": "The controller uses provider structured/headless modes. Below threshold it resumes the current provider session; at/above threshold it launches a genuinely fresh provider process/session and injects the validated handoff. It does not emulate /clear or /new terminal keystrokes.",
+    "permission_rule": "Controlled automation must be able to progress without hidden privilege escalation. Codex defaults to workspace-write with approval=never. Claude defaults to auto permission mode. Any stronger unrestricted mode requires explicit user configuration; Web Kit never silently selects Codex danger-full-access or Claude bypassPermissions.",
     "controlled_ai_rule": "When WEB_KIT_SESSION_CONTROLLER=1, the AI must not run /clear, /new, /compact, or ask the user to reset context. It completes one safe workflow unit and writes session-progress.json; the controller owns rollover.",
     "telemetry_rule": "Use provider-reported current context occupancy when available. Do not use cumulative lifetime token spend as current context percentage. If telemetry remains unavailable for the configured fallback cycle count, use a conservative telemetry-unavailable-safety rollover and record that it was not an exact threshold measurement.",
     "done_rule": "session-progress status=done is valid only after the original request passes the canonical workflow's required final validation.",
