@@ -1,3 +1,4 @@
+# CI-only verification trigger; do not merge.
 name: Cross-platform Node Smoke
 
 on:
