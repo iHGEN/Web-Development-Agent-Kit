@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
 const fixture = path.join(repo, "tests", "fixtures", "mock-transparent-provider.mjs");
+if (process.platform !== "win32") fs.chmodSync(fixture, 0o755);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 45_000, ...options });
