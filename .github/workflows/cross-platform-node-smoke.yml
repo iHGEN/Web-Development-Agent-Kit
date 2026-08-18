@@ -55,6 +55,7 @@ jobs:
           node --check scripts/ai-compat.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
+          node --check pack/runtime/session-controller.mjs
 
       - name: Pack npm CLI
         id: pack
@@ -113,8 +114,11 @@ jobs:
             '.agent-core/index/project-profile.json',
             '.agent-core/rules/workflow.md',
             '.agent-core/rules/repository-navigation.md',
+            '.agent-core/rules/context-rollover.md',
             '.agent-core/rules/graphify-setup.mjs',
             '.agent-core/rules/graphify-refresh.mjs',
+            '.agent-core/agents/context-rollover-manager.md',
+            '.agent-core/bin/session-controller.mjs',
             '.agent-core/bin/web-kit-update.mjs'
           ];
           for (const rel of required) {
@@ -123,9 +127,11 @@ jobs:
           const agents = fs.readFileSync(path.join(sample, 'AGENTS.md'), 'utf8');
           if (!agents.startsWith('# Existing project AGENTS\n\nKeep this line.\n')) throw new Error('project AGENTS content was overwritten');
           if (!agents.includes('WEB-AGENT-KIT:AI-ROLES:START')) throw new Error('roles block missing');
+          if (!agents.includes('WEB_KIT_SESSION_CONTROLLER=1')) throw new Error('automatic rollover role missing');
           if (fs.existsSync(path.join(sample, 'AGENTS.web-kit.md'))) throw new Error('legacy AGENTS.web-kit.md created');
           const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
           if (cfg.runtime !== 'node+npm') throw new Error('runtime mismatch');
+          if (cfg.ai_compatibility.context_rollover_threshold_percent !== 50) throw new Error('rollover threshold mismatch');
           NODE
 
       - name: Run doctor
@@ -133,4 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           SAMPLE="$RUNNER_TEMP/web-kit-cross-platform"
-          npx --yes "./${{ steps.pack.outputs.tarball }}" doctor --project "$SAMPLE"
+          OUTPUT="$RUNNER_TEMP/doctor.log"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" doctor --project "$SAMPLE" | tee "$OUTPUT"
+          grep -q 'Session Controller: OK' "$OUTPUT"
+          grep -q 'Context rollover rule: OK' "$OUTPUT"
