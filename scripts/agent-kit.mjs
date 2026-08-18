@@ -235,6 +235,7 @@ function install(project) {
   copyTree(path.join(PACK, "rules"), path.join(core, "rules"));
   copyTree(path.join(PACK, "contracts"), path.join(core, "contracts"));
   copyTree(path.join(PACK, "registry"), path.join(core, "registry"));
+  copyTree(path.join(PACK, "runtime"), path.join(core, "bin"));
 
   const skillRoot = path.join(project, ".agents", "skills");
   fs.mkdirSync(skillRoot, { recursive: true });
@@ -260,6 +261,7 @@ function install(project) {
   console.log(`Skills: ${skills.join(", ")}`);
   console.log("AI instructions: existing files preserved; missing files created once with project summary; managed roles synchronized");
   console.log(`Canonical workflow: ${compatibility.canonical_workflow}`);
+  console.log("Automatic context rollover: .agent-core/bin/session-controller.mjs (default threshold 50%)");
   return 0;
 }
 
@@ -277,6 +279,8 @@ function doctor(project) {
   const graphState = readJson(path.join(project, ".agent-core", "state", "graphify.json"));
   const installState = readJson(path.join(project, ".agent-core", "state", "graphify-install.json"));
   const actualGraphReady = fs.existsSync(path.join(project, "graphify-out", "graph.json"));
+  const sessionController = path.join(project, ".agent-core", "bin", "session-controller.mjs");
+  const rolloverRule = path.join(project, ".agent-core", "rules", "context-rollover.md");
   const skillRoot = path.join(project, ".agents", "skills");
   const installed = fs.existsSync(skillRoot)
     ? fs.readdirSync(skillRoot, { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(skillRoot, e.name, "SKILL.md"))).map((e) => e.name).sort()
@@ -322,6 +326,8 @@ function doctor(project) {
   console.log(`Project profile: ${fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json")) ? "OK" : "MISSING"}`);
   console.log(`Routing policy: ${fs.existsSync(path.join(project, ".agent-core", "routing", "context-policy.json")) ? "OK" : "MISSING"}`);
   console.log(`AI managed roles: ${rolesOk ? "OK" : "MISSING"}`);
+  console.log(`Session Controller: ${fs.existsSync(sessionController) ? "OK" : "MISSING"}`);
+  console.log(`Context rollover rule: ${fs.existsSync(rolloverRule) ? "OK" : "MISSING"}`);
   console.log(`Graphify graph: ${actualGraphReady ? "READY" : "NOT READY"}`);
   if (missing.length) console.log(`Missing skills: ${missing.join(", ")}`);
   if (stale.length) console.log(`Installed but no longer detected: ${stale.join(", ")}`);
@@ -331,7 +337,9 @@ function doctor(project) {
     console.log("Metadata repair: run `node .agent-core/rules/graphify-refresh.mjs --project . --task-id metadata-sync` once.");
   }
 
-  const healthy = !missing.length && agentFiles.length > 0 && Object.keys(cfg).length && rolesOk && fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json"));
+  const healthy = !missing.length && agentFiles.length > 0 && Object.keys(cfg).length && rolesOk
+    && fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json"))
+    && fs.existsSync(sessionController) && fs.existsSync(rolloverRule);
   console.log(healthy ? (warnings.length ? "Status: HEALTHY WITH WARNINGS" : "Status: HEALTHY") : "Status: NEEDS ATTENTION");
   return healthy ? 0 : 1;
 }
