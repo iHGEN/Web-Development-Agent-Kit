@@ -46,6 +46,10 @@ function promptFromArgs(args) {
   return "";
 }
 function sha12(text) { return crypto.createHash("sha256").update(text).digest("hex").slice(0, 12); }
+function fileSignature(file) {
+  try { return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  catch { return null; }
+}
 function taskIdFor(prompt) {
   const stamp = nowIso().replace(/[-:TZ.]/g, "").slice(0, 14);
   return `ctx-${stamp}-${sha12(prompt)}`;
@@ -328,14 +332,16 @@ function gitSnapshot(project) {
     return !result.error && result.status === 0 ? String(result.stdout || "").trim() : "";
   };
   const inside = run(["rev-parse", "--is-inside-work-tree"]) === "true";
-  if (!inside) return { is_git_repo: false, status: [], changed_files: [], diff_stat: "" };
+  if (!inside) return { is_git_repo: false, status: [], changed_files: [], staged_changed_files: [], diff_stat: "", staged_diff_stat: "" };
   return {
     is_git_repo: true,
     head: run(["rev-parse", "HEAD"]),
     branch: run(["branch", "--show-current"]),
     status: run(["status", "--short"]).split(/\r?\n/).filter(Boolean).slice(0, 200),
     changed_files: run(["diff", "--name-only"]).split(/\r?\n/).filter(Boolean).slice(0, 200),
+    staged_changed_files: run(["diff", "--cached", "--name-only"]).split(/\r?\n/).filter(Boolean).slice(0, 200),
     diff_stat: run(["diff", "--stat"]).slice(0, 12000),
+    staged_diff_stat: run(["diff", "--cached", "--stat"]).slice(0, 12000),
   };
 }
 
@@ -346,7 +352,7 @@ function progressTemplate(taskId, originalPrompt, finalText = "") {
     status: "continue",
     phase: "recovery",
     role: "context-rollover-manager",
-    summary: finalText ? finalText.slice(-5000) : "Provider did not write session-progress.json; reconstruct progress from current repository state.",
+    summary: finalText ? finalText.slice(-5000) : "Provider did not refresh session-progress.json; reconstruct progress from current repository state.",
     completed_steps: [],
     current_step: "Reconstruct the current Web-Kit workflow position from source, diff, tests, and existing state.",
     pending_steps: [],
@@ -417,7 +423,7 @@ function markHandoffConsumed(file, sessionId) {
 }
 
 function progressProtocol(taskId) {
-  return `Before your final response in every controller cycle, atomically write \`.agent-core/state/session-progress.json\` as JSON with this shape:\n\n{\n  "schema_version": 1,\n  "task_id": "${taskId}",\n  "status": "continue | done | blocked",\n  "phase": "current Web-Kit phase",\n  "role": "current routed role",\n  "summary": "compact evidence-backed summary of what this cycle completed",\n  "completed_steps": [],\n  "current_step": "current/just-completed step",\n  "pending_steps": [],\n  "files_changed": [],\n  "validation_completed": [],\n  "validation_pending": [],\n  "decisions": [],\n  "constraints": [],\n  "next_action": "exact next safe action, required when status=continue",\n  "updated_at": "ISO-8601 timestamp"\n}\n\nUse status=done only when the original user request has passed the required Web-Kit final validation. Use status=blocked only when progress genuinely requires user input/permission. Otherwise use status=continue.`;
+  return `Before your final response in every controller cycle, atomically write \`.agent-core/state/session-progress.json\` as JSON with this shape:\n\n{\n  "schema_version": 1,\n  "task_id": "${taskId}",\n  "status": "continue | done | blocked",\n  "phase": "current Web-Kit phase",\n  "role": "current routed role",\n  "summary": "compact evidence-backed summary of what this cycle completed",\n  "completed_steps": [],\n  "current_step": "current/just-completed step",\n  "pending_steps": [],\n  "files_changed": [],\n  "validation_completed": [],\n  "validation_pending": [],\n  "decisions": [],\n  "constraints": [],\n  "next_action": "exact next safe action, required when status=continue",\n  "updated_at": "ISO-8601 timestamp"\n}\n\nThis file MUST be freshly rewritten during the current controller cycle; stale progress from a prior cycle is rejected. Use status=done only when the original user request has passed the required Web-Kit final validation. Use status=blocked only when progress genuinely requires user input/permission. Otherwise use status=continue.`;
 }
 function initialPrompt(taskId, originalPrompt) {
   return `You are operating under the iHGEN Web Kit automatic Session Controller.\n\nOriginal user request:\n${originalPrompt}\n\nFollow the repository's existing AGENTS/CLAUDE instructions and the canonical \`.agent-core/rules/workflow.md\`. Execute exactly ONE safe Web-Kit workflow unit in this controller cycle: one discovery/planning/validation phase, or one approved implementation step plus its required local checks/Graph Refresh Gate/handoff. A small request may finish in one unit if that unit legitimately reaches final validation. Do not batch multiple independent implementation steps merely to finish in one process.\n\n${progressProtocol(taskId)}\n\nThe Session Controller owns context rollover. Do not run /clear, /new, or /compact to manage this controlled session. When the controller reaches its context threshold it will persist a handoff and start a fresh provider process automatically.`;
@@ -485,6 +491,7 @@ async function main() {
 
   while (cycle < maxCycles) {
     cycle += 1;
+    const progressSignatureBefore = fileSignature(progressFile);
     console.log(`\n── Controller cycle ${cycle}${sessionId ? ` · resume ${sessionId}` : " · fresh context"} ──\n`);
     const run = await runProvider(provider, executable, project, nextPrompt, sessionId, verbose);
     if (run.exitCode !== 0) {
@@ -496,7 +503,7 @@ async function main() {
     }
 
     const telemetry = run.telemetry;
-    if (!telemetry.contextPercent && provider === "codex") {
+    if (telemetry.contextPercent === null && provider === "codex") {
       const fallback = codexRolloutTelemetry(telemetry.sessionId || sessionId);
       if (fallback) {
         telemetry.contextPercent = fallback.percent;
@@ -507,10 +514,14 @@ async function main() {
     }
     if (telemetry.sessionId) sessionId = telemetry.sessionId;
 
+    const progressSignatureAfter = fileSignature(progressFile);
     let progress = readJson(progressFile, null);
     let progressErrors = validateProgress(progress, taskId);
+    if (progressSignatureAfter === null || progressSignatureAfter === progressSignatureBefore) {
+      progressErrors = ["session-progress.json was not freshly rewritten during this controller cycle", ...progressErrors];
+    }
     if (progressErrors.length) {
-      console.warn(`Session progress protocol recovery: ${progressErrors.join("; ")}`);
+      console.warn(`Session progress protocol recovery: ${[...new Set(progressErrors)].join("; ")}`);
       progress = progressTemplate(taskId, originalPrompt, telemetry.finalText);
       atomicWriteJson(progressFile, progress);
       progressErrors = validateProgress(progress, taskId);
