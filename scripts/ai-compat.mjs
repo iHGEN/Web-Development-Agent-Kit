@@ -61,9 +61,7 @@ export function unmanagedRoleText(file) {
   ]) {
     const start = text.indexOf(startMarker);
     const endStart = start >= 0 ? text.indexOf(endMarker, start) : -1;
-    if (start >= 0 && endStart >= 0) {
-      text = text.slice(0, start) + text.slice(endStart + endMarker.length);
-    }
+    if (start >= 0 && endStart >= 0) text = text.slice(0, start) + text.slice(endStart + endMarker.length);
   }
   return text;
 }
@@ -82,9 +80,7 @@ export function findUnmanagedGraphifyConflicts(file) {
 
 function flattenStack(profile) {
   const values = [];
-  for (const items of Object.values(profile.technology_groups || {})) {
-    if (Array.isArray(items)) values.push(...items);
-  }
+  for (const items of Object.values(profile.technology_groups || {})) if (Array.isArray(items)) values.push(...items);
   return [...new Set(values)].sort();
 }
 
@@ -124,9 +120,9 @@ Preserve all project/user instructions outside this managed block. This block ad
 
 For Web-Kit-managed engineering work:
 
-1. Follow \`.agent-core/rules/workflow.md\` as the single lifecycle.
+1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle.
 2. Follow \`.agent-core/rules/repository-navigation.md\` for question-aware repository navigation.
-3. Follow \`.agent-core/rules/context-rollover.md\` when the task is running under the automatic Session Controller.
+3. Follow \`.agent-core/rules/context-rollover.md\` for provider-session lifetime and fresh-context handoffs. Automatic rollover is an outer-session concern, not a second engineering workflow.
 4. Read \`.agent-core/index/project-profile.json\` first for lightweight project routing metadata.
 5. Use \`.agent-core/routing/context-policy.json\` to keep context bounded and activate only the roles/skills needed for the current step.
 6. If \`.agent-core/state/graphify-bootstrap-role.md\` exists, treat it as a **temporary current-AI role** and execute it before normal Graphify-assisted repository work. After the graph is built, follow that role's completion command; successful completion deletes the temporary role.
@@ -136,10 +132,10 @@ For Web-Kit-managed engineering work:
 10. For relationship/dependency/ownership/impact discovery, run \`node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>\` before the first Graphify query. Use Graphify only when the resulting state is fresh, then verify exact source before planning or editing.
 11. After every completed code-changing step, run the same Node Graph Refresh Gate once before Handoff Validator or another agent relies on Graphify.
 12. Never run \`graphify update .\` directly as a replacement for the managed Graph Refresh Gate.
-13. Current source, current diff, tests/build, and runtime evidence override Graphify/index/handoff summaries.
-14. When \`WEB_KIT_SESSION_CONTROLLER=1\`, complete exactly one safe workflow unit per controller cycle and write/update \`.agent-core/state/session-progress.json\` before the final response. Use \`status=done\` only after required final validation passes.
-15. If \`.agent-core/state/context-handoff.json\` is pending for the active controlled task, read it first in the fresh context, then verify its material claims against current repository evidence before continuing its recorded next action.
-16. In a controlled session, do not run \`/clear\`, \`/new\`, \`/compact\`, or ask the user to reset context. The Node Session Controller owns automatic rollover and fresh-provider-process creation.
+13. Current source, current diff, tests/build, and runtime evidence override Graphify/index/context-handoff summaries.
+14. When \`WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1\`, use the provider normally and finish the current assistant turn safely. Do not manually run \`/clear\`, \`/new\`, \`/compact\`, or ask the user to restart for context pressure; the outer transparent supervisor owns threshold detection, handoff persistence, and fresh native provider-session creation.
+15. A fresh session started by the transparent supervisor must read the exact referenced rollover handoff first, verify material claims against current repository evidence, avoid repeating completed work, and resume its recorded next action.
+16. When \`WEB_KIT_SESSION_CONTROLLER=1\`, the explicit headless Session Controller fallback owns rollover; follow the progress protocol it injects for that cycle and do not reset context manually.
 17. Web Kit runtime commands use Node.js. Do not require a system Python installation for Web Kit itself.
 
 If project-owned instructions outside this block conflict with Web-Kit workflow mechanics, preserve them but report the conflict with \`doctor\`; do not silently delete user content.
@@ -162,9 +158,7 @@ export function applyAiCompatibility(project, profile = null) {
   };
 
   const actions = {};
-  for (const [key, [file, label]] of Object.entries(targets)) {
-    actions[key] = upsertRoles(file, rolesMarkdown(label), projectSummary(profile, label));
-  }
+  for (const [key, [file, label]] of Object.entries(targets)) actions[key] = upsertRoles(file, rolesMarkdown(label), projectSummary(profile, label));
 
   const cursorPath = path.join(project, ".cursor", "rules", "ihgen-web-kit.mdc");
   actions.cursor = upsertRoles(cursorPath, rolesMarkdown("Cursor"), cursorInitial(profile));
@@ -174,9 +168,10 @@ export function applyAiCompatibility(project, profile = null) {
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
     automatic_context_rollover_rule: ".agent-core/rules/context-rollover.md",
-    session_controller: ".agent-core/bin/session-controller.mjs",
-    context_rollover_threshold_percent: 50,
-    session_controller_providers: ["codex", "claude"],
+    transparent_context_supervisor_home: "~/.web-kit",
+    transparent_provider_commands: ["codex", "claude"],
+    transparent_context_rollover_threshold_percent: 50,
+    explicit_session_controller_fallback: ".agent-core/bin/session-controller.mjs",
     temporary_graphify_role: ".agent-core/state/graphify-bootstrap-role.md",
     native_agents_md: ["codex", "kimi", "agents-md-compatible"],
     managed_roles: {
