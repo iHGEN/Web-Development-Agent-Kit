@@ -19,6 +19,13 @@ function copyFile(src, dst) {
   if (process.platform !== "win32") { try { fs.chmodSync(dst, 0o755); } catch {} }
 }
 function shellQuote(value) { return `'${String(value).replace(/'/g, `'"'"'`)}'`; }
+function normalizedPath(value) {
+  const text = String(value || "").replace(/^"|"$/g, "");
+  if (!text) return "";
+  let resolved;
+  try { resolved = path.resolve(text); } catch { resolved = text; }
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 
 function replaceMarked(text, block) {
   const start = text.indexOf(START);
@@ -51,21 +58,22 @@ function writeShims(base, binDir) {
 function installProfiles(binDir, home) {
   if (process.env.WEB_KIT_DISABLE_SHELL_PROFILE === "1") return [];
   const written = [];
-  const posixBlock = `${START}\n# Added by iHGEN Web Kit. Transparent only inside projects containing .agent-kit.json.\n__ihgen_web_kit_bin=${shellQuote(binDir)}\ncase ":$PATH:" in\n  *":$__ihgen_web_kit_bin:"*) ;;\n  *) export PATH="$__ihgen_web_kit_bin:$PATH" ;;\nesac\nunset __ihgen_web_kit_bin\n${END}`;
+  const posixBlock = `${START}\n# Added by iHGEN Web Kit. Transparent only inside projects containing .agent-kit.json.\n# Keep Web Kit first even when another profile already placed it later in PATH.\n__ihgen_web_kit_bin=${shellQuote(binDir)}\ncase "$PATH" in\n  "$__ihgen_web_kit_bin"|"$__ihgen_web_kit_bin":*) ;;\n  *) export PATH="$__ihgen_web_kit_bin:$PATH" ;;\nesac\nunset __ihgen_web_kit_bin\n${END}`;
   const profiles = new Set([path.join(home, ".bashrc"), path.join(home, ".zshrc"), path.join(home, ".profile")]);
+  if (process.platform === "darwin") profiles.add(path.join(home, ".zprofile"));
   if (process.platform === "win32" && (process.env.MSYSTEM || process.env.SHELL?.includes("bash"))) profiles.add(path.join(home, ".bash_profile"));
   for (const file of profiles) if (writeProfile(file, posixBlock)) written.push(file);
 
   try {
     const fish = path.join(home, ".config", "fish", "conf.d", "ihgen-web-kit.fish");
     fs.mkdirSync(path.dirname(fish), { recursive: true });
-    fs.writeFileSync(fish, `# iHGEN Web Kit transparent context supervisor\nif not contains -- ${JSON.stringify(binDir)} $PATH\n    set -gx PATH ${JSON.stringify(binDir)} $PATH\nend\n`, "utf8");
+    fs.writeFileSync(fish, `# iHGEN Web Kit transparent context supervisor\nif test \"$PATH[1]\" != ${JSON.stringify(binDir)}\n    set -gx PATH ${JSON.stringify(binDir)} $PATH\nend\n`, "utf8");
     written.push(fish);
   } catch {}
 
   if (process.platform === "win32") {
     const escaped = binDir.replace(/'/g, "''");
-    const psBlock = `${START}\n$__ihgenWebKitBin = '${escaped}'\nif (-not (($env:Path -split ';') -contains $__ihgenWebKitBin)) { $env:Path = \"$__ihgenWebKitBin;$env:Path\" }\nRemove-Variable __ihgenWebKitBin -ErrorAction SilentlyContinue\n${END}`;
+    const psBlock = `${START}\n$__ihgenWebKitBin = '${escaped}'\n$__ihgenWebKitRest = @($env:Path -split ';' | Where-Object { $_ -and ($_ -ne $__ihgenWebKitBin) })\n$env:Path = (($__ihgenWebKitBin) + ';' + ($__ihgenWebKitRest -join ';')).TrimEnd(';')\nRemove-Variable __ihgenWebKitRest -ErrorAction SilentlyContinue\nRemove-Variable __ihgenWebKitBin -ErrorAction SilentlyContinue\n${END}`;
     for (const file of [
       path.join(home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"),
       path.join(home, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1"),
@@ -119,6 +127,9 @@ function status() {
   const binDir = path.join(base, "bin");
   const config = readJson(path.join(base, "config.json"), {});
   const shims = ["codex", "claude"].map((provider) => process.platform === "win32" ? path.join(binDir, `${provider}.cmd`) : path.join(binDir, provider));
+  const wanted = normalizedPath(binDir);
+  const pathEntries = String(process.env.PATH || "").split(path.delimiter).filter(Boolean).map(normalizedPath);
+  const pathIndex = pathEntries.findIndex((entry) => entry === wanted);
   return {
     installed: fs.existsSync(path.join(base, "context-supervisor.mjs"))
       && fs.existsSync(path.join(base, "provider-bridge.mjs"))
@@ -127,6 +138,9 @@ function status() {
     threshold_percent: Number(config.threshold_percent || 50),
     base,
     bin_dir: binDir,
+    path_present: pathIndex >= 0,
+    path_index: pathIndex,
+    path_preferred: pathIndex === 0,
   };
 }
 
