@@ -74,6 +74,23 @@ const bashText = fs.readFileSync(bashrc, "utf8");
 assert(bashText.startsWith(existing), "shell profile content was overwritten");
 assert((bashText.match(/>>> ihgen-web-kit-context-supervisor >>>/g) || []).length === 1, "shell profile supervisor block duplicated");
 
+if (process.platform !== "win32") {
+  const binDir = path.join(webKitHome, "bin");
+  const inheritedPath = ["/usr/bin", binDir, "/bin"].join(path.delimiter);
+  const sourced = run("bash", ["-c", `. ${JSON.stringify(bashrc)}; printf '%s' \"$PATH\"`], {
+    cwd: project,
+    env: { ...commonEnv, PATH: inheritedPath },
+  });
+  assert(String(sourced.stdout).split(path.delimiter)[0] === binDir, "shell profile did not move Web Kit bin to PATH position 1");
+}
+
+const preferredStatus = JSON.parse(run(process.execPath, [setup, "status"], {
+  cwd: project,
+  env: { ...commonEnv, PATH: [path.join(webKitHome, "bin"), process.env.PATH || ""].filter(Boolean).join(path.delimiter) },
+}).stdout);
+assert(preferredStatus.installed === true, "supervisor status did not detect installed shims");
+assert(preferredStatus.path_preferred === true && preferredStatus.path_index === 0, "supervisor status did not detect PATH priority");
+
 for (const provider of ["codex", "claude"]) {
   const envName = provider === "codex" ? "WEB_KIT_REAL_CODEX_BIN" : "WEB_KIT_REAL_CLAUDE_BIN";
   const shim = shimPath(provider);
