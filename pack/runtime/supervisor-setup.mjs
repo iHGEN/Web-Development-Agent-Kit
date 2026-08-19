@@ -47,9 +47,15 @@ function writeProfile(file, block) {
 function writeShims(base, binDir) {
   fs.mkdirSync(binDir, { recursive: true });
   const supervisor = path.join(base, "context-supervisor.mjs");
+  const processWrapper = path.join(base, "provider-process-wrapper.mjs");
   for (const provider of ["codex", "claude"]) {
     const sh = path.join(binDir, provider);
-    fs.writeFileSync(sh, `#!/bin/sh\nexec node ${shellQuote(supervisor)} ${provider} \"$@\"\n`, "utf8");
+    if (process.platform === "linux") {
+      const realVar = provider === "codex" ? "WEB_KIT_REAL_CODEX_BIN" : "WEB_KIT_REAL_CLAUDE_BIN";
+      fs.writeFileSync(sh, `#!/bin/sh\nif [ -n \"\${${realVar}:-}\" ]; then\n  export WEB_KIT_PROVIDER_WRAPPER_TARGET=\"\$${realVar}\"\nelse\n  unset WEB_KIT_PROVIDER_WRAPPER_TARGET\nfi\nexport WEB_KIT_PROVIDER_WRAPPER_NAME=${provider}\nexport ${realVar}=${shellQuote(processWrapper)}\nexec node ${shellQuote(supervisor)} ${provider} \"$@\"\n`, "utf8");
+    } else {
+      fs.writeFileSync(sh, `#!/bin/sh\nexec node ${shellQuote(supervisor)} ${provider} \"$@\"\n`, "utf8");
+    }
     try { fs.chmodSync(sh, 0o755); } catch {}
     fs.writeFileSync(path.join(binDir, `${provider}.cmd`), `@echo off\r\nnode \"${supervisor}\" ${provider} %*\r\n`, "utf8");
   }
@@ -99,7 +105,7 @@ function install(version) {
   const home = userHome();
   const base = webKitHome();
   const binDir = path.join(base, "bin");
-  const required = ["context-supervisor.mjs", "provider-bridge.mjs"];
+  const required = ["context-supervisor.mjs", "provider-bridge.mjs", "provider-process-wrapper.mjs"];
   for (const name of required) if (!fs.existsSync(path.join(here, name))) throw new Error(`Installed Web Kit runtime missing ${name}`);
   fs.mkdirSync(base, { recursive: true });
   for (const name of required) copyFile(path.join(here, name), path.join(base, name));
@@ -114,12 +120,22 @@ function install(version) {
     threshold_percent: Number.isFinite(Number(old.threshold_percent)) ? Number(old.threshold_percent) : 50,
     version,
     bin_dir: binDir,
+    linux_process_tree_wrapper: process.platform === "linux",
     installed_at: new Date().toISOString(),
   };
   writeJson(configFile, config);
   const profiles = installProfiles(binDir, home);
   const windowsPath = persistWindowsPath(binDir);
-  return { enabled: config.enabled, base, bin_dir: binDir, threshold_percent: config.threshold_percent, profiles, windows_user_path_updated: windowsPath, restart_shell_required: true };
+  return {
+    enabled: config.enabled,
+    base,
+    bin_dir: binDir,
+    threshold_percent: config.threshold_percent,
+    linux_process_tree_wrapper: config.linux_process_tree_wrapper,
+    profiles,
+    windows_user_path_updated: windowsPath,
+    restart_shell_required: true,
+  };
 }
 
 function status() {
@@ -130,9 +146,11 @@ function status() {
   const wanted = normalizedPath(binDir);
   const pathEntries = String(process.env.PATH || "").split(path.delimiter).filter(Boolean).map(normalizedPath);
   const pathIndex = pathEntries.findIndex((entry) => entry === wanted);
+  const processWrapperInstalled = fs.existsSync(path.join(base, "provider-process-wrapper.mjs"));
   return {
     installed: fs.existsSync(path.join(base, "context-supervisor.mjs"))
       && fs.existsSync(path.join(base, "provider-bridge.mjs"))
+      && processWrapperInstalled
       && shims.every((file) => fs.existsSync(file)),
     enabled: config.enabled !== false,
     threshold_percent: Number(config.threshold_percent || 50),
@@ -141,6 +159,7 @@ function status() {
     path_present: pathIndex >= 0,
     path_index: pathIndex,
     path_preferred: pathIndex === 0,
+    linux_process_tree_wrapper: process.platform === "linux" && processWrapperInstalled,
   };
 }
 
