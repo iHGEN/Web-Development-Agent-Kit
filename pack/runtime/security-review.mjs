@@ -9,7 +9,8 @@ const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"];
 const CONFIDENCES = ["HIGH", "MEDIUM", "LOW"];
 const ACTIVE = new Set(["OPEN", "STILL_OPEN", "NEW", "REGRESSION"]);
 const PROVIDERS = new Set(["auto", "codex", "claude", "gemini"]);
-const REVIEW_STATE_PREFIX = ".agent-core/security-reviews/";
+const REVIEW_STATE_REL = ".agent-core/security-reviews";
+const REVIEW_STATE_PREFIX = `${REVIEW_STATE_REL}/`;
 
 const AREAS = [
   ["authentication", "Authentication", /(auth|login|signin|signup|register|password|credential|identity|mfa|2fa|verify|account)/i, /(password|credential|login|sign.?in|authenticate|mfa|2fa|otp|verification)/i, ["credential handling", "brute force", "account enumeration", "password reset", "MFA bypass", "authentication bypass"]],
@@ -43,8 +44,29 @@ function writeText(file, value) { fs.mkdirSync(path.dirname(file), { recursive: 
 function posix(value) { return String(value || "").replace(/\\/g, "/").replace(/^\.\//, ""); }
 function slug(value) { return posix(value || "detached").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "detached"; }
 function hash(value) { return crypto.createHash("sha256").update(String(value)).digest("hex"); }
-function isReviewState(file) { return posix(file).startsWith(REVIEW_STATE_PREFIX); }
+function branchStorageKey(branch) { return `${slug(branch).slice(0, 96)}--${hash(`branch:${branch}`).slice(0, 10)}`; }
+function isReviewState(file) { const normalized = posix(file); return normalized === REVIEW_STATE_REL || normalized.startsWith(REVIEW_STATE_PREFIX); }
 function unique(values) { return [...new Set(values.filter(Boolean))]; }
+
+function copyTree(src, dst) {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dst, entry.name);
+    if (entry.isDirectory()) copyTree(from, to);
+    else if (entry.isFile()) { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(from, to); }
+  }
+}
+function moveTree(src, dst) {
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  try { fs.renameSync(src, dst); }
+  catch (error) {
+    if (error?.code !== "EXDEV") throw error;
+    copyTree(src, dst);
+    fs.rmSync(src, { recursive: true, force: true });
+  }
+}
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -58,10 +80,7 @@ function run(command, args, options = {}) {
     shell: options.shell ?? (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)),
   });
 }
-function git(project, args, fallback = "") {
-  const r = run("git", args, { cwd: project, timeout: 60_000 });
-  return !r.error && r.status === 0 ? String(r.stdout || "").trim() : fallback;
-}
+function git(project, args, fallback = "") { const r = run("git", args, { cwd: project, timeout: 60_000 }); return !r.error && r.status === 0 ? String(r.stdout || "").trim() : fallback; }
 function gitOk(project, args) { const r = run("git", args, { cwd: project, timeout: 60_000 }); return !r.error && r.status === 0; }
 function gitLines(project, args) { return git(project, args).split(/\r?\n/).map((x) => x.trim()).filter(Boolean); }
 
@@ -92,7 +111,7 @@ function parseArgs(argv) {
   return out;
 }
 function printHelp() {
-  console.log(`Web Kit Security PR Reviewer\n\nUsage:\n  node .agent-core/bin/security-review.mjs [options]\n\nOptions:\n  --project <path>          Project root. Default: current directory.\n  --base <branch/ref>       Base branch/ref. Auto-detected when omitted.\n  --provider <name>         auto | codex | claude | gemini.\n  --deep                    Review every security area.\n  --scan-only               Run branch/scanner analysis without AI source review.\n  --no-scanners             Skip optional external scanners.\n  --json                    Print final review JSON.\n  --fail-on-blocking        Exit 4 when REQUEST_CHANGES.\n  --timeout <seconds>       Per scanner/provider timeout. Default: 180.\n\nProvider-neutral AI trigger:\n  run security-review\n`);
+  console.log(`Web Kit Security PR Reviewer\n\nUsage:\n  node .agent-core/bin/security-review.mjs [options]\n\nOptions:\n  --project <path>          Project root. Default: current directory.\n  --base <branch/ref>       Base branch/ref. Auto-detected when omitted.\n  --provider <name>         auto | codex | claude | gemini.\n  --deep                    Review every security area.\n  --scan-only               Scanner/branch evidence only; always INCONCLUSIVE and not /5 scored.\n  --no-scanners             Skip optional external scanners.\n  --json                    Print final review JSON.\n  --fail-on-blocking        Exit 4 whenever the review is not APPROVE.\n  --timeout <seconds>       Per scanner/provider timeout. Default: 180.\n\nProvider-neutral AI trigger:\n  run security-review\n`);
 }
 
 function refExists(project, ref) { return Boolean(ref) && gitOk(project, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]); }
@@ -150,6 +169,34 @@ function attackSurface(files, diff, deep) {
   return result;
 }
 
+function migrateLegacyBranchState(project, branch, reviewRoot) {
+  const legacy = path.join(project, REVIEW_STATE_REL, slug(branch));
+  if (path.resolve(legacy) === path.resolve(reviewRoot) || !fs.existsSync(legacy) || fs.existsSync(reviewRoot)) return;
+  const latest = readJson(path.join(legacy, "latest.json"), null);
+  if (latest?.branch !== branch) return;
+  moveTree(legacy, reviewRoot);
+}
+
+function hideGeneratedReviewState(project, action) {
+  const source = path.join(project, REVIEW_STATE_REL);
+  if (!fs.existsSync(source)) return action();
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-security-state-"));
+  const hidden = path.join(tempRoot, "security-reviews");
+  let moved = false;
+  try {
+    moveTree(source, hidden);
+    moved = true;
+    return action();
+  } finally {
+    if (moved && fs.existsSync(hidden)) {
+      fs.mkdirSync(path.dirname(source), { recursive: true });
+      if (fs.existsSync(source)) fs.rmSync(source, { recursive: true, force: true });
+      moveTree(hidden, source);
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function executable(name) {
   if (process.platform === "win32") {
     const r = run("where.exe", [name], { timeout: 10_000 });
@@ -161,14 +208,11 @@ function executable(name) {
 }
 function jsonParse(text, fallback = null) { try { return JSON.parse(String(text || "").trim()); } catch { return fallback; } }
 function scanner(name, status, extra = {}) { return { name, status, ...extra }; }
-function storeScanner(project, runtimeDir, name, data) {
-  const file = path.join(runtimeDir, `${name}.json`);
-  writeJson(file, data);
-  return posix(path.relative(project, file));
-}
+function scannerArtifact(tempDir, name, data) { const file = path.join(tempDir, `${name}.json`); writeJson(file, data); return file; }
 function scannerError(r) { return r.error?.message || (r.status !== 0 ? String(r.stderr || "").trim().slice(0, 1200) : null); }
-function runScanners(project, runtimeDir, timeoutMs) {
-  fs.mkdirSync(runtimeDir, { recursive: true });
+
+function runScanners(project, tempDir, timeoutMs) {
+  fs.mkdirSync(tempDir, { recursive: true });
   const out = [];
 
   const semgrep = executable("semgrep");
@@ -177,7 +221,7 @@ function runScanners(project, runtimeDir, timeoutMs) {
     const r = run(semgrep, ["scan", "--config", "auto", "--json", "--metrics=off", "."], { cwd: project, timeout: timeoutMs });
     const data = jsonParse(r.stdout, { stdout: r.stdout, stderr: r.stderr });
     const count = Array.isArray(data?.results) ? data.results.length : null;
-    out.push(scanner("semgrep", !r.error && r.status === 0 ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, artifact: storeScanner(project, runtimeDir, "semgrep", data), note: scannerError(r) }));
+    out.push(scanner("semgrep", !r.error && r.status === 0 ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, temp_artifact: scannerArtifact(tempDir, "semgrep", data), note: scannerError(r) }));
   }
 
   const osv = executable("osv-scanner");
@@ -188,18 +232,18 @@ function runScanners(project, runtimeDir, timeoutMs) {
     let count = 0;
     for (const item of data?.results || []) for (const pkg of item?.packages || []) count += (pkg?.vulnerabilities || []).length;
     const recognized = !r.error && (r.status === 0 || r.status === 1);
-    out.push(scanner("osv-scanner", recognized ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, artifact: storeScanner(project, runtimeDir, "osv-scanner", data), note: recognized ? null : scannerError(r) }));
+    out.push(scanner("osv-scanner", recognized ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, temp_artifact: scannerArtifact(tempDir, "osv-scanner", data), note: recognized ? null : scannerError(r) }));
   }
 
   const gitleaks = executable("gitleaks");
   if (!gitleaks) out.push(scanner("gitleaks", "SKIPPED", { reason: "gitleaks not installed on PATH" }));
   else {
-    const raw = path.join(runtimeDir, `gitleaks-${process.pid}.json`);
+    const raw = path.join(tempDir, `gitleaks-raw-${process.pid}.json`);
     const r = run(gitleaks, ["dir", ".", "--report-format", "json", "--report-path", raw, "--redact", "--exit-code", "0", "--no-banner"], { cwd: project, timeout: timeoutMs });
     const data = fs.existsSync(raw) ? jsonParse(readText(raw), []) : [];
     try { fs.unlinkSync(raw); } catch {}
     const count = Array.isArray(data) ? data.length : null;
-    out.push(scanner("gitleaks", !r.error && r.status === 0 ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, artifact: storeScanner(project, runtimeDir, "gitleaks", data || []), note: scannerError(r) }));
+    out.push(scanner("gitleaks", !r.error && r.status === 0 ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, temp_artifact: scannerArtifact(tempDir, "gitleaks", data || []), note: scannerError(r) }));
   }
 
   const trivy = executable("trivy");
@@ -209,7 +253,7 @@ function runScanners(project, runtimeDir, timeoutMs) {
     const data = jsonParse(r.stdout, { stdout: r.stdout, stderr: r.stderr });
     let count = 0;
     for (const item of data?.Results || []) count += (item?.Vulnerabilities || []).length + (item?.Misconfigurations || []).length + (item?.Secrets || []).length;
-    out.push(scanner("trivy", !r.error && r.status === 0 ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, artifact: storeScanner(project, runtimeDir, "trivy", data), note: scannerError(r) }));
+    out.push(scanner("trivy", !r.error && r.status === 0 ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, temp_artifact: scannerArtifact(tempDir, "trivy", data), note: scannerError(r) }));
   }
 
   const packageLock = path.join(project, "package-lock.json");
@@ -222,7 +266,7 @@ function runScanners(project, runtimeDir, timeoutMs) {
     const meta = data?.metadata?.vulnerabilities || {};
     const count = Number(meta.total ?? Object.entries(meta).filter(([key]) => key !== "total").reduce((sum, [, value]) => sum + (Number(value) || 0), 0));
     const recognized = !r.error && (r.status === 0 || r.status === 1);
-    out.push(scanner("npm-audit", recognized ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, artifact: storeScanner(project, runtimeDir, "npm-audit", data), note: recognized ? null : scannerError(r) }));
+    out.push(scanner("npm-audit", recognized ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, temp_artifact: scannerArtifact(tempDir, "npm-audit", data), note: recognized ? null : scannerError(r) }));
   }
 
   const pnpmLock = path.join(project, "pnpm-lock.yaml");
@@ -235,24 +279,36 @@ function runScanners(project, runtimeDir, timeoutMs) {
     const meta = data?.metadata?.vulnerabilities || {};
     const count = Number(meta.total ?? Object.entries(meta).filter(([key]) => key !== "total").reduce((sum, [, value]) => sum + (Number(value) || 0), 0));
     const recognized = !r.error && (r.status === 0 || r.status === 1);
-    out.push(scanner("pnpm-audit", recognized ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, artifact: storeScanner(project, runtimeDir, "pnpm-audit", data), note: recognized ? null : scannerError(r) }));
+    out.push(scanner("pnpm-audit", recognized ? (count ? "FINDINGS" : "PASS") : "ERROR", { finding_count: count, exit_code: r.status, temp_artifact: scannerArtifact(tempDir, "pnpm-audit", data), note: recognized ? null : scannerError(r) }));
   }
   return out;
 }
 
-function providerOverride(name) {
-  return process.env[{ codex: "WEB_KIT_SECURITY_CODEX_BIN", claude: "WEB_KIT_SECURITY_CLAUDE_BIN", gemini: "WEB_KIT_SECURITY_GEMINI_BIN" }[name]] || null;
+function persistScannerArtifacts(project, runtimeDir, scanners) {
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  return scanners.map((item) => {
+    if (!item.temp_artifact || !fs.existsSync(item.temp_artifact)) {
+      const { temp_artifact, ...rest } = item;
+      return rest;
+    }
+    const target = path.join(runtimeDir, `${item.name}.json`);
+    fs.copyFileSync(item.temp_artifact, target);
+    const { temp_artifact, ...rest } = item;
+    return { ...rest, artifact: posix(path.relative(project, target)) };
+  });
 }
+
+function providerOverride(name) { return process.env[{ codex: "WEB_KIT_SECURITY_CODEX_BIN", claude: "WEB_KIT_SECURITY_CLAUDE_BIN", gemini: "WEB_KIT_SECURITY_GEMINI_BIN" }[name]] || null; }
 function resolveProviderExecutable(name) {
   const override = providerOverride(name);
   if (override) return path.resolve(override);
-  const wanted = path.resolve(process.env.WEB_KIT_HOME || path.join(os.homedir(), ".web-kit"), "bin");
+  const webKitBin = path.resolve(process.env.WEB_KIT_HOME || path.join(os.homedir(), ".web-kit"), "bin");
   const entries = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
   const names = process.platform === "win32" ? [`${name}.exe`, `${name}.cmd`, name, `${name}.bat`] : [name];
   for (const dir of entries) {
     let resolved;
     try { resolved = path.resolve(dir); } catch { continue; }
-    if (resolved.toLowerCase() === wanted.toLowerCase()) continue;
+    if (resolved.toLowerCase() === webKitBin.toLowerCase()) continue;
     for (const candidateName of names) {
       const candidate = path.join(resolved, candidateName);
       try { if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate; } catch {}
@@ -262,13 +318,13 @@ function resolveProviderExecutable(name) {
 }
 function chooseProvider(requested) {
   if (requested !== "auto") {
-    const executable = resolveProviderExecutable(requested);
-    if (!executable) throw new Error(`Security reviewer provider '${requested}' was not found outside the Web Kit shim directory.`);
-    return { name: requested, executable };
+    const providerExecutable = resolveProviderExecutable(requested);
+    if (!providerExecutable) throw new Error(`Security reviewer provider '${requested}' was not found outside the Web Kit shim directory.`);
+    return { name: requested, executable: providerExecutable };
   }
   for (const name of ["codex", "claude", "gemini"]) {
-    const executable = resolveProviderExecutable(name);
-    if (executable) return { name, executable };
+    const providerExecutable = resolveProviderExecutable(name);
+    if (providerExecutable) return { name, executable: providerExecutable };
   }
   throw new Error("No supported headless AI reviewer found. Install/authenticate Codex, Claude, or Gemini CLI, or use --scan-only.");
 }
@@ -301,15 +357,10 @@ function parseJsonObject(text) {
   return start >= 0 && end > start ? jsonParse(cleaned.slice(start, end + 1), null) : null;
 }
 function reviewerPrompt(contextRel, previousRel) {
-  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its own generated files as branch changes.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding. Re-emit it with the same stable fingerprint if still present. If absent, the engine marks it RESOLVED.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"summary\": \"short assessment\",\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
+  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding. Re-emit it with the same stable fingerprint if still present. If absent, the engine marks it RESOLVED.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"summary\": \"short assessment\",\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
 }
 function invokeProvider(provider, project, prompt, timeoutMs) {
-  const env = {
-    ...process.env,
-    WEB_KIT_SECURITY_REVIEW_ACTIVE: "1",
-    WEB_KIT_SECURITY_PROJECT_ROOT: project,
-    WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1",
-  };
+  const env = { ...process.env, WEB_KIT_SECURITY_REVIEW_ACTIVE: "1", WEB_KIT_SECURITY_PROJECT_ROOT: project, WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
   let args;
   if (provider.name === "codex") args = ["exec", "--json", "--sandbox", "read-only", "-C", project, prompt];
   else if (provider.name === "claude") args = ["-p", prompt, "--output-format", "json", "--permission-mode", "plan"];
@@ -409,31 +460,35 @@ function counts(findings) {
   for (const f of findings) if (ACTIVE.has(f.status)) result[f.severity] += 1;
   return result;
 }
+function scannerFindingCount(scanners) { return scanners.filter((s) => s.status === "FINDINGS").reduce((sum, s) => sum + (Number(s.finding_count) || 0), 0); }
 function normalizeCoverage(model, surfaces, scanners, scanOnly) {
-  if (scanOnly) return surfaces.map((x) => ({ area: x.name, status: "LIMITED", notes: "AI source review skipped by --scan-only." }));
-  const coverage = Array.isArray(model?.coverage) ? model.coverage.map((x) => ({
+  const coverage = scanOnly ? surfaces.map((x) => ({ area: x.name, status: "LIMITED", notes: "AI source review skipped by --scan-only." })) : Array.isArray(model?.coverage) ? model.coverage.map((x) => ({
     area: String(x.area || "Unknown"),
     status: ["REVIEWED", "NOT_APPLICABLE", "LIMITED"].includes(String(x.status || "").toUpperCase()) ? String(x.status).toUpperCase() : "LIMITED",
     notes: String(x.notes || "").trim(),
   })).slice(0, 120) : [];
-  const missingRequired = surfaces.filter((s) => !coverage.some((c) => c.area.toLowerCase() === s.name.toLowerCase()));
-  for (const surface of missingRequired) coverage.push({ area: surface.name, status: "LIMITED", notes: "Mapped as REVIEW_REQUIRED but reviewer did not explicitly report coverage." });
+  if (!scanOnly) {
+    const missingRequired = surfaces.filter((s) => !coverage.some((c) => c.area.toLowerCase() === s.name.toLowerCase()));
+    for (const surface of missingRequired) coverage.push({ area: surface.name, status: "LIMITED", notes: "Mapped as REVIEW_REQUIRED but reviewer did not explicitly report coverage." });
+  }
   for (const s of scanners.filter((x) => ["SKIPPED", "ERROR"].includes(x.status))) coverage.push({ area: `Scanner: ${s.name}`, status: "LIMITED", notes: s.reason || s.note || s.status });
   return coverage;
 }
+function ratingText(review) { return Number.isFinite(review.rating) ? `${review.rating.toFixed(1)} / 5` : "NOT SCORED (scan-only)"; }
 function markdown(review) {
   const lines = [
     "# Web Kit Security PR Review", "",
     `- **Branch:** \`${review.branch}\``,
+    `- **Branch storage key:** \`${review.branch_storage_key}\``,
     `- **Base:** \`${review.base}\``,
     `- **Review:** ${review.review_number} (${review.mode})`,
-    `- **Security Rating:** **${review.rating.toFixed(1)} / 5**`,
+    `- **Security Rating:** **${ratingText(review)}**`,
     `- **Decision:** **${review.decision}**`,
     `- **Reviewer Provider:** ${review.provider || "scan-only"}`, "",
     "## Active findings", "",
   ];
   const active = review.findings.filter((f) => ACTIVE.has(f.status));
-  if (!active.length) lines.push("No active findings.", "");
+  if (!active.length) lines.push("No active correlated SEC findings.", "");
   for (const f of active) {
     lines.push(`### ${f.id} — ${f.severity} — ${f.title}`, "", `- **Status:** ${f.status}`, `- **Confidence:** ${f.confidence}`, `- **Blocking:** ${f.blocking ? "YES" : "NO"}`);
     if (f.file) lines.push(`- **Location:** \`${f.file}${f.line ? `:${f.line}` : ""}\``);
@@ -451,16 +506,18 @@ function markdown(review) {
   lines.push("", "## Scanner status", "");
   for (const s of review.scanners) lines.push(`- **${s.name}:** ${s.status}${Number.isInteger(s.finding_count) ? ` (${s.finding_count} findings)` : ""}${s.reason ? ` — ${s.reason}` : ""}${s.note ? ` — ${String(s.note).slice(0, 300)}` : ""}`);
   if (review.limitations.length) { lines.push("", "## Limitations", ""); for (const item of review.limitations) lines.push(`- ${item}`); }
-  lines.push("", "> A 5/5 review means no blocking issue was found in the reviewed scope and available evidence. It is not a guarantee that the software is vulnerability-free.");
+  if (review.scan_only) lines.push("", "> Scan-only mode is intentionally INCONCLUSIVE and is not assigned a /5 security rating. Run a full security-review to correlate scanner evidence with source-level security reasoning.");
+  else lines.push("", "> A 5/5 review means no blocking issue was found in the reviewed scope and available evidence. It is not a guarantee that the software is vulnerability-free.");
   return `${lines.join("\n")}\n`;
 }
 function printReview(review, latestMd) {
   console.log("\n╔════════════════════════════════════════╗\n║       WEB KIT SECURITY PR REVIEW      ║\n╚════════════════════════════════════════╝\n");
-  console.log(`Branch:          ${review.branch}\nBase:            ${review.base}\nReview:          #${review.review_number} (${review.mode})\nSecurity Rating: ${review.rating.toFixed(1)} / 5\nDecision:        ${review.decision}\nProvider:        ${review.provider || "scan-only"}\n`);
+  console.log(`Branch:          ${review.branch}\nBase:            ${review.base}\nReview:          #${review.review_number} (${review.mode})\nSecurity Rating: ${ratingText(review)}\nDecision:        ${review.decision}\nProvider:        ${review.provider || "scan-only"}\n`);
   const c = review.counts;
-  console.log(`Critical: ${c.CRITICAL}  High: ${c.HIGH}  Medium: ${c.MEDIUM}  Low: ${c.LOW}  Info: ${c.INFO}\n`);
+  console.log(`Critical: ${c.CRITICAL}  High: ${c.HIGH}  Medium: ${c.MEDIUM}  Low: ${c.LOW}  Info: ${c.INFO}`);
+  if (review.scan_only) console.log(`Scanner findings: ${review.scanner_finding_count}\n`); else console.log("");
   const active = review.findings.filter((f) => ACTIVE.has(f.status));
-  if (!active.length) console.log("✓ No active security findings.");
+  if (!active.length) console.log(review.scan_only ? "• No correlated SEC findings (AI correlation not run)." : "✓ No active security findings.");
   for (const f of active) { console.log(`${f.blocking ? "✗" : "•"} ${f.id}  ${f.severity}  ${f.status}  ${f.title}`); if (f.file) console.log(`  ${f.file}${f.line ? `:${f.line}` : ""}`); }
   for (const f of review.findings.filter((f) => f.status === "RESOLVED" && f.resolved_review === review.review_number)) console.log(`✓ ${f.id}  RESOLVED  ${f.title}`);
   console.log(`\nFull review: ${latestMd}`);
@@ -474,6 +531,7 @@ async function main() {
   if (git(project, ["rev-parse", "--is-inside-work-tree"]) !== "true") throw new Error("security-review requires a Git repository.");
 
   const branch = git(project, ["branch", "--show-current"]) || `detached-${git(project, ["rev-parse", "--short", "HEAD"]) || "head"}`;
+  const storageKey = branchStorageKey(branch);
   const base = detectBase(project, branch, args.base);
   const mergeBase = git(project, ["merge-base", base, "HEAD"]);
   if (!mergeBase) throw new Error(`Could not determine merge-base between ${base} and HEAD.`);
@@ -482,87 +540,112 @@ async function main() {
   const diff = diffText(project, mergeBase);
   const surfaces = attackSurface(files, diff, args.deep);
 
-  const reviewRoot = path.join(project, ".agent-core", "security-reviews", slug(branch));
-  const historyDir = path.join(reviewRoot, "history");
-  const runtimeDir = path.join(reviewRoot, "runtime");
+  const reviewRoot = path.join(project, REVIEW_STATE_REL, storageKey);
+  migrateLegacyBranchState(project, branch, reviewRoot);
   const latestJson = path.join(reviewRoot, "latest.json");
-  const latestMd = path.join(reviewRoot, "latest.md");
   const previous = readJson(latestJson, null);
   const reviewNumber = Number(previous?.review_number || 0) + 1;
-  fs.mkdirSync(historyDir, { recursive: true }); fs.mkdirSync(runtimeDir, { recursive: true });
 
-  const scanners = args.noScanners ? [scanner("external-scanners", "SKIPPED", { reason: "--no-scanners requested" })] : runScanners(project, runtimeDir, args.timeoutMs);
-  const context = {
-    schema_version: 1,
-    review_number: reviewNumber,
-    mode: previous ? "rereview" : "initial",
-    project,
-    branch,
-    base,
-    merge_base: mergeBase,
-    head,
-    changed_files: files,
-    working_tree_status: workingTreeStatus(project),
-    attack_surfaces: surfaces,
-    deep_review: args.deep,
-    scanners,
-    standards: ["OWASP Web Top 10", "OWASP API Security Top 10", "CWE including CWE Top 25 where relevant", "CVE/GHSA/OSV only with real advisory evidence", "framework/language-specific security", "business-logic and abuse-case analysis"],
-    generated_state_excluded_from_branch_scope: REVIEW_STATE_PREFIX,
-    created_at: nowIso(),
-  };
-  const contextFile = path.join(runtimeDir, `review-context-${String(reviewNumber).padStart(3, "0")}.json`);
-  writeJson(contextFile, context);
-  const contextRel = posix(path.relative(project, contextFile));
-  const previousRel = previous ? posix(path.relative(project, latestJson)) : null;
+  const scanTemp = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-security-scanners-"));
+  let scannerResults;
+  try {
+    scannerResults = args.noScanners
+      ? [scanner("external-scanners", "SKIPPED", { reason: "--no-scanners requested" })]
+      : hideGeneratedReviewState(project, () => runScanners(project, scanTemp, args.timeoutMs));
 
-  let provider = null;
-  let model = { summary: "Scanner-only branch security analysis.", limitations: ["AI source/security reasoning was skipped by --scan-only."], coverage: [], findings: [] };
-  if (!args.scanOnly) {
-    provider = chooseProvider(args.provider);
-    model = invokeProvider(provider, project, reviewerPrompt(contextRel, previousRel), args.timeoutMs);
-  } else {
-    for (const s of scanners) if (s.status === "FINDINGS") model.limitations.push(`${s.name} reported findings; run a full security-review to correlate them into SEC-* findings.`);
+    const historyDir = path.join(reviewRoot, "history");
+    const runtimeDir = path.join(reviewRoot, "runtime");
+    const latestMd = path.join(reviewRoot, "latest.md");
+    fs.mkdirSync(historyDir, { recursive: true }); fs.mkdirSync(runtimeDir, { recursive: true });
+    const scanners = persistScannerArtifacts(project, runtimeDir, scannerResults);
+
+    const context = {
+      schema_version: 2,
+      review_number: reviewNumber,
+      mode: previous ? "rereview" : "initial",
+      project,
+      branch,
+      branch_storage_key: storageKey,
+      base,
+      merge_base: mergeBase,
+      head,
+      changed_files: files,
+      working_tree_status: workingTreeStatus(project),
+      attack_surfaces: surfaces,
+      deep_review: args.deep,
+      scan_only: args.scanOnly,
+      scanners,
+      standards: ["OWASP Web Top 10", "OWASP API Security Top 10", "CWE including CWE Top 25 where relevant", "CVE/GHSA/OSV only with real advisory evidence", "framework/language-specific security", "business-logic and abuse-case analysis"],
+      generated_state_excluded_from_branch_scope: `${REVIEW_STATE_PREFIX}**`,
+      generated_state_hidden_from_external_scanners: true,
+      created_at: nowIso(),
+    };
+    const contextFile = path.join(runtimeDir, `review-context-${String(reviewNumber).padStart(3, "0")}.json`);
+    writeJson(contextFile, context);
+    const contextRel = posix(path.relative(project, contextFile));
+    const previousRel = previous ? posix(path.relative(project, latestJson)) : null;
+
+    let provider = null;
+    let model = { summary: "Scanner-only branch security evidence collection.", limitations: ["AI source/security reasoning was skipped by --scan-only."], coverage: [], findings: [] };
+    if (!args.scanOnly) {
+      provider = chooseProvider(args.provider);
+      model = invokeProvider(provider, project, reviewerPrompt(contextRel, previousRel), args.timeoutMs);
+    } else {
+      for (const s of scanners) if (s.status === "FINDINGS") model.limitations.push(`${s.name} reported ${Number(s.finding_count) || "one or more"} finding(s); a full security-review is required to correlate severity, exploitability, and persistent SEC-* findings.`);
+    }
+
+    const findings = reconcile(model.findings, previous, reviewNumber);
+    const scanFindings = scannerFindingCount(scanners);
+    const rating = args.scanOnly ? null : score(findings);
+    const decision = args.scanOnly ? "INCONCLUSIVE" : findings.some((f) => f.blocking) ? "REQUEST_CHANGES" : "APPROVE";
+    const limitations = Array.isArray(model.limitations) ? model.limitations.map(String).slice(0, 120) : [];
+    for (const s of scanners) {
+      if (s.status === "SKIPPED") limitations.push(`${s.name}: ${s.reason || "scanner unavailable"}`);
+      if (s.status === "ERROR") limitations.push(`${s.name}: scanner error; ${s.note || `exit ${s.exit_code}`}`);
+    }
+    if (args.scanOnly) limitations.push("Scan-only mode never grants APPROVE and is intentionally not assigned a /5 rating; run a full security-review for a merge decision.");
+
+    const review = {
+      schema_version: 2,
+      review_number: reviewNumber,
+      mode: previous ? "rereview" : "initial",
+      branch,
+      branch_storage_key: storageKey,
+      base,
+      merge_base: mergeBase,
+      head,
+      changed_files: files,
+      attack_surfaces: surfaces,
+      scan_only: args.scanOnly,
+      provider: provider?.name || null,
+      scanners,
+      scanner_finding_count: scanFindings,
+      summary: String(model.summary || "").trim(),
+      limitations: unique(limitations),
+      coverage: normalizeCoverage(model, surfaces, scanners, args.scanOnly),
+      findings,
+      counts: counts(findings),
+      rating,
+      rating_scale: 5,
+      rating_status: args.scanOnly ? "NOT_SCORED_SCAN_ONLY" : "SCORED",
+      decision,
+      approval_eligible: !args.scanOnly,
+      blocking_findings: findings.filter((f) => f.blocking).map((f) => f.id),
+      created_at: nowIso(),
+      disclaimer: "This review is evidence-based risk assessment, not a guarantee that every vulnerability has been found.",
+    };
+
+    const historyJson = path.join(historyDir, `review-${String(reviewNumber).padStart(3, "0")}.json`);
+    const historyMd = path.join(historyDir, `review-${String(reviewNumber).padStart(3, "0")}.md`);
+    writeJson(historyJson, review); writeText(historyMd, markdown(review));
+    writeJson(latestJson, review); writeText(latestMd, markdown(review));
+
+    if (args.json) console.log(JSON.stringify(review, null, 2)); else printReview(review, posix(path.relative(project, latestMd)));
+    if (args.failOnBlocking && decision !== "APPROVE") return 4;
+    return 0;
+  } finally {
+    fs.rmSync(scanTemp, { recursive: true, force: true });
   }
-
-  const findings = reconcile(model.findings, previous, reviewNumber);
-  const rating = score(findings);
-  const decision = findings.some((f) => f.blocking) ? "REQUEST_CHANGES" : "APPROVE";
-  const limitations = Array.isArray(model.limitations) ? model.limitations.map(String).slice(0, 120) : [];
-  for (const s of scanners) {
-    if (s.status === "SKIPPED") limitations.push(`${s.name}: ${s.reason || "scanner unavailable"}`);
-    if (s.status === "ERROR") limitations.push(`${s.name}: scanner error; ${s.note || `exit ${s.exit_code}`}`);
-  }
-  if (args.scanOnly && scanners.some((s) => s.status === "FINDINGS")) limitations.push("Scanner-only mode does not grant security approval; scanner findings require correlation in a full review.");
-
-  const review = {
-    schema_version: 1,
-    review_number: reviewNumber,
-    mode: previous ? "rereview" : "initial",
-    branch, base, merge_base: mergeBase, head,
-    changed_files: files,
-    attack_surfaces: surfaces,
-    provider: provider?.name || null,
-    scanners,
-    summary: String(model.summary || "").trim(),
-    limitations: unique(limitations),
-    coverage: normalizeCoverage(model, surfaces, scanners, args.scanOnly),
-    findings,
-    counts: counts(findings),
-    rating,
-    decision,
-    blocking_findings: findings.filter((f) => f.blocking).map((f) => f.id),
-    created_at: nowIso(),
-    disclaimer: "This review is evidence-based risk assessment, not a guarantee that every vulnerability has been found.",
-  };
-
-  const historyJson = path.join(historyDir, `review-${String(reviewNumber).padStart(3, "0")}.json`);
-  const historyMd = path.join(historyDir, `review-${String(reviewNumber).padStart(3, "0")}.md`);
-  writeJson(historyJson, review); writeText(historyMd, markdown(review));
-  writeJson(latestJson, review); writeText(latestMd, markdown(review));
-
-  if (args.json) console.log(JSON.stringify(review, null, 2)); else printReview(review, posix(path.relative(project, latestMd)));
-  if (args.failOnBlocking && decision === "REQUEST_CHANGES") return 4;
-  return 0;
 }
 
 main().then((code) => { process.exitCode = code; }).catch((error) => {
