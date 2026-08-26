@@ -167,6 +167,7 @@ assert(scanOnly.approval_eligible === false, "scan-only was incorrectly approval
 assert(scanOnly.rating === null && scanOnly.rating_status === "NOT_SCORED_SCAN_ONLY", "scan-only must not receive a misleading /5 rating");
 assert(scanOnly.scanners.find((s) => s.name === "semgrep")?.status === "FINDINGS", "fake Semgrep finding was not captured");
 assert(scanOnly.scanner_finding_count >= 1, "scan-only scanner finding count was not surfaced");
+assert(scanOnly.finding_lifecycle_verified === false, "scan-only incorrectly claimed SEC lifecycle verification");
 
 // Regression: existing generated review state is hidden from external scanner roots and restored afterward.
 const selfNoiseEnv = { ...scanEnv, WEB_KIT_TEST_SEMGREP_MODE: "self-noise" };
@@ -202,5 +203,28 @@ assert(hyphenReview.branch === "feature-auth" && hyphenReview.review_number === 
 assert(slashReview.branch_storage_key !== hyphenReview.branch_storage_key, "branch storage keys did not preserve exact branch identity");
 assert(fs.existsSync(path.join(slashRoot, "history", "review-001.json")), "feature/auth history disappeared after reviewing feature-auth");
 assert(fs.existsSync(path.join(hyphenRoot, "history", "review-001.json")), "feature-auth history was not written separately");
+
+// Regression: scan-only evidence must not resolve or otherwise mutate a previously active SEC finding.
+git(project, ["checkout", "main"]);
+git(project, ["checkout", "-b", "scan-only-active"]);
+fs.writeFileSync(path.join(project, "src", "admin.js"), "export function canDelete(req) { return req.body.role === \"admin\"; }\n");
+git(project, ["add", "src/admin.js"]);
+git(project, ["commit", "-m", "introduce active finding for scan-only lifecycle"]);
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: baseEnv });
+const activeRoot = reviewRoot(project, "scan-only-active");
+const activeBeforeScan = json(path.join(activeRoot, "latest.json"));
+const activeFindingBefore = activeBeforeScan.findings.find((finding) => finding.id === "SEC-001");
+assert(activeFindingBefore?.status === "OPEN" && activeFindingBefore.blocking === true, "active scan-only fixture did not start with OPEN SEC-001");
+assert(activeBeforeScan.decision === "REQUEST_CHANGES", "active scan-only fixture should request changes before scan-only");
+
+run(process.execPath, [engine, "--project", project, "--base", "main", "--scan-only"], { cwd: project, env: scanEnv });
+const activeAfterScan = json(path.join(activeRoot, "latest.json"));
+const activeFindingAfter = activeAfterScan.findings.find((finding) => finding.id === "SEC-001");
+assert(activeAfterScan.decision === "INCONCLUSIVE" && activeAfterScan.rating === null, "scan-only with an active finding became merge-approvable");
+assert(activeAfterScan.finding_lifecycle_verified === false, "scan-only with prior finding incorrectly claimed lifecycle verification");
+assert(activeFindingAfter?.status === "OPEN", `scan-only incorrectly changed prior SEC-001 status to ${activeFindingAfter?.status}`);
+assert(activeFindingAfter.blocking === true, "scan-only incorrectly removed blocking state from prior SEC-001");
+assert(activeFindingAfter.last_seen_review === activeFindingBefore.last_seen_review, "scan-only incorrectly advanced last_seen_review without AI/source verification");
+assert(activeFindingAfter.resolved_review === activeFindingBefore.resolved_review, "scan-only incorrectly resolved a prior SEC finding");
 
 console.log(`Security Review smoke: PASS (${process.platform})`);
