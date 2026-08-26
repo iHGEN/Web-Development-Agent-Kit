@@ -5,6 +5,7 @@ on:
     branches: [ts-security-review-engine]
     paths:
       - ".github/workflows/apply-security-artifact-history-fix.yml"
+      - "scripts/apply-security-artifact-history-fix.mjs"
 
 permissions:
   contents: write
