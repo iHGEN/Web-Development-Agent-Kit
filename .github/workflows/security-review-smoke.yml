@@ -137,14 +137,18 @@ jobs:
 
           test -f "$SAMPLE/.agent-core/bin/security-review.mjs"
           test -f "$SAMPLE/.agent-core/rules/security-review.md"
-          test -f "$SAMPLE/.agent-core/security-reviews/ts-admin-security/latest.json"
           grep -q 'run security-review' "$SAMPLE/AGENTS.md"
 
-          node - "$SAMPLE" <<'NODE'
+          REVIEW_JSON="$(find "$SAMPLE/.agent-core/security-reviews" -mindepth 2 -maxdepth 2 -type f -name latest.json -print -quit)"
+          test -n "$REVIEW_JSON"
+          test -f "$REVIEW_JSON"
+
+          node - "$REVIEW_JSON" <<'NODE'
           const fs = require('fs');
-          const path = require('path');
-          const sample = process.argv[2];
-          const review = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/security-reviews/ts-admin-security/latest.json'), 'utf8'));
+          const reviewFile = process.argv[2];
+          const review = JSON.parse(fs.readFileSync(reviewFile, 'utf8'));
+          if (review.branch !== 'ts-admin-security') process.exit(1);
+          if (!/^ts-admin-security--[0-9a-f]{10}$/.test(review.branch_storage_key || '')) process.exit(1);
           if (review.decision !== 'REQUEST_CHANGES') process.exit(1);
           if (review.findings?.[0]?.id !== 'SEC-001') process.exit(1);
           if (!(review.rating > 0 && review.rating <= 2.9)) process.exit(1);
