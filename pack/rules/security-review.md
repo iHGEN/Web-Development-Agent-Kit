@@ -84,7 +84,7 @@ Missing or failed scanners are coverage limitations, never evidence of safety.
 
 ### Generated-state isolation
 
-`.agent-core/security-reviews/**` is generated evidence/state, not product source. Before external scanners run, Web Kit temporarily moves the entire generated security-review state outside the project scanner root and restores it afterward. Scanner artifacts are first written outside the repository and copied back only after scanning finishes. Each review receives a dedicated `runtime/review-NNN/` evidence directory; historical review JSON never points at a mutable shared scanner filename. Scanner records include the review number, SHA-256 digest, and byte size so persisted evidence can be audited for immutability.
+`.agent-core/security-reviews/**` is generated evidence/state, not product source. Before external scanners run, Web Kit temporarily moves the entire generated security-review state outside the project scanner root and restores it afterward. Scanner artifacts are first written outside the repository and copied back only after scanning finishes. Each review receives a dedicated `runtime/review-NNN/` evidence directory; historical review JSON never points at a mutable shared scanner filename. Scanner records include the originating review number (`artifact_review`), SHA-256 digest (`artifact_sha256`), and byte size (`artifact_size`) so persisted evidence can be independently checked for immutability.
 
 This prevents previous findings, prompts, scanner JSON, and review reports from generating self-referential scanner noise on a re-review.
 
