@@ -34,9 +34,6 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
-    env:
-      WEB_KIT_USER_HOME: ${{ runner.temp }}/web-kit-user-home
-      WEB_KIT_HOME: ${{ runner.temp }}/web-kit-user-home/.web-kit
 
     steps:
       - name: Checkout
@@ -46,6 +43,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Configure Web Kit user home
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "WEB_KIT_USER_HOME=$RUNNER_TEMP/web-kit-user-home" >> "$GITHUB_ENV"
+          echo "WEB_KIT_HOME=$RUNNER_TEMP/web-kit-user-home/.web-kit" >> "$GITHUB_ENV"
 
       - name: Validate Node entry points
         shell: bash
