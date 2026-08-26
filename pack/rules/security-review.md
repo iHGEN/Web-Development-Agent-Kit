@@ -182,6 +182,8 @@ State is stored under:
     └── ...
 ```
 
+Historical scanner evidence is append-only by review number: a later review must never overwrite, repoint, or mutate the artifact referenced by an earlier `history/review-NNN.json` record.
+
 Pre-release legacy slug-only state may be migrated only when its `latest.json` records the exact same branch name; ambiguous/colliding state must never be imported into another branch.
 
 ## Rating out of 5
