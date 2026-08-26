@@ -288,17 +288,25 @@ function runScanners(project, tempDir, timeoutMs) {
   return out;
 }
 
-function persistScannerArtifacts(project, runtimeDir, scanners) {
-  fs.mkdirSync(runtimeDir, { recursive: true });
+function persistScannerArtifacts(project, runtimeDir, reviewNumber, scanners) {
+  const reviewArtifactDir = path.join(runtimeDir, `review-${String(reviewNumber).padStart(3, "0")}`);
+  fs.mkdirSync(reviewArtifactDir, { recursive: true });
   return scanners.map((item) => {
     if (!item.temp_artifact || !fs.existsSync(item.temp_artifact)) {
       const { temp_artifact, ...rest } = item;
       return rest;
     }
-    const target = path.join(runtimeDir, `${item.name}.json`);
+    const target = path.join(reviewArtifactDir, `${item.name}.json`);
     fs.copyFileSync(item.temp_artifact, target);
+    const bytes = fs.readFileSync(target);
     const { temp_artifact, ...rest } = item;
-    return { ...rest, artifact: posix(path.relative(project, target)) };
+    return {
+      ...rest,
+      artifact: posix(path.relative(project, target)),
+      artifact_review: reviewNumber,
+      artifact_sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+      artifact_size: bytes.length,
+    };
   });
 }
 
@@ -568,7 +576,7 @@ async function main() {
     const runtimeDir = path.join(reviewRoot, "runtime");
     const latestMd = path.join(reviewRoot, "latest.md");
     fs.mkdirSync(historyDir, { recursive: true }); fs.mkdirSync(runtimeDir, { recursive: true });
-    const scanners = persistScannerArtifacts(project, runtimeDir, scannerResults);
+    const scanners = persistScannerArtifacts(project, runtimeDir, reviewNumber, scannerResults);
 
     const context = {
       schema_version: 2,

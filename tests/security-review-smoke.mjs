@@ -24,6 +24,7 @@ function assert(value, message) { if (!value) throw new Error(message); }
 function json(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function git(project, args) { return run("git", args, { cwd: project }); }
 function sha(value) { return crypto.createHash("sha256").update(String(value)).digest("hex"); }
+function fileSha(file) { return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
 function slug(value) { return String(value || "detached").replace(/\\/g, "/").replace(/^\.\//, "").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "detached"; }
 function storageKey(branch) { return `${slug(branch).slice(0, 96)}--${sha(`branch:${branch}`).slice(0, 10)}`; }
 function reviewRoot(project, branch) { return path.join(project, ".agent-core", "security-reviews", storageKey(branch)); }
@@ -165,18 +166,40 @@ assert(scanOnly.scan_only === true, "scan-only flag was not persisted");
 assert(scanOnly.decision === "INCONCLUSIVE", `scan-only must be INCONCLUSIVE, got ${scanOnly.decision}`);
 assert(scanOnly.approval_eligible === false, "scan-only was incorrectly approval eligible");
 assert(scanOnly.rating === null && scanOnly.rating_status === "NOT_SCORED_SCAN_ONLY", "scan-only must not receive a misleading /5 rating");
-assert(scanOnly.scanners.find((s) => s.name === "semgrep")?.status === "FINDINGS", "fake Semgrep finding was not captured");
+const firstSemgrep = scanOnly.scanners.find((s) => s.name === "semgrep");
+assert(firstSemgrep?.status === "FINDINGS", "fake Semgrep finding was not captured");
 assert(scanOnly.scanner_finding_count >= 1, "scan-only scanner finding count was not surfaced");
 assert(scanOnly.finding_lifecycle_verified === false, "scan-only incorrectly claimed SEC lifecycle verification");
+const firstReviewDir = `review-${String(scanOnly.review_number).padStart(3, "0")}`;
+assert(firstSemgrep?.artifact?.includes(`/runtime/${firstReviewDir}/semgrep.json`), "scanner artifact is not review-specific");
+assert(firstSemgrep?.artifact_review === scanOnly.review_number, "scanner artifact review provenance is missing");
+const firstArtifact = path.resolve(project, ...firstSemgrep.artifact.split("/"));
+assert(fs.existsSync(firstArtifact), "review-specific Semgrep artifact was not persisted");
+const firstArtifactHash = fileSha(firstArtifact);
+assert(firstSemgrep.artifact_sha256 === firstArtifactHash, "scanner artifact SHA-256 does not match persisted evidence");
+assert(firstSemgrep.artifact_size === fs.statSync(firstArtifact).size, "scanner artifact size metadata does not match persisted evidence");
+const firstHistoryPath = path.join(root, "history", `review-${String(scanOnly.review_number).padStart(3, "0")}.json`);
+const firstHistoryBefore = json(firstHistoryPath);
+assert(firstHistoryBefore.scanners.find((s) => s.name === "semgrep")?.artifact === firstSemgrep.artifact, "immutable history does not reference its own scanner artifact");
 
 // Regression: existing generated review state is hidden from external scanner roots and restored afterward.
 const selfNoiseEnv = { ...scanEnv, WEB_KIT_TEST_SEMGREP_MODE: "self-noise" };
 assert(fs.existsSync(path.join(project, ".agent-core", "security-reviews")), "expected review state before scanner isolation test");
 run(process.execPath, [engine, "--project", project, "--base", "main", "--scan-only"], { cwd: project, env: selfNoiseEnv });
 const isolated = json(path.join(root, "latest.json"));
-assert(isolated.scanners.find((s) => s.name === "semgrep")?.status === "PASS", "generated review state was visible to Semgrep and created self-noise");
+const secondSemgrep = isolated.scanners.find((s) => s.name === "semgrep");
+assert(secondSemgrep?.status === "PASS", "generated review state was visible to Semgrep and created self-noise");
 assert(fs.existsSync(path.join(project, ".agent-core", "security-reviews")), "review state was not restored after scanner isolation");
 assert(isolated.decision === "INCONCLUSIVE" && isolated.rating === null, "scanner-isolation scan-only run became merge-approvable");
+assert(secondSemgrep?.artifact !== firstSemgrep.artifact, "later review reused the prior scanner artifact path");
+assert(secondSemgrep?.artifact_review === isolated.review_number, "later scanner artifact has wrong review provenance");
+assert(fs.existsSync(firstArtifact), "review #1 scanner artifact disappeared after review #2");
+assert(fileSha(firstArtifact) === firstArtifactHash, "review #1 scanner artifact bytes changed after review #2");
+const firstHistoryAfter = json(firstHistoryPath);
+const historicalSemgrep = firstHistoryAfter.scanners.find((s) => s.name === "semgrep");
+assert(historicalSemgrep?.artifact === firstSemgrep.artifact, "review #1 history artifact path changed after review #2");
+assert(historicalSemgrep?.artifact_sha256 === firstArtifactHash, "review #1 history artifact hash changed after review #2");
+assert(fileSha(path.resolve(project, ...historicalSemgrep.artifact.split("/"))) === firstArtifactHash, "review #1 history no longer resolves to its original scanner evidence");
 
 // Regression: valid branch names that sanitize to the same slug must never share review history.
 git(project, ["checkout", "main"]);
