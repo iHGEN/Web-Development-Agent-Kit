@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+// Regression fixture: verifies redacted untracked evidence exists only during the provider review and is cleaned up afterward.
 const project = process.env.WEB_KIT_SECURITY_PROJECT_ROOT;
 if (!project) {
   console.error("WEB_KIT_SECURITY_PROJECT_ROOT missing");
