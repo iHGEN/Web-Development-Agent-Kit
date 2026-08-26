@@ -248,7 +248,7 @@ function resolveProviderExecutable(name) {
   if (override) return path.resolve(override);
   const wanted = path.resolve(process.env.WEB_KIT_HOME || path.join(os.homedir(), ".web-kit"), "bin");
   const entries = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
-  const names = process.platform === "win32" ? [name, `${name}.cmd`, `${name}.exe`, `${name}.bat`] : [name];
+  const names = process.platform === "win32" ? [`${name}.exe`, `${name}.cmd`, name, `${name}.bat`] : [name];
   for (const dir of entries) {
     let resolved;
     try { resolved = path.resolve(dir); } catch { continue; }
@@ -272,8 +272,24 @@ function chooseProvider(requested) {
   }
   throw new Error("No supported headless AI reviewer found. Install/authenticate Codex, Claude, or Gemini CLI, or use --scan-only.");
 }
+function resolveNodeScriptFromCmd(file) {
+  if (process.platform !== "win32" || !/\.cmd$/i.test(file)) return null;
+  let text = "";
+  try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  const matches = [...text.matchAll(/"([^"\r\n]+\.(?:mjs|cjs|js))"/gi)];
+  for (let i = matches.length - 1; i >= 0; i -= 1) {
+    let candidate = matches[i][1];
+    const base = `${path.dirname(file)}${path.sep}`;
+    candidate = candidate.replace(/%~?dp0%?/ig, base);
+    if (!path.isAbsolute(candidate)) candidate = path.resolve(path.dirname(file), candidate);
+    try { if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate; } catch {}
+  }
+  return null;
+}
 function launchSpec(file, args) {
   if (/\.(mjs|cjs|js)$/i.test(file)) return { command: process.execPath, args: [file, ...args], shell: false };
+  const nodeScript = resolveNodeScriptFromCmd(file);
+  if (nodeScript) return { command: process.execPath, args: [nodeScript, ...args], shell: false };
   return { command: file, args, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(file) };
 }
 function parseJsonObject(text) {
