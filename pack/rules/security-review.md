@@ -88,6 +88,8 @@ Missing or failed scanners are coverage limitations, never evidence of safety.
 
 This prevents previous findings, prompts, scanner JSON, and review reports from generating self-referential scanner noise on a re-review.
 
+The regression suite captures a scanner artifact and hash for one review, runs a later review with different scanner output, then proves the earlier artifact path, bytes, SHA-256, and historical JSON reference are unchanged.
+
 ## Full review vs scan-only
 
 A normal review includes independent AI source reasoning and is eligible for a `/5` rating and merge decision.
