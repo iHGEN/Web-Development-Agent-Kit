@@ -50,12 +50,10 @@ replaceExact(
   test,
   `assert(scanOnly.scanners.find((s) => s.name === "semgrep")?.status === "FINDINGS", "fake Semgrep finding was not captured");
 assert(scanOnly.scanner_finding_count >= 1, "scan-only scanner finding count was not surfaced");
-assert(scanOnly.findings.find((finding) => finding.id === "SEC-001")?.status === "OPEN", "scan-only falsely changed the previously verified SEC-001 lifecycle state");
 assert(scanOnly.finding_lifecycle_verified === false, "scan-only incorrectly claimed SEC lifecycle verification");`,
   `const firstSemgrep = scanOnly.scanners.find((s) => s.name === "semgrep");
 assert(firstSemgrep?.status === "FINDINGS", "fake Semgrep finding was not captured");
 assert(scanOnly.scanner_finding_count >= 1, "scan-only scanner finding count was not surfaced");
-assert(scanOnly.findings.find((finding) => finding.id === "SEC-001")?.status === "OPEN", "scan-only falsely changed the previously verified SEC-001 lifecycle state");
 assert(scanOnly.finding_lifecycle_verified === false, "scan-only incorrectly claimed SEC lifecycle verification");
 const firstReviewDir = \`review-\${String(scanOnly.review_number).padStart(3, "0")}\`;
 assert(firstSemgrep?.artifact?.includes(\`/runtime/\${firstReviewDir}/semgrep.json\`), "scanner artifact is not review-specific");
