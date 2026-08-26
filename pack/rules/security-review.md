@@ -41,6 +41,23 @@ These all route to `.agent-core/bin/security-review.mjs`. If an AI client cannot
 7. Persist findings as stable `SEC-NNN` records and re-review them on later runs.
 8. Calculate the security rating and decision deterministically in Web Kit, not from model opinion.
 
+### Untracked working-tree evidence
+
+Git does not include untracked-file contents in ordinary `git diff` output, so Web Kit captures bounded text evidence for untracked files before attack-surface mapping. This makes content-only signals in a generic new path deterministic review input rather than relying on an AI reviewer to notice the filename and open it independently.
+
+The default evidence bounds are:
+
+- at most 200 untracked files represented per review;
+- at most 64 KiB of text captured from any one file;
+- at most 512 KiB of captured untracked text across the review;
+- an 8 KiB binary sample before text capture.
+
+Binary, symlink/non-regular, unreadable, outside-project, and total-budget-exhausted entries are explicitly marked instead of blindly read. Large text files are marked `truncated: true` when only the bounded prefix is captured.
+
+Captured untracked text is appended to the internal `diffText()` evidence consumed by `attackSurface()`. The same bounded evidence is persisted as `runtime/untracked-evidence-NNN.json`, referenced from `review-context-NNN.json`, and included in the full reviewer's required read-first list. The context summary contains metadata only and does not duplicate raw captured content.
+
+When an entry is truncated or skipped, that limitation is explicit evidence metadata; a full reviewer should inspect the original changed file directly when its path or surrounding code makes it security-relevant.
+
 ## Security surfaces
 
 The mapper and reviewer expand to every relevant area, including:
@@ -174,6 +191,7 @@ State is stored under:
 │   └── ...
 └── runtime/
     ├── review-context-001.json
+    ├── untracked-evidence-001.json
     ├── review-001/
     │   ├── semgrep.json
     │   ├── osv-scanner.json
