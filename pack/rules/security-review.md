@@ -99,9 +99,11 @@ A normal review includes independent AI source reasoning and is eligible for a `
 - is **not assigned a `/5` rating** (`rating: null`, `rating_status: NOT_SCORED_SCAN_ONLY`);
 - surfaces scanner finding counts and scanner status;
 - never converts an empty `SEC-*` list into `APPROVE`;
-- requires a full `security-review` before Web Kit can issue an approval decision.
+- **never changes an existing `SEC-*` lifecycle state**: an `OPEN`, `STILL_OPEN`, `NEW`, `REGRESSION`, or `RESOLVED` finding remains exactly in its last independently verified state;
+- records `finding_lifecycle_verified: false` because scanners alone did not prove resolution or regression;
+- requires a full `security-review` before Web Kit can issue a new lifecycle verdict or approval decision.
 
-A scanner hit in scan-only mode is evidence requiring correlation, not a synthetic `SEC-*` finding with invented severity.
+A scanner hit in scan-only mode is evidence requiring correlation, not a synthetic `SEC-*` finding with invented severity. Likewise, absence of a scanner hit cannot resolve a previously verified `SEC-*` finding.
 
 ## Standards mapping
 
@@ -145,6 +147,8 @@ Findings never silently disappear.
 - `NEW` — first discovered on a later review;
 - `REGRESSION` — a resolved fingerprint reappears;
 - `RESOLVED` — a previous finding is no longer reproducible.
+
+Only a **full independent review** may transition these states. Scan-only evidence may inform the next review but cannot mutate them.
 
 ## Collision-safe branch storage
 
