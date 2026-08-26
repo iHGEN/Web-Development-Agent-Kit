@@ -11,12 +11,30 @@ const __dirname = path.dirname(__filename);
 const KIT_ROOT = path.resolve(__dirname, "..");
 const PACK = path.join(KIT_ROOT, "pack");
 const VERSION = fs.readFileSync(path.join(KIT_ROOT, "VERSION"), "utf8").trim();
+const SECURITY_REVIEW_STATE_EXCLUDE = "/.agent-core/security-reviews/";
 const IGNORE_DIRS = new Set([
   ".git", ".agents", ".agent-core", "node_modules", "vendor", "bin", "obj",
   ".next", "dist", "build", "coverage", ".idea", ".vscode", ".cache", "graphify-out",
 ]);
 
 function posix(value) { return value.split(path.sep).join("/"); }
+function ensureSecurityReviewStateExcluded(project) {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: project, encoding: "utf8", windowsHide: true });
+  if (inside.error || inside.status !== 0 || String(inside.stdout || "").trim() !== "true") return false;
+  const gitPath = spawnSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: project, encoding: "utf8", windowsHide: true });
+  if (gitPath.error || gitPath.status !== 0) return false;
+  const value = String(gitPath.stdout || "").trim();
+  if (!value) return false;
+  const excludeFile = path.isAbsolute(value) ? value : path.resolve(project, value);
+  fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+  let text = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, "utf8") : "";
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  if (!lines.includes(SECURITY_REVIEW_STATE_EXCLUDE) && !lines.includes(".agent-core/security-reviews/")) {
+    if (text && !text.endsWith("\n")) text += "\n";
+    fs.writeFileSync(excludeFile, `${text}${SECURITY_REVIEW_STATE_EXCLUDE}\n`, "utf8");
+  }
+  return true;
+}
 
 function walkFiles(project) {
   const files = [];
@@ -230,6 +248,7 @@ function install(project) {
   project = path.resolve(project);
   fs.mkdirSync(project, { recursive: true });
   const { skills, evidence } = detect(project);
+  const securityReviewStateExcluded = ensureSecurityReviewStateExcluded(project);
   const core = path.join(project, ".agent-core");
   copyTree(path.join(PACK, "agents"), path.join(core, "agents"));
   copyTree(path.join(PACK, "rules"), path.join(core, "rules"));
@@ -262,6 +281,7 @@ function install(project) {
   console.log("AI instructions: existing files preserved; missing files created once with project summary; managed roles synchronized");
   console.log(`Canonical workflow: ${compatibility.canonical_workflow}`);
   console.log("Automatic context rollover: .agent-core/bin/session-controller.mjs (default threshold 50%)");
+  console.log(`Security review state: ${securityReviewStateExcluded ? "protected by local .git/info/exclude" : "Git local exclude will be enforced when security-review runs"}`);
   return 0;
 }
 

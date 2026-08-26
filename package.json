@@ -4,7 +4,7 @@
   "description": "iHGEN Web Development Agent Kit installer and project-aware agent bootstrapper",
   "type": "module",
   "bin": {
-    "web-kit": "bin/web-kit.js"
+    "web-kit": "bin/web-kit-entry.js"
   },
   "files": [
     "bin",

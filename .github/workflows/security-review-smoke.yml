@@ -1,0 +1,155 @@
+name: Security Review Smoke
+
+on:
+  push:
+    paths:
+      - "package.json"
+      - "VERSION"
+      - "bin/**"
+      - "scripts/**"
+      - "pack/agents/security-reviewer.md"
+      - "pack/rules/security-review.md"
+      - "pack/runtime/security-review.mjs"
+      - "tests/security-review-smoke.mjs"
+      - "tests/fixtures/mock-security-provider.mjs"
+      - ".github/workflows/security-review-smoke.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "VERSION"
+      - "bin/**"
+      - "scripts/**"
+      - "pack/agents/security-reviewer.md"
+      - "pack/rules/security-review.md"
+      - "pack/runtime/security-review.mjs"
+      - "tests/security-review-smoke.mjs"
+      - "tests/fixtures/mock-security-provider.mjs"
+      - ".github/workflows/security-review-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security-review-lifecycle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate security review sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').version")" = "$(tr -d '\r\n' < VERSION)"
+          node --check bin/web-kit-entry.js
+          node --check pack/runtime/security-review.mjs
+          node --check tests/fixtures/mock-security-provider.mjs
+          node --check tests/security-review-smoke.mjs
+          grep -q 'run security-review' scripts/ai-compat.mjs
+          grep -q 'all security issues relevant to the changed attack surface' pack/rules/security-review.md
+
+      - name: Verify review and re-review lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/security-review-smoke.mjs
+
+  packaged-security-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build npm tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARBALL="$(npm pack --silent)"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          tar -tzf "$TARBALL" | grep -q 'package/bin/web-kit-entry.js'
+          tar -tzf "$TARBALL" | grep -q 'package/bin/web-kit.js'
+          node -e "const p=require('./package.json'); if(p.bin['web-kit']!=='bin/web-kit-entry.js') process.exit(1)"
+
+      - name: Create sample feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/web-kit-security-cli"
+          mkdir -p "$SAMPLE/src"
+          cd "$SAMPLE"
+          git init -b main
+          git config user.email security-smoke@example.invalid
+          git config user.name 'Web Kit Security Smoke'
+          cat > package.json <<'JSON'
+          {
+            "name": "web-kit-security-cli-smoke",
+            "version": "1.0.0"
+          }
+          JSON
+          cat > src/admin.js <<'JS'
+          export function canDelete(req) { return req.user.role === "admin"; }
+          JS
+          git add .
+          git commit -m baseline
+          git checkout -b ts-admin-security
+          cat > src/admin.js <<'JS'
+          export function canDelete(req) { return req.body.role === "admin"; }
+          JS
+          git add src/admin.js
+          git commit -m 'introduce insecure admin authorization'
+
+      - name: Run packaged npx security-review command
+        shell: bash
+        env:
+          WEB_KIT_SECURITY_CODEX_BIN: ${{ github.workspace }}/tests/fixtures/mock-security-provider.mjs
+        run: |
+          set -euo pipefail
+          chmod +x tests/fixtures/mock-security-provider.mjs
+          SAMPLE="$RUNNER_TEMP/web-kit-security-cli"
+          REF="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          npx --yes "./${{ steps.pack.outputs.tarball }}" security-review \
+            --ref "$REF" \
+            --project "$SAMPLE" \
+            --base main \
+            --provider codex \
+            --no-scanners
+
+          test -f "$SAMPLE/.agent-core/bin/security-review.mjs"
+          test -f "$SAMPLE/.agent-core/rules/security-review.md"
+          grep -q 'run security-review' "$SAMPLE/AGENTS.md"
+
+          REVIEW_JSON="$(find "$SAMPLE/.agent-core/security-reviews" -mindepth 2 -maxdepth 2 -type f -name latest.json -print -quit)"
+          test -n "$REVIEW_JSON"
+          test -f "$REVIEW_JSON"
+
+          node - "$REVIEW_JSON" <<'NODE'
+          const fs = require('fs');
+          const reviewFile = process.argv[2];
+          const review = JSON.parse(fs.readFileSync(reviewFile, 'utf8'));
+          if (review.branch !== 'ts-admin-security') process.exit(1);
+          if (!/^ts-admin-security--[0-9a-f]{10}$/.test(review.branch_storage_key || '')) process.exit(1);
+          if (review.decision !== 'REQUEST_CHANGES') process.exit(1);
+          if (review.findings?.[0]?.id !== 'SEC-001') process.exit(1);
+          if (!(review.rating > 0 && review.rating <= 2.9)) process.exit(1);
+          NODE

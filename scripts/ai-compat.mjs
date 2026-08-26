@@ -137,6 +137,10 @@ For Web-Kit-managed engineering work:
 15. A fresh session started by the transparent supervisor must read the exact referenced rollover handoff first, verify material claims against current repository evidence, avoid repeating completed work, and resume its recorded next action.
 16. When \`WEB_KIT_SESSION_CONTROLLER=1\`, the explicit headless Session Controller fallback owns rollover; follow the progress protocol it injects for that cycle and do not reset context manually.
 17. Web Kit runtime commands use Node.js. Do not require a system Python installation for Web Kit itself.
+18. Treat the exact user phrase \`run security-review\` (and the equivalent \`run security review\`) as a provider-neutral Web Kit execution command, not as a request to explain security reviewing. Read \`.agent-core/rules/security-review.md\`, then execute \`node .agent-core/bin/security-review.mjs --project .\` from the project root and return the generated PR-style findings to the user.
+19. Map simple suffixes consistently: \`run security-review deep\` adds \`--deep\`; \`run security-review base <branch>\` adds \`--base <branch>\`; \`run security-review provider <codex|claude|gemini>\` adds \`--provider <name>\`. The same engine owns first review and re-review automatically.
+20. The Security PR Reviewer is independent and read-only. Do not fix findings during the review. After findings are returned, wait for a separate implementation/fix request; a later \`run security-review\` performs the independent re-review.
+21. If this AI client cannot execute local commands/tools, do not pretend the security review ran. Tell the user to run \`npx @ihgen/web-kit security-review\` in the project terminal.
 
 If project-owned instructions outside this block conflict with Web-Kit workflow mechanics, preserve them but report the conflict with \`doctor\`; do not silently delete user content.
 ${ROLE_END}`;
@@ -168,6 +172,11 @@ export function applyAiCompatibility(project, profile = null) {
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
     automatic_context_rollover_rule: ".agent-core/rules/context-rollover.md",
+    security_review_rule: ".agent-core/rules/security-review.md",
+    security_review_engine: ".agent-core/bin/security-review.mjs",
+    security_review_terminal_command: "npx @ihgen/web-kit security-review",
+    security_review_provider_trigger: "run security-review",
+    security_review_provider_backends: ["codex", "claude", "gemini"],
     transparent_context_supervisor_home: "~/.web-kit",
     transparent_provider_commands: ["codex", "claude"],
     transparent_context_rollover_threshold_percent: 50,
