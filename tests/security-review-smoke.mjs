@@ -250,4 +250,28 @@ assert(activeFindingAfter.blocking === true, "scan-only incorrectly removed bloc
 assert(activeFindingAfter.last_seen_review === activeFindingBefore.last_seen_review, "scan-only incorrectly advanced last_seen_review without AI/source verification");
 assert(activeFindingAfter.resolved_review === activeFindingBefore.resolved_review, "scan-only incorrectly resolved a prior SEC finding");
 
+// Regression: generic-path untracked file content must deterministically map security surfaces.
+git(project, ["checkout", "main"]);
+git(project, ["checkout", "-b", "untracked-content-surface"]);
+fs.writeFileSync(path.join(project, "src", "new.js"), "export function run(input) { return eval(input); }\n");
+fs.writeFileSync(path.join(project, "src", "blob.bin"), Buffer.from([0, 1, 2, 3, 4, 5]));
+fs.writeFileSync(path.join(project, "src", "large.txt"), "A".repeat(70 * 1024));
+run(process.execPath, [engine, "--project", project, "--base", "main", "--scan-only", "--no-scanners"], { cwd: project, env: baseEnv });
+const untrackedRoot = reviewRoot(project, "untracked-content-surface");
+const untrackedReview = json(path.join(untrackedRoot, "latest.json"));
+assert(untrackedReview.changed_files.includes("src/new.js"), "generic untracked file was not included in changed_files");
+assert(untrackedReview.attack_surfaces.some((area) => area.id === "injection"), "content-only eval signal in generic untracked file did not map Injection & Code Execution");
+const untrackedContext = json(path.join(untrackedRoot, "runtime", "review-context-001.json"));
+assert(untrackedContext.untracked_evidence_file, "untracked evidence file was not recorded in review context");
+const untrackedEvidence = json(path.resolve(project, ...untrackedContext.untracked_evidence_file.split("/")));
+const genericEntry = untrackedEvidence.files.find((item) => item.path === "src/new.js");
+const binaryEntry = untrackedEvidence.files.find((item) => item.path === "src/blob.bin");
+const largeEntry = untrackedEvidence.files.find((item) => item.path === "src/large.txt");
+assert(genericEntry?.status === "CAPTURED_TEXT" && genericEntry.content.includes("eval(input)"), "generic untracked text content was not captured for reviewer evidence");
+assert(binaryEntry?.status === "SKIPPED_BINARY" && !("content" in binaryEntry), "binary untracked file was not safely excluded from text evidence");
+assert(largeEntry?.status === "CAPTURED_TEXT" && largeEntry.truncated === true, "large untracked text file was not bounded/truncated");
+assert(largeEntry.captured_bytes <= untrackedEvidence.limits.max_bytes_per_file, "per-file untracked evidence byte limit was exceeded");
+assert(untrackedEvidence.captured_text_bytes <= untrackedEvidence.limits.max_total_bytes, "total untracked evidence byte limit was exceeded");
+assert(untrackedContext.untracked_evidence_summary.files.every((item) => !("content" in item)), "review context summary duplicated raw untracked content instead of referencing the bounded evidence file");
+
 console.log(`Security Review smoke: PASS (${process.platform})`);
