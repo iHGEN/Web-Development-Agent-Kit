@@ -15,6 +15,7 @@ const UNTRACKED_EVIDENCE_MAX_FILES = 200;
 const UNTRACKED_EVIDENCE_MAX_BYTES_PER_FILE = 64 * 1024;
 const UNTRACKED_EVIDENCE_MAX_TOTAL_BYTES = 512 * 1024;
 const UNTRACKED_EVIDENCE_BINARY_SAMPLE_BYTES = 8 * 1024;
+const REVIEW_STATE_GIT_EXCLUDE = "/.agent-core/security-reviews/";
 
 const AREAS = [
   ["authentication", "Authentication", /(auth|login|signin|signup|register|password|credential|identity|mfa|2fa|verify|account)/i, /(password|credential|login|sign.?in|authenticate|mfa|2fa|otp|verification)/i, ["credential handling", "brute force", "account enumeration", "password reset", "MFA bypass", "authentication bypass"]],
@@ -87,6 +88,23 @@ function run(command, args, options = {}) {
 function git(project, args, fallback = "") { const r = run("git", args, { cwd: project, timeout: 60_000 }); return !r.error && r.status === 0 ? String(r.stdout || "").trim() : fallback; }
 function gitOk(project, args) { const r = run("git", args, { cwd: project, timeout: 60_000 }); return !r.error && r.status === 0; }
 function gitLines(project, args) { return git(project, args).split(/\r?\n/).map((x) => x.trim()).filter(Boolean); }
+function resolveGitPath(project, name) {
+  const value = git(project, ["rev-parse", "--git-path", name]);
+  if (!value) return null;
+  return path.isAbsolute(value) ? value : path.resolve(project, value);
+}
+function ensureReviewStateGitExcluded(project) {
+  const excludeFile = resolveGitPath(project, "info/exclude");
+  if (!excludeFile) throw new Error("Could not resolve .git/info/exclude for security-review state protection.");
+  fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+  let text = readText(excludeFile, "");
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  if (!lines.includes(REVIEW_STATE_GIT_EXCLUDE) && !lines.includes(".agent-core/security-reviews/")) {
+    if (text && !text.endsWith("\n")) text += "\n";
+    fs.writeFileSync(excludeFile, `${text}${REVIEW_STATE_GIT_EXCLUDE}\n`, "utf8");
+  }
+  return true;
+}
 
 function parseArgs(argv) {
   const out = { project: ".", base: null, provider: process.env.WEB_KIT_SECURITY_PROVIDER || "auto", deep: false, scanOnly: false, noScanners: false, json: false, failOnBlocking: false, timeoutMs: 180_000 };
@@ -249,6 +267,35 @@ function untrackedEvidenceSummary(evidence) {
     captured_text_bytes: evidence.captured_text_bytes,
     files: (evidence.files || []).map(({ content, ...metadata }) => metadata),
   };
+}
+function redactSensitiveText(value) {
+  let text = String(value ?? "");
+  text = text.replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, "[REDACTED_PRIVATE_KEY]");
+  text = text.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16})\b/g, "[REDACTED_TOKEN]");
+  text = text.replace(/(\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|client[_-]?secret|access[_-]?key)\b\s*[:=]\s*)(["'\`])([^"'\`\r\n]*)(\2)/gi, "$1$2[REDACTED]$4");
+  text = text.replace(/(\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|client[_-]?secret|access[_-]?key)\b\s*[:=]\s*)([^\s#;,]+)/gi, "$1[REDACTED]");
+  return text;
+}
+function reviewerUntrackedEvidence(evidence) {
+  return {
+    ...untrackedEvidenceSummary(evidence),
+    retention: "EPHEMERAL_REDACTED_OUTSIDE_WORKTREE",
+    files: (evidence.files || []).map((item) => item.status === "CAPTURED_TEXT"
+      ? { ...item, content: redactSensitiveText(item.content), secret_values_redacted: true }
+      : { ...item }),
+  };
+}
+function withEphemeralUntrackedEvidence(evidence, action) {
+  if (!evidence?.total_untracked_files) return action(null);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-security-untracked-"));
+  const evidenceFile = path.join(tempRoot, "untracked-evidence.json");
+  try {
+    writeJson(evidenceFile, reviewerUntrackedEvidence(evidence));
+    try { fs.chmodSync(evidenceFile, 0o600); } catch {}
+    return action(evidenceFile);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 function changedFiles(project, mergeBase) {
@@ -490,8 +537,8 @@ function parseJsonObject(text) {
   const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}");
   return start >= 0 && end > start ? jsonParse(cleaned.slice(start, end + 1), null) : null;
 }
-function reviewerPrompt(contextRel, untrackedEvidenceRel, previousRel) {
-  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${untrackedEvidenceRel ? `- ${untrackedEvidenceRel} (bounded untracked-file text evidence; inspect CAPTURED_TEXT entries and respect explicit binary/truncation/limit markers)` : ""}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding. Re-emit it with the same stable fingerprint if still present. If absent, the engine marks it RESOLVED.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"summary\": \"short assessment\",\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
+function reviewerPrompt(contextRel, ephemeralUntrackedEvidenceFile, previousRel) {
+  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${ephemeralUntrackedEvidenceFile ? `- ${ephemeralUntrackedEvidenceFile} (EPHEMERAL_UNTRACKED_EVIDENCE: redacted bounded untracked-file text outside the worktree; inspect CAPTURED_TEXT entries; this file is deleted after the review)` : ""}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding. Re-emit it with the same stable fingerprint if still present. If absent, the engine marks it RESOLVED.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"summary\": \"short assessment\",\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
 }
 function invokeProvider(provider, project, prompt, timeoutMs) {
   const env = { ...process.env, WEB_KIT_SECURITY_REVIEW_ACTIVE: "1", WEB_KIT_SECURITY_PROJECT_ROOT: project, WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
@@ -670,6 +717,7 @@ async function main() {
   const project = path.resolve(args.project);
   if (!fs.existsSync(project)) throw new Error(`Project does not exist: ${project}`);
   if (git(project, ["rev-parse", "--is-inside-work-tree"]) !== "true") throw new Error("security-review requires a Git repository.");
+  ensureReviewStateGitExcluded(project);
 
   const branch = git(project, ["branch", "--show-current"]) || `detached-${git(project, ["rev-parse", "--short", "HEAD"]) || "head"}`;
   const storageKey = branchStorageKey(branch);
@@ -700,11 +748,11 @@ async function main() {
     const latestMd = path.join(reviewRoot, "latest.md");
     fs.mkdirSync(historyDir, { recursive: true }); fs.mkdirSync(runtimeDir, { recursive: true });
     const scanners = persistScannerArtifacts(project, runtimeDir, reviewNumber, scannerResults);
-    const untrackedEvidenceFile = untrackedEvidence.total_untracked_files
+    const untrackedEvidenceMetadataFile = untrackedEvidence.total_untracked_files
       ? path.join(runtimeDir, `untracked-evidence-${String(reviewNumber).padStart(3, "0")}.json`)
       : null;
-    if (untrackedEvidenceFile) writeJson(untrackedEvidenceFile, untrackedEvidence);
-    const untrackedEvidenceRel = untrackedEvidenceFile ? posix(path.relative(project, untrackedEvidenceFile)) : null;
+    if (untrackedEvidenceMetadataFile) writeJson(untrackedEvidenceMetadataFile, untrackedEvidenceSummary(untrackedEvidence));
+    const untrackedEvidenceMetadataRel = untrackedEvidenceMetadataFile ? posix(path.relative(project, untrackedEvidenceMetadataFile)) : null;
 
     const context = {
       schema_version: 2,
@@ -718,8 +766,10 @@ async function main() {
       head,
       changed_files: files,
       working_tree_status: workingTreeStatus(project),
-      untracked_evidence_file: untrackedEvidenceRel,
+      untracked_evidence_metadata_file: untrackedEvidenceMetadataRel,
       untracked_evidence_summary: untrackedEvidenceSummary(untrackedEvidence),
+      untracked_raw_evidence_persisted_in_worktree: false,
+      review_state_git_excluded: true,
       attack_surfaces: surfaces,
       deep_review: args.deep,
       scan_only: args.scanOnly,
@@ -738,7 +788,8 @@ async function main() {
     let model = { summary: "Scanner-only branch security evidence collection.", limitations: ["AI source/security reasoning was skipped by --scan-only."], coverage: [], findings: [] };
     if (!args.scanOnly) {
       provider = chooseProvider(args.provider);
-      model = invokeProvider(provider, project, reviewerPrompt(contextRel, untrackedEvidenceRel, previousRel), args.timeoutMs);
+      model = withEphemeralUntrackedEvidence(untrackedEvidence, (ephemeralUntrackedEvidenceFile) =>
+        invokeProvider(provider, project, reviewerPrompt(contextRel, ephemeralUntrackedEvidenceFile, previousRel), args.timeoutMs));
     } else {
       for (const s of scanners) if (s.status === "FINDINGS") model.limitations.push(`${s.name} reported ${Number(s.finding_count) || "one or more"} finding(s); a full security-review is required to correlate severity, exploitability, and persistent SEC-* findings.`);
     }
@@ -765,6 +816,9 @@ async function main() {
       head,
       changed_files: files,
       attack_surfaces: surfaces,
+      untracked_evidence_metadata_file: untrackedEvidenceMetadataRel,
+      untracked_raw_evidence_persisted_in_worktree: false,
+      review_state_git_excluded: true,
       scan_only: args.scanOnly,
       finding_lifecycle_verified: !args.scanOnly,
       provider: provider?.name || null,

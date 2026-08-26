@@ -54,7 +54,9 @@ The default evidence bounds are:
 
 Binary, symlink/non-regular, unreadable, outside-project, and total-budget-exhausted entries are explicitly marked instead of blindly read. Large text files are marked `truncated: true` when only the bounded prefix is captured.
 
-Captured untracked text is appended to the internal `diffText()` evidence consumed by `attackSurface()`. The same bounded evidence is persisted as `runtime/untracked-evidence-NNN.json`, referenced from `review-context-NNN.json`, and included in the full reviewer's required read-first list. The context summary contains metadata only and does not duplicate raw captured content.
+Captured untracked text is appended to the internal `diffText()` evidence consumed by `attackSurface()`, but **raw untracked text is never persisted inside the project worktree**. `runtime/untracked-evidence-NNN.json` stores metadata only. For a full AI review, Web Kit creates a redacted, permission-restricted ephemeral evidence file outside the worktree, gives that path to the isolated reviewer, and deletes the file immediately after the provider returns.
+
+Install/update adds `/.agent-core/security-reviews/` to the repository-local `.git/info/exclude` when Git is available, and `security-review` enforces the same protection on every run. This is local-only protection and does not modify the project-owned `.gitignore`. A normal `git add .` must not stage generated security-review state.
 
 When an entry is truncated or skipped, that limitation is explicit evidence metadata; a full reviewer should inspect the original changed file directly when its path or surrounding code makes it security-relevant.
 

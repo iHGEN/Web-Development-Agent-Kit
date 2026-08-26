@@ -13,6 +13,19 @@ if (process.env.WEB_KIT_CONTEXT_SUPERVISOR_BYPASS !== "1") {
 }
 
 const args = process.argv.slice(2);
+if (process.env.WEB_KIT_TEST_REQUIRE_UNTRACKED_EVIDENCE === "1") {
+  const prompt = args[0] === "exec" ? String(args.at(-1) || "") : String(args[args.indexOf("-p") + 1] || "");
+  const match = prompt.match(/- (.+?) \(EPHEMERAL_UNTRACKED_EVIDENCE:/);
+  if (!match) { console.error("ephemeral untracked evidence path missing from reviewer prompt"); process.exit(5); }
+  const evidenceFile = match[1];
+  if (!fs.existsSync(evidenceFile)) { console.error("ephemeral untracked evidence file missing during provider review"); process.exit(6); }
+  const evidenceText = fs.readFileSync(evidenceFile, "utf8");
+  if (!evidenceText.includes("eval(input)")) { console.error("ephemeral evidence omitted generic untracked source content"); process.exit(7); }
+  const sentinel = process.env.WEB_KIT_TEST_SECRET_SENTINEL || "";
+  if (sentinel && evidenceText.includes(sentinel)) { console.error("secret sentinel leaked into reviewer evidence without redaction"); process.exit(8); }
+  const auditFile = process.env.WEB_KIT_TEST_UNTRACKED_AUDIT_FILE;
+  if (auditFile) fs.writeFileSync(auditFile, evidenceFile, "utf8");
+}
 const source = fs.readFileSync(path.join(project, "src", "admin.js"), "utf8");
 const fixed = source.includes("req.user.role === \"admin\"");
 const payload = fixed

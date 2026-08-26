@@ -21,6 +21,17 @@ function run(command, args, options = {}) {
   return result;
 }
 function assert(value, message) { if (!value) throw new Error(message); }
+function treeContains(root, needle) {
+  if (!fs.existsSync(root)) return false;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) { if (treeContains(full, needle)) return true; }
+    else if (entry.isFile()) {
+      try { if (fs.readFileSync(full, "utf8").includes(needle)) return true; } catch {}
+    }
+  }
+  return false;
+}
 function json(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function git(project, args) { return run("git", args, { cwd: project }); }
 function sha(value) { return crypto.createHash("sha256").update(String(value)).digest("hex"); }
@@ -86,6 +97,9 @@ git(project, ["config", "user.name", "Web Kit Security Smoke"]);
 run(process.execPath, [path.join(repo, "scripts", "agent-kit.mjs"), "install", project], { cwd: repo });
 assert(fs.existsSync(path.join(project, ".agent-core", "bin", "security-review.mjs")), "security review engine was not installed");
 assert(fs.existsSync(path.join(project, ".agent-core", "rules", "security-review.md")), "security review rule was not installed");
+const gitExcludeValue = run("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: project }).stdout.trim();
+const gitExcludeFile = path.isAbsolute(gitExcludeValue) ? gitExcludeValue : path.resolve(project, gitExcludeValue);
+assert(fs.readFileSync(gitExcludeFile, "utf8").split(/\r?\n/).map((line) => line.trim()).includes("/.agent-core/security-reviews/"), "installer did not protect security review state with .git/info/exclude");
 for (const file of [
   "AGENTS.md",
   "CLAUDE.md",
@@ -256,22 +270,46 @@ git(project, ["checkout", "-b", "untracked-content-surface"]);
 fs.writeFileSync(path.join(project, "src", "new.js"), "export function run(input) { return eval(input); }\n");
 fs.writeFileSync(path.join(project, "src", "blob.bin"), Buffer.from([0, 1, 2, 3, 4, 5]));
 fs.writeFileSync(path.join(project, "src", "large.txt"), "A".repeat(70 * 1024));
+const secretSentinel = "WEB_KIT_TEST_SECRET_RESIDUE_8f9c2a";
+fs.writeFileSync(path.join(project, "src", "credentials.local"), `password="${secretSentinel}"\n`);
 run(process.execPath, [engine, "--project", project, "--base", "main", "--scan-only", "--no-scanners"], { cwd: project, env: baseEnv });
 const untrackedRoot = reviewRoot(project, "untracked-content-surface");
 const untrackedReview = json(path.join(untrackedRoot, "latest.json"));
 assert(untrackedReview.changed_files.includes("src/new.js"), "generic untracked file was not included in changed_files");
 assert(untrackedReview.attack_surfaces.some((area) => area.id === "injection"), "content-only eval signal in generic untracked file did not map Injection & Code Execution");
 const untrackedContext = json(path.join(untrackedRoot, "runtime", "review-context-001.json"));
-assert(untrackedContext.untracked_evidence_file, "untracked evidence file was not recorded in review context");
-const untrackedEvidence = json(path.resolve(project, ...untrackedContext.untracked_evidence_file.split("/")));
-const genericEntry = untrackedEvidence.files.find((item) => item.path === "src/new.js");
-const binaryEntry = untrackedEvidence.files.find((item) => item.path === "src/blob.bin");
-const largeEntry = untrackedEvidence.files.find((item) => item.path === "src/large.txt");
-assert(genericEntry?.status === "CAPTURED_TEXT" && genericEntry.content.includes("eval(input)"), "generic untracked text content was not captured for reviewer evidence");
+assert(untrackedContext.untracked_evidence_metadata_file, "untracked evidence metadata file was not recorded in review context");
+assert(untrackedContext.untracked_raw_evidence_persisted_in_worktree === false, "review context claims raw untracked evidence is persisted in the worktree");
+assert(untrackedContext.review_state_git_excluded === true, "review context did not record local Git protection for generated state");
+const untrackedMetadata = json(path.resolve(project, ...untrackedContext.untracked_evidence_metadata_file.split("/")));
+const genericEntry = untrackedMetadata.files.find((item) => item.path === "src/new.js");
+const binaryEntry = untrackedMetadata.files.find((item) => item.path === "src/blob.bin");
+const largeEntry = untrackedMetadata.files.find((item) => item.path === "src/large.txt");
+assert(genericEntry?.status === "CAPTURED_TEXT" && !("content" in genericEntry), "worktree metadata persisted raw generic untracked content");
 assert(binaryEntry?.status === "SKIPPED_BINARY" && !("content" in binaryEntry), "binary untracked file was not safely excluded from text evidence");
 assert(largeEntry?.status === "CAPTURED_TEXT" && largeEntry.truncated === true, "large untracked text file was not bounded/truncated");
-assert(largeEntry.captured_bytes <= untrackedEvidence.limits.max_bytes_per_file, "per-file untracked evidence byte limit was exceeded");
-assert(untrackedEvidence.captured_text_bytes <= untrackedEvidence.limits.max_total_bytes, "total untracked evidence byte limit was exceeded");
-assert(untrackedContext.untracked_evidence_summary.files.every((item) => !("content" in item)), "review context summary duplicated raw untracked content instead of referencing the bounded evidence file");
+assert(largeEntry.captured_bytes <= untrackedMetadata.limits.max_bytes_per_file, "per-file untracked evidence byte limit was exceeded");
+assert(untrackedMetadata.captured_text_bytes <= untrackedMetadata.limits.max_total_bytes, "total untracked evidence byte limit was exceeded");
+assert(untrackedContext.untracked_evidence_summary.files.every((item) => !("content" in item)), "review context summary duplicated raw untracked content");
+assert(!treeContains(untrackedRoot, secretSentinel), "secret sentinel persisted inside generated security review state");
+
+const ephemeralAuditFile = path.join(tempRoot, "ephemeral-untracked-evidence-path.txt");
+const fullUntrackedEnv = {
+  ...baseEnv,
+  WEB_KIT_TEST_REQUIRE_UNTRACKED_EVIDENCE: "1",
+  WEB_KIT_TEST_SECRET_SENTINEL: secretSentinel,
+  WEB_KIT_TEST_UNTRACKED_AUDIT_FILE: ephemeralAuditFile,
+};
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: fullUntrackedEnv });
+assert(fs.existsSync(ephemeralAuditFile), "mock reviewer did not observe ephemeral untracked evidence");
+const ephemeralEvidenceFile = fs.readFileSync(ephemeralAuditFile, "utf8").trim();
+assert(ephemeralEvidenceFile && !fs.existsSync(ephemeralEvidenceFile), "ephemeral untracked evidence was not deleted after provider review");
+assert(!treeContains(untrackedRoot, secretSentinel), "secret sentinel remained in worktree review state after full review");
+
+fs.rmSync(path.join(project, "src", "credentials.local"), { force: true });
+run("git", ["add", "."], { cwd: project });
+const stagedAfterSecurityReview = run("git", ["diff", "--cached", "--name-only"], { cwd: project }).stdout.split(/\r?\n/).filter(Boolean);
+assert(!stagedAfterSecurityReview.some((file) => file.replace(/\\/g, "/").startsWith(".agent-core/security-reviews/")), "normal git add . staged generated security review state");
+assert(!treeContains(untrackedRoot, secretSentinel), "removing the original credential left a generated secret residue in the worktree");
 
 console.log(`Security Review smoke: PASS (${process.platform})`);
