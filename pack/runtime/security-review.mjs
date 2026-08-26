@@ -198,13 +198,17 @@ function hideGeneratedReviewState(project, action) {
 }
 
 function executable(name) {
-  if (process.platform === "win32") {
-    const r = run("where.exe", [name], { timeout: 10_000 });
-    return !r.error && r.status === 0 ? String(r.stdout || "").split(/\r?\n/).find(Boolean)?.trim() || null : null;
+  const entries = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const names = process.platform === "win32" ? [`${name}.exe`, `${name}.cmd`, name, `${name}.bat`] : [name];
+  for (const dir of entries) {
+    let resolved;
+    try { resolved = path.resolve(dir); } catch { continue; }
+    for (const candidateName of names) {
+      const candidate = path.join(resolved, candidateName);
+      try { if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate; } catch {}
+    }
   }
-  const safe = String(name).replace(/[^a-zA-Z0-9._-]/g, "");
-  const r = run("sh", ["-lc", `command -v ${safe}`], { timeout: 10_000 });
-  return !r.error && r.status === 0 ? String(r.stdout || "").split(/\r?\n/).find(Boolean)?.trim() || null : null;
+  return null;
 }
 function jsonParse(text, fallback = null) { try { return JSON.parse(String(text || "").trim()); } catch { return fallback; } }
 function scanner(name, status, extra = {}) { return { name, status, ...extra }; }
@@ -438,6 +442,13 @@ function reconcile(raw, previous, number) {
   const order = Object.fromEntries(SEVERITIES.map((name, index) => [name, index]));
   return result.sort((a, b) => (a.blocking !== b.blocking ? (a.blocking ? -1 : 1) : order[a.severity] - order[b.severity] || String(a.id).localeCompare(String(b.id))));
 }
+function preserveUnverifiedFindings(previous) {
+  return (previous?.findings || []).map((finding) => {
+    const preserved = { ...finding };
+    preserved.blocking = blocking(preserved);
+    return preserved;
+  });
+}
 function score(findings) {
   const active = findings.filter((f) => ACTIVE.has(f.status));
   if (!active.length) return 5;
@@ -506,7 +517,7 @@ function markdown(review) {
   lines.push("", "## Scanner status", "");
   for (const s of review.scanners) lines.push(`- **${s.name}:** ${s.status}${Number.isInteger(s.finding_count) ? ` (${s.finding_count} findings)` : ""}${s.reason ? ` — ${s.reason}` : ""}${s.note ? ` — ${String(s.note).slice(0, 300)}` : ""}`);
   if (review.limitations.length) { lines.push("", "## Limitations", ""); for (const item of review.limitations) lines.push(`- ${item}`); }
-  if (review.scan_only) lines.push("", "> Scan-only mode is intentionally INCONCLUSIVE and is not assigned a /5 security rating. Run a full security-review to correlate scanner evidence with source-level security reasoning.");
+  if (review.scan_only) lines.push("", "> Scan-only mode is intentionally INCONCLUSIVE and is not assigned a /5 security rating. Existing SEC lifecycle state is preserved but not re-verified. Run a full security-review to correlate scanner evidence with source-level security reasoning.");
   else lines.push("", "> A 5/5 review means no blocking issue was found in the reviewed scope and available evidence. It is not a guarantee that the software is vulnerability-free.");
   return `${lines.join("\n")}\n`;
 }
@@ -594,7 +605,7 @@ async function main() {
       for (const s of scanners) if (s.status === "FINDINGS") model.limitations.push(`${s.name} reported ${Number(s.finding_count) || "one or more"} finding(s); a full security-review is required to correlate severity, exploitability, and persistent SEC-* findings.`);
     }
 
-    const findings = reconcile(model.findings, previous, reviewNumber);
+    const findings = args.scanOnly ? preserveUnverifiedFindings(previous) : reconcile(model.findings, previous, reviewNumber);
     const scanFindings = scannerFindingCount(scanners);
     const rating = args.scanOnly ? null : score(findings);
     const decision = args.scanOnly ? "INCONCLUSIVE" : findings.some((f) => f.blocking) ? "REQUEST_CHANGES" : "APPROVE";
@@ -603,7 +614,7 @@ async function main() {
       if (s.status === "SKIPPED") limitations.push(`${s.name}: ${s.reason || "scanner unavailable"}`);
       if (s.status === "ERROR") limitations.push(`${s.name}: scanner error; ${s.note || `exit ${s.exit_code}`}`);
     }
-    if (args.scanOnly) limitations.push("Scan-only mode never grants APPROVE and is intentionally not assigned a /5 rating; run a full security-review for a merge decision.");
+    if (args.scanOnly) limitations.push("Scan-only mode never changes SEC lifecycle state, never grants APPROVE, and is intentionally not assigned a /5 rating; run a full security-review for lifecycle verification and a merge decision.");
 
     const review = {
       schema_version: 2,
@@ -617,6 +628,7 @@ async function main() {
       changed_files: files,
       attack_surfaces: surfaces,
       scan_only: args.scanOnly,
+      finding_lifecycle_verified: !args.scanOnly,
       provider: provider?.name || null,
       scanners,
       scanner_finding_count: scanFindings,
