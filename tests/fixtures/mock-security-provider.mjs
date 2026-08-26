@@ -7,6 +7,10 @@ if (!project) {
   console.error("WEB_KIT_SECURITY_PROJECT_ROOT missing");
   process.exit(2);
 }
+if (process.env.WEB_KIT_CONTEXT_SUPERVISOR_BYPASS !== "1") {
+  console.error("Security reviewer did not bypass the transparent context supervisor");
+  process.exit(4);
+}
 
 const args = process.argv.slice(2);
 const source = fs.readFileSync(path.join(project, "src", "admin.js"), "utf8");
