@@ -1,0 +1,124 @@
+name: Publish @ihgen/web-kit v1.1.14
+
+on:
+  push:
+    paths:
+      - ".github/workflows/publish-v1.1.14-npm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      already_published: ${{ steps.registry.outputs.already_published }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: v1.1.14
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Update npm CLI
+        shell: bash
+        run: npm install --global npm@latest
+
+      - name: Verify immutable release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "24a886fe23ff9d46397c4a82c960ca8c3d8344ff"
+          test "$(tr -d '\r\n' < VERSION)" = "1.1.14"
+          test "$(node -p "require('./package.json').version")" = "1.1.14"
+          test "$(node -p "require('./package.json').name")" = "@ihgen/web-kit"
+          npm pack --dry-run --json > "$RUNNER_TEMP/npm-pack-dry-run.json"
+          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/npm-pack-dry-run.json","utf8")); if(!Array.isArray(r)||r[0]?.name!=="@ihgen/web-kit"||r[0]?.version!=="1.1.14") process.exit(1)'
+
+      - name: Check npm registry
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ping >/dev/null
+          set +e
+          LOOKUP="$(npm view '@ihgen/web-kit@1.1.14' version --json 2>&1)"
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
+            FOUND="$(printf '%s' "$LOOKUP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);process.stdout.write(Array.isArray(v)?String(v[0]||""):String(v||""))})')"
+            test "$FOUND" = "1.1.14"
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "@ihgen/web-kit@1.1.14 is already published; publish job will be skipped."
+          elif printf '%s' "$LOOKUP" | grep -Eqi 'E404|404 Not Found|is not in this registry|No match found for version'; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "@ihgen/web-kit@1.1.14 is not published yet."
+          else
+            printf '%s\n' "$LOOKUP" >&2
+            exit "$STATUS"
+          fi
+
+  publish:
+    needs: preflight
+    if: github.ref == 'refs/heads/main' && needs.preflight.outputs.already_published == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable release tag
+        uses: actions/checkout@v4
+        with:
+          ref: v1.1.14
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Update npm CLI
+        shell: bash
+        run: npm install --global npm@latest
+
+      - name: Verify release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "24a886fe23ff9d46397c4a82c960ca8c3d8344ff"
+          test "$(tr -d '\r\n' < VERSION)" = "1.1.14"
+          test "$(node -p "require('./package.json').version")" = "1.1.14"
+
+      - name: Publish npm package
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm config set "//registry.npmjs.org/:_authToken" "$NPM_TOKEN"
+          fi
+          npm publish --access public --provenance
+
+      - name: Verify npm publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if FOUND="$(npm view '@ihgen/web-kit@1.1.14' version --json 2>/dev/null)"; then
+              VERSION="$(printf '%s' "$FOUND" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);process.stdout.write(Array.isArray(v)?String(v[0]||""):String(v||""))})')"
+              if [ "$VERSION" = "1.1.14" ]; then
+                echo "Verified @ihgen/web-kit@1.1.14 on npm."
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "Published command completed but registry verification did not observe 1.1.14." >&2
+          exit 1
