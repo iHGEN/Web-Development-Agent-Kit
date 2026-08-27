@@ -50,7 +50,7 @@ jobs:
           cat "$PACK_ERR" || true
           cat "$PACK_JSON" || true
           test "$PACK_STATUS" -eq 0
-          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/npm-pack-dry-run.json","utf8")); const p=Array.isArray(r)?r[0]:r; console.log(`validated tarball ${p?.name || "?"}@${p?.version || "?"}`); if(p?.name!=="@ihgen/web-kit"||p?.version!=="1.1.14") process.exit(1)'
+          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/npm-pack-dry-run.json","utf8")); const p=Array.isArray(r)?r[0]:(r?.name?r:Object.values(r||{})[0]); console.log(`validated tarball ${p?.name || "?"}@${p?.version || "?"}`); if(p?.name!=="@ihgen/web-kit"||p?.version!=="1.1.14") process.exit(1)'
 
       - name: Check npm registry
         id: registry
