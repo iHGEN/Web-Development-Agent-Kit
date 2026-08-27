@@ -40,8 +40,17 @@ jobs:
           test "$(tr -d '\r\n' < VERSION)" = "1.1.14"
           test "$(node -p "require('./package.json').version")" = "1.1.14"
           test "$(node -p "require('./package.json').name")" = "@ihgen/web-kit"
-          npm pack --dry-run --json > "$RUNNER_TEMP/npm-pack-dry-run.json"
-          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/npm-pack-dry-run.json","utf8")); if(!Array.isArray(r)||r[0]?.name!=="@ihgen/web-kit"||r[0]?.version!=="1.1.14") process.exit(1)'
+
+          PACK_JSON="$RUNNER_TEMP/npm-pack-dry-run.json"
+          PACK_ERR="$RUNNER_TEMP/npm-pack-dry-run.err"
+          set +e
+          npm pack --dry-run --json > "$PACK_JSON" 2> "$PACK_ERR"
+          PACK_STATUS=$?
+          set -e
+          cat "$PACK_ERR" || true
+          cat "$PACK_JSON" || true
+          test "$PACK_STATUS" -eq 0
+          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/npm-pack-dry-run.json","utf8")); const p=Array.isArray(r)?r[0]:r; console.log(`validated tarball ${p?.name || "?"}@${p?.version || "?"}`); if(p?.name!=="@ihgen/web-kit"||p?.version!=="1.1.14") process.exit(1)'
 
       - name: Check npm registry
         id: registry
