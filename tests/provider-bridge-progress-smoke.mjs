@@ -44,7 +44,7 @@ run(process.execPath, [
 ], { cwd: project });
 run(process.execPath, [
   progress, "update", "--task-id", "TASK-BRIDGE", "--status", "IMPLEMENTING",
-  "--agent", "backend-developer", "--implementation-total", "2", "--implementation-completed", "0",
+  "--agent", "backend-developer", "--implementation-total", "4", "--implementation-completed", "0",
   "--next", "implement the requested change", "--project", project,
 ], { cwd: project });
 
@@ -68,13 +68,24 @@ notify("I inspected the target and am starting implementation.");
 let job = readJson(jobFile);
 assert(job.metrics.ai_cycles === 0, `baseline callback should not count as a cycle, got ${job.metrics.ai_cycles}`);
 
-// A real source edit between safe turns is automatically implementation evidence.
+// A real tracked source edit between safe turns is automatically implementation evidence.
 fs.writeFileSync(path.join(project, "src", "index.js"), "export const value = 2;\n");
-notify("Implemented the source change.");
+notify("Implemented the tracked source change.");
 job = readJson(jobFile);
 assert(job.metrics.ai_cycles === 1, `expected one automatic cycle, got ${job.metrics.ai_cycles}`);
-assert(job.metrics.implementation_cycles === 1, "repository delta was not classified as implementation");
+assert(job.metrics.implementation_cycles === 1, "tracked repository delta was not classified as implementation");
 assert(job.metrics.prose_only_cycles === 0, "implementation turn was incorrectly classified as prose");
+
+// New untracked files and later edits to the same untracked file must both count as repository work.
+fs.writeFileSync(path.join(project, "src", "new.js"), "export const newValue = 1;\n");
+notify("Added a new untracked implementation file.");
+job = readJson(jobFile);
+assert(job.metrics.implementation_cycles === 2, "new untracked file was not classified as implementation");
+
+fs.writeFileSync(path.join(project, "src", "new.js"), "export const newValue = 2;\n");
+notify("Updated the existing untracked implementation file.");
+job = readJson(jobFile);
+assert(job.metrics.implementation_cycles === 3, "content change inside an already-untracked file was not detected");
 
 // No repository delta during IMPLEMENTING is meta-only evidence.
 notify("I am thinking about the next step.");
@@ -102,6 +113,6 @@ run(process.execPath, [
 ], { cwd: project });
 notify("State was updated but application code was not changed.");
 job = readJson(jobFile);
-assert(job.metrics.implementation_cycles === 1, "Web-Kit state files were misclassified as repository implementation");
+assert(job.metrics.implementation_cycles === 3, "Web-Kit state files were misclassified as repository implementation");
 
 console.log("Provider bridge automatic progress smoke: PASS");
