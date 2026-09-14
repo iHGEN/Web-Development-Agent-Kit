@@ -270,8 +270,13 @@ function repositoryFingerprint(project) {
   return hash(`${head}\n--status--\n${status}\n--diff--\n${diff}\n--staged--\n${staged}\n--untracked--\n${untracked}`);
 }
 
+function validTaskId(taskId) {
+  const value = String(taskId || "");
+  return value.length > 0 && value.length <= 120 && /^[a-zA-Z0-9._-]+$/.test(value);
+}
+
 function activeJobById(paths, taskId) {
-  if (!taskId) return null;
+  if (!validTaskId(taskId)) return null;
   const file = path.join(paths.jobs, `${taskId}.json`);
   const job = readJson(file, null);
   if (!job || TERMINAL_JOB_STATUSES.has(String(job.status || "").toUpperCase())) return null;
@@ -333,12 +338,15 @@ function recordProviderTurn(provider, sessionId, turnKey) {
 
   let recorded = false;
   if (job && sameJob && !providerAlreadyRecordedCycle && observation.repository_fingerprint && fingerprint) {
-    if (observation.repository_fingerprint !== fingerprint) {
+    const status = String(job.status || "").toUpperCase();
+    if (status === "PLANNING") {
+      // Planning remains planning even when the AI edits plan/design artifacts in the repository.
+      // Do not let plan-file churn masquerade as implementation progress.
+      recorded = invokeWorkProgress(paths, job, "planning", "");
+    } else if (observation.repository_fingerprint !== fingerprint) {
       recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: repository diff/status changed`);
-    } else {
-      const status = String(job.status || "").toUpperCase();
-      if (status === "PLANNING") recorded = invokeWorkProgress(paths, job, "planning", "");
-      else if (status === "IMPLEMENTING") recorded = invokeWorkProgress(paths, job, "prose", "");
+    } else if (status === "IMPLEMENTING") {
+      recorded = invokeWorkProgress(paths, job, "prose", "");
     }
   }
 
