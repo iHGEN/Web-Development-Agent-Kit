@@ -37,6 +37,9 @@ const cmd = (...args) => run(process.execPath, [progressBin, ...args, "--project
 const failCmd = (...args) => runFail(process.execPath, [progressBin, ...args, "--project", project], { cwd: project });
 const jobFile = (id) => path.join(project, ".agent-core", "state", "jobs", `${id}.json`);
 
+// Task IDs are strict so different user values cannot silently collide on one state file.
+failCmd("start", "--task-id", "feature/auth", "--classification", "SMALL");
+
 // SMALL: no planning gate, implementation carries most progress.
 cmd("start", "--task-id", "TASK-SMALL", "--classification", "SMALL", "--title", "Small implementation");
 let small = readJson(jobFile("TASK-SMALL"));
@@ -54,7 +57,7 @@ small = readJson(jobFile("TASK-SMALL"));
 assert(small.progress >= 35 && small.progress < 70, `SMALL implementation progress is not evidence-weighted: ${small.progress}`);
 assert(small.metrics.implementation_cycles === 1, "implementation cycle was not counted");
 
-// Two post-discovery meta-only cycles force implementation.
+// Two post-discovery meta-only cycles force implementation for a plan-free task.
 cmd("cycle", "--task-id", "TASK-SMALL", "--kind", "planning");
 cmd("cycle", "--task-id", "TASK-SMALL", "--kind", "routing");
 small = readJson(jobFile("TASK-SMALL"));
@@ -74,32 +77,43 @@ cmd(
 cmd("cycle", "--task-id", "TASK-SMALL", "--kind", "review", "--evidence", "diff review passed");
 cmd("update", "--task-id", "TASK-SMALL", "--status", "REVIEWING", "--review", "PASS", "--evidence", "review passed");
 cmd("cycle", "--task-id", "TASK-SMALL", "--kind", "validation", "--evidence", "final behavior verified");
-cmd("update", "--task-id", "TASK-SMALL", "--status", "VALIDATING", "--final-validation", "PASS", "--evidence", "final validation passed");
-cmd("update", "--task-id", "TASK-SMALL", "--status", "DONE", "--evidence", "original request satisfied");
+cmd("update", "--task-id", "TASK-SMALL", "--status", "DONE", "--final-validation", "PASS", "--evidence", "final validation passed and original request satisfied");
 small = readJson(jobFile("TASK-SMALL"));
 assert(small.status === "DONE" && small.progress === 100, "SMALL job did not reach evidence-backed DONE");
 assert(small.anti_slop.violation === false, "concrete work did not clear anti-slop state");
 
-// MEDIUM: short plan, capped at six bullets, no mandatory plan validator.
+// MEDIUM: short plan, capped at six bullets, no mandatory Plan Validator, but implementation waits for plan approval.
 cmd("start", "--task-id", "TASK-MEDIUM", "--classification", "MEDIUM", "--title", "Medium implementation");
 let medium = readJson(jobFile("TASK-MEDIUM"));
 assert(medium.governance.plan_required === true, "MEDIUM should have a short plan");
 assert(medium.governance.plan_mode === "short", "MEDIUM plan mode should be short");
 assert(medium.governance.max_plan_bullets === 6, "MEDIUM plan must be capped at six bullets");
 assert(medium.governance.plan_validator_required === false, "MEDIUM should not require Plan Validator by default");
+failCmd("update", "--task-id", "TASK-MEDIUM", "--status", "IMPLEMENTING");
 cmd("update", "--task-id", "TASK-MEDIUM", "--status", "PLANNING", "--plan-bullets", "6", "--plan-status", "APPROVED", "--evidence", "six executable bullets");
 failCmd("update", "--task-id", "TASK-MEDIUM", "--plan-bullets", "7");
+cmd("update", "--task-id", "TASK-MEDIUM", "--status", "IMPLEMENTING", "--evidence", "short plan approved; implementation begins");
+medium = readJson(jobFile("TASK-MEDIUM"));
+assert(medium.status === "IMPLEMENTING", "approved MEDIUM plan did not permit implementation");
 
-// LARGE/high-risk keeps formal governance.
+// LARGE/high-risk keeps formal governance and cannot bypass its plan gate.
 cmd("start", "--task-id", "TASK-LARGE", "--classification", "LARGE", "--title", "Large implementation");
-const large = readJson(jobFile("TASK-LARGE"));
+let large = readJson(jobFile("TASK-LARGE"));
 assert(large.governance.plan_mode === "formal", "LARGE should use formal planning");
 assert(large.governance.plan_validator_required === true, "LARGE should require Plan Validator");
+failCmd("update", "--task-id", "TASK-LARGE", "--status", "IMPLEMENTING");
+cmd("cycle", "--task-id", "TASK-LARGE", "--kind", "planning");
+cmd("cycle", "--task-id", "TASK-LARGE", "--kind", "routing");
+large = readJson(jobFile("TASK-LARGE"));
+assert(large.anti_slop.violation === true, "formal planning loop was not detected");
+assert(large.status === "PLANNING", "formal planning anti-slop guard bypassed plan approval");
+assert(large.anti_slop.forced_next_phase === "PLANNING_APPROVAL_THEN_IMPLEMENTING", "formal planning guard did not preserve approval gate");
 
 cmd("start", "--task-id", "TASK-RISK", "--classification", "SMALL", "--high-risk", "--title", "Small but high risk");
 const risk = readJson(jobFile("TASK-RISK"));
 assert(risk.governance.plan_mode === "formal", "high-risk SMALL task should escalate governance");
 assert(risk.governance.plan_validator_required === true, "high-risk SMALL task should require Plan Validator");
+failCmd("update", "--task-id", "TASK-RISK", "--status", "IMPLEMENTING");
 
 // Whole-project/application status stays separate and requires evidence.
 cmd("project-update", "--area", "backend", "--progress", "80", "--status", "ACTIVE", "--evidence", "TASK-SMALL done; targeted tests pass");
@@ -112,7 +126,7 @@ failCmd("project-update", "--area", "database", "--progress", "100");
 
 const efficiency = readJson(path.join(project, ".agent-core", "state", "metrics", "workflow-efficiency.json"));
 assert(efficiency.jobs === 4, `expected four tracked jobs, got ${efficiency.jobs}`);
-assert(efficiency.totals.ai_cycles >= 5, "workflow efficiency metrics were not aggregated");
+assert(efficiency.totals.ai_cycles >= 7, "workflow efficiency metrics were not aggregated");
 
 const workflow = fs.readFileSync(path.join(project, ".agent-core", "rules", "workflow.md"), "utf8");
 assert(workflow.includes("two consecutive cycles"), "canonical workflow is missing anti-slop guard");
