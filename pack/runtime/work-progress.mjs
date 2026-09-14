@@ -10,6 +10,7 @@ const JOB_STATUSES = new Set([
 ]);
 const CYCLE_KINDS = new Set(["discovery", "planning", "routing", "implementation", "testing", "review", "validation", "prose"]);
 const IMPLEMENTATION_OR_LATER = new Set(["IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING", "DONE"]);
+const PLAN_RESULTS = new Set(["APPROVED", "REVISE", "REJECTED"]);
 const WEIGHTS = {
   SMALL: { discovery: 5, planning: 0, implementation: 70, testing: 15, review: 5, validation: 5 },
   MEDIUM: { discovery: 10, planning: 5, implementation: 60, testing: 15, review: 5, validation: 5 },
@@ -73,9 +74,40 @@ function statusAtOrAfter(status, target) {
   return current >= 0 && wanted >= 0 && current >= wanted;
 }
 function governanceFor(classification, highRisk) {
-  if (classification === "SMALL" && !highRisk) return { plan_required: false, plan_mode: "none", max_plan_bullets: 0, plan_validator_required: false };
-  if (classification === "MEDIUM" && !highRisk) return { plan_required: true, plan_mode: "short", max_plan_bullets: 6, plan_validator_required: false };
-  return { plan_required: true, plan_mode: "formal", max_plan_bullets: 20, plan_validator_required: true };
+  if (classification === "SMALL" && !highRisk) {
+    return { plan_required: false, plan_mode: "none", min_plan_bullets: 0, max_plan_bullets: 0, plan_validator_required: false };
+  }
+  if (classification === "MEDIUM" && !highRisk) {
+    return { plan_required: true, plan_mode: "short", min_plan_bullets: 3, max_plan_bullets: 6, plan_validator_required: false };
+  }
+  return { plan_required: true, plan_mode: "formal", min_plan_bullets: 1, max_plan_bullets: 20, plan_validator_required: true };
+}
+function defaultValidator(governance) {
+  return {
+    required: Boolean(governance.plan_validator_required),
+    status: governance.plan_validator_required ? "PENDING" : "NOT_REQUIRED",
+    source: null,
+    evidence: [],
+    plan_version: null,
+    validated_at: null,
+  };
+}
+function planReady(job) {
+  if (!job.governance.plan_required) return true;
+  const bullets = Number(job.plan?.bullets || 0);
+  if (bullets < Number(job.governance.min_plan_bullets || 0) || bullets > Number(job.governance.max_plan_bullets || 0)) return false;
+  if (job.plan?.status !== "APPROVED") return false;
+  if (!job.governance.plan_validator_required) return true;
+  return job.plan?.validator?.status === "APPROVED"
+    && Boolean(job.plan?.validator?.source)
+    && Number(job.plan?.validator?.plan_version) === Number(job.plan?.version || 0);
+}
+function assertPlanReady(job) {
+  if (planReady(job)) return;
+  if (job.governance.plan_validator_required) {
+    throw new Error(`${job.classification}${job.high_risk ? "/high-risk" : ""} job requires an independently APPROVED ${job.governance.plan_mode} plan for the current plan version before implementation.`);
+  }
+  throw new Error(`${job.classification} job requires ${job.governance.min_plan_bullets}-${job.governance.max_plan_bullets} approved plan bullets before implementation.`);
 }
 function defaultMetrics() {
   return {
@@ -96,7 +128,7 @@ function defaultMetrics() {
 }
 function phaseCompletion(job) {
   const discovery = statusAtOrAfter(job.status, "IMPLEMENTING") || job.status === "PLANNING" ? 1 : job.status === "DISCOVERING" ? 0.5 : 0;
-  const planning = !job.governance.plan_required ? 1 : job.plan?.status === "APPROVED" ? 1 : (job.plan?.bullets || 0) > 0 ? 0.5 : 0;
+  const planning = !job.governance.plan_required ? 1 : planReady(job) ? 1 : (job.plan?.bullets || 0) > 0 ? 0.5 : 0;
   const implementation = job.implementation.total > 0
     ? clamp(job.implementation.completed / job.implementation.total, 0, 1)
     : job.evidence.files_changed > 0 ? clamp(0.20 + job.evidence.files_changed * 0.05, 0, 0.55) : 0;
@@ -111,7 +143,7 @@ function recalculate(job) {
   const weights = WEIGHTS[job.classification];
   const phases = phaseCompletion(job);
   job.progress = Math.round(Object.entries(weights).reduce((sum, [name, weight]) => sum + weight * phases[name], 0));
-  if (job.status === "DONE") job.progress = 100;
+  if (job.status === "DONE" && job.final_validation.status === "PASS") job.progress = 100;
   const m = job.metrics;
   const useful = m.implementation_cycles + m.testing_cycles + m.review_cycles + m.validation_cycles;
   m.useful_work_ratio = m.ai_cycles ? Math.round((useful / m.ai_cycles) * 100) : 0;
@@ -126,6 +158,8 @@ function loadJob(project, taskId) {
   const paths = statePaths(project, taskId);
   const job = readJson(paths.job, null);
   if (!job) throw new Error(`Job ${taskId} does not exist. Run 'start' first.`);
+  if (!job.plan?.validator) job.plan.validator = defaultValidator(job.governance);
+  if (job.governance.min_plan_bullets === undefined) job.governance.min_plan_bullets = job.classification === "MEDIUM" && !job.high_risk ? 3 : job.governance.plan_required ? 1 : 0;
   return { job, paths };
 }
 function listJobs(project) {
@@ -147,6 +181,12 @@ function jobSummary(job) {
     progress: job.progress,
     current_agent: job.current_agent,
     active_implementation: job.implementation?.active || null,
+    plan: {
+      status: job.plan?.status || null,
+      bullets: Number(job.plan?.bullets || 0),
+      validator_status: job.plan?.validator?.status || null,
+      validator_source: job.plan?.validator?.source || null,
+    },
     next_action: job.next_action,
     anti_slop: job.anti_slop,
     useful_work_ratio: Number(job.metrics?.useful_work_ratio || 0),
@@ -154,6 +194,8 @@ function jobSummary(job) {
   };
 }
 function writeJob(project, job) {
+  if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
+  if (IMPLEMENTATION_OR_LATER.has(job.status) && job.governance.plan_required) assertPlanReady(job);
   const paths = statePaths(project, job.task_id);
   recalculate(job);
   atomicWriteJson(paths.job, job);
@@ -185,7 +227,7 @@ function start(project, args) {
   if (fs.existsSync(paths.job) && !hasArg(args, "--force")) throw new Error(`Job ${taskId} already exists; use --force to replace it.`);
   const governance = governanceFor(classification, highRisk);
   const job = {
-    schema_version: 1,
+    schema_version: 2,
     task_id: taskId,
     title: getArg(args, "--title") || taskId,
     classification,
@@ -195,7 +237,12 @@ function start(project, args) {
     current_agent: null,
     current_phase: "QUEUED",
     governance,
-    plan: { status: governance.plan_required ? "PENDING" : "NOT_REQUIRED", bullets: 0, version: 0 },
+    plan: {
+      status: governance.plan_required ? "PENDING" : "NOT_REQUIRED",
+      bullets: 0,
+      version: 0,
+      validator: defaultValidator(governance),
+    },
     implementation: { total: 0, completed: 0, active: null },
     evidence: { files_changed: 0, tests_added: 0, tests_total: 0, tests_passing: 0, build: "UNKNOWN", items: [] },
     review: { status: "PENDING" },
@@ -213,30 +260,60 @@ function start(project, args) {
 function update(project, args) {
   const taskId = safeTaskId(getArg(args, "--task-id"));
   const { job } = loadJob(project, taskId);
+  const reopening = hasArg(args, "--reopen");
+  if (job.status === "DONE" && !reopening) {
+    throw new Error("DONE jobs are immutable. Use --reopen with an explicit non-DONE --status before changing validation, review, implementation, or plan state.");
+  }
 
-  const planStatus = getArg(args, "--plan-status");
-  if (planStatus) job.plan.status = String(planStatus).toUpperCase();
+  const requestedStatus = getArg(args, "--status");
+  if (reopening) {
+    if (!requestedStatus) throw new Error("--reopen requires an explicit non-DONE --status.");
+    const reopenStatus = String(requestedStatus).toUpperCase();
+    if (!JOB_STATUSES.has(reopenStatus) || reopenStatus === "DONE") throw new Error("--reopen status must be a valid non-DONE job status.");
+    if (!getArg(args, "--final-validation")) job.final_validation.status = "PENDING";
+    if (!getArg(args, "--review")) job.review.status = "PENDING";
+  }
+
+  const previousBullets = Number(job.plan.bullets || 0);
+  const previousVersion = Number(job.plan.version || 0);
   const planBullets = numberArg(args, "--plan-bullets");
   if (planBullets !== null) {
-    if (planBullets > job.governance.max_plan_bullets) throw new Error(`Plan exceeds ${job.governance.max_plan_bullets} bullet limit for ${job.classification}`);
-    job.plan.bullets = Math.max(0, Math.floor(planBullets));
+    const nextBullets = Math.max(0, Math.floor(planBullets));
+    if (nextBullets > job.governance.max_plan_bullets) throw new Error(`Plan exceeds ${job.governance.max_plan_bullets} bullet limit for ${job.classification}`);
+    job.plan.bullets = nextBullets;
   }
   const planVersion = numberArg(args, "--plan-version");
   if (planVersion !== null) job.plan.version = Math.max(0, Math.floor(planVersion));
+
+  if (job.governance.plan_validator_required && (Number(job.plan.bullets) !== previousBullets || Number(job.plan.version) !== previousVersion)) {
+    job.plan.status = "PENDING";
+    job.plan.validator = defaultValidator(job.governance);
+  }
+
+  const planStatus = getArg(args, "--plan-status");
+  if (planStatus) {
+    const normalizedPlan = String(planStatus).toUpperCase();
+    if (normalizedPlan === "APPROVED") {
+      if (job.governance.plan_validator_required) {
+        throw new Error("Formal/high-risk plans cannot self-approve through update. Use plan-validate with independent validator provenance.");
+      }
+      if (Number(job.plan.bullets || 0) < Number(job.governance.min_plan_bullets || 0)) {
+        throw new Error(`${job.classification} plan requires at least ${job.governance.min_plan_bullets} bullets before approval.`);
+      }
+    }
+    job.plan.status = normalizedPlan;
+  }
 
   const finalValidation = getArg(args, "--final-validation");
   if (finalValidation) job.final_validation.status = String(finalValidation).toUpperCase();
   const review = getArg(args, "--review");
   if (review) job.review.status = String(review).toUpperCase();
 
-  const status = getArg(args, "--status");
-  if (status) {
-    const normalized = String(status).toUpperCase();
+  if (requestedStatus) {
+    const normalized = String(requestedStatus).toUpperCase();
     if (!JOB_STATUSES.has(normalized)) throw new Error(`Unsupported status: ${normalized}`);
     if (normalized === "PLANNING" && !job.governance.plan_required) throw new Error("SMALL/non-plan job cannot enter PLANNING; route to implementation instead.");
-    if (IMPLEMENTATION_OR_LATER.has(normalized) && job.governance.plan_required && job.plan.status !== "APPROVED") {
-      throw new Error(`${job.classification}${job.high_risk ? "/high-risk" : ""} job requires an approved ${job.governance.plan_mode} plan before implementation.`);
-    }
+    if (IMPLEMENTATION_OR_LATER.has(normalized) && job.governance.plan_required) assertPlanReady(job);
     if (normalized === "DONE" && job.final_validation.status !== "PASS") throw new Error("DONE requires final validation PASS.");
     job.status = normalized;
     job.current_phase = normalized;
@@ -263,9 +340,43 @@ function update(project, args) {
   const build = getArg(args, "--build");
   if (build) job.evidence.build = String(build).toUpperCase();
 
-  appendEvidence(job, getAllArgs(args, "--evidence"), "update");
+  if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
+  appendEvidence(job, getAllArgs(args, "--evidence"), reopening ? "reopen" : "update");
   if (hasArg(args, "--replan")) job.metrics.replans += 1;
   if (hasArg(args, "--handoff")) job.metrics.handoffs += 1;
+  writeJob(project, job);
+  return job;
+}
+function planValidate(project, args) {
+  const taskId = safeTaskId(getArg(args, "--task-id"));
+  const { job } = loadJob(project, taskId);
+  if (!job.governance.plan_validator_required) throw new Error("Independent plan validation is not required for this job.");
+  if (job.status === "DONE") throw new Error("DONE jobs are immutable; reopen before changing plan validation.");
+  const result = String(getArg(args, "--result") || "").toUpperCase();
+  if (!PLAN_RESULTS.has(result)) throw new Error("--result must be APPROVED, REVISE, or REJECTED");
+  const validator = String(getArg(args, "--validator") || "").trim();
+  if (!validator) throw new Error("--validator is required to record independent validator provenance");
+  if (job.current_agent && validator === job.current_agent) throw new Error("Independent Plan Validator cannot be the current implementation/planning agent.");
+  const evidence = getAllArgs(args, "--evidence");
+  if (!evidence.length) throw new Error("plan-validate requires at least one --evidence value");
+  if (result === "APPROVED" && Number(job.plan.bullets || 0) < Number(job.governance.min_plan_bullets || 0)) {
+    throw new Error(`${job.governance.plan_mode} plan requires at least ${job.governance.min_plan_bullets} bullets before approval.`);
+  }
+  job.plan.validator = {
+    required: true,
+    status: result,
+    source: validator,
+    evidence: evidence.slice(-20),
+    plan_version: Number(job.plan.version || 0),
+    validated_at: nowIso(),
+  };
+  job.plan.status = result;
+  if (result !== "APPROVED") {
+    job.status = "PLANNING";
+    job.current_phase = "PLANNING";
+    job.next_action = result === "REVISE" ? "Revise only the validator findings, then request independent plan validation again." : "Plan rejected. Resolve the blocking evidence before implementation.";
+  }
+  appendEvidence(job, evidence, `plan-validator:${result.toLowerCase()}`);
   writeJob(project, job);
   return job;
 }
@@ -274,9 +385,8 @@ function cycle(project, args) {
   const kind = String(getArg(args, "--kind") || "").toLowerCase();
   if (!CYCLE_KINDS.has(kind)) throw new Error(`--kind must be one of: ${[...CYCLE_KINDS].join(", ")}`);
   const { job } = loadJob(project, taskId);
-  if (kind === "implementation" && job.governance.plan_required && job.plan.status !== "APPROVED") {
-    throw new Error(`Cannot record implementation before the required ${job.governance.plan_mode} plan is APPROVED.`);
-  }
+  if (job.status === "DONE") throw new Error("DONE jobs are immutable. Reopen the job before recording more cycles.");
+  if (kind === "implementation" && job.governance.plan_required) assertPlanReady(job);
 
   if (kind === "discovery" && job.status === "QUEUED") {
     job.status = "DISCOVERING";
@@ -307,14 +417,14 @@ function cycle(project, args) {
       reason: "Two consecutive post-discovery cycles produced planning/routing/prose without implementation, test, review, validation, or concrete evidence.",
       forced_next_phase: "IMPLEMENTING",
     };
-    if (!job.governance.plan_required || job.plan.status === "APPROVED") {
+    if (planReady(job)) {
       job.status = "IMPLEMENTING";
       job.current_phase = "IMPLEMENTING";
       job.next_action = "Stop meta-work. Make the next evidence-supported repository change now, then run its local check.";
     } else {
       job.status = "PLANNING";
       job.current_phase = "PLANNING";
-      job.next_action = `Stop expanding the plan. Finish the smallest ${job.governance.plan_mode} plan allowed by policy, mark it APPROVED through the required validation path, then implement immediately.`;
+      job.next_action = `Stop expanding the plan. Satisfy the ${job.governance.min_plan_bullets}-${job.governance.max_plan_bullets} bullet contract${job.governance.plan_validator_required ? " and obtain independent Plan Validator approval" : ""}, then implement immediately.`;
       job.anti_slop.forced_next_phase = "PLANNING_APPROVAL_THEN_IMPLEMENTING";
     }
   } else if (!["prose", "planning", "routing"].includes(kind)) {
@@ -359,7 +469,7 @@ function show(project, args) {
   };
 }
 function printHelp() {
-  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff]\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM is capped at six bullets, formal/high-risk work cannot enter implementation until its plan is approved, and two consecutive post-discovery meta-only cycles trigger the anti-slop guard.`);
+  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, and two consecutive post-discovery meta-only cycles trigger the anti-slop guard.`);
 }
 
 const args = process.argv.slice(2);
@@ -371,6 +481,7 @@ try {
     let result;
     if (command === "start") result = start(project, args.slice(1));
     else if (command === "update") result = update(project, args.slice(1));
+    else if (command === "plan-validate") result = planValidate(project, args.slice(1));
     else if (command === "cycle") result = cycle(project, args.slice(1));
     else if (command === "project-update") result = projectUpdate(project, args.slice(1));
     else if (command === "show") result = show(project, args.slice(1));
