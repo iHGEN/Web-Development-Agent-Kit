@@ -39,6 +39,7 @@ const jobFile = path.join(jobsDir, "TASK-BRIDGE.json");
 const otherJobFile = path.join(jobsDir, "TASK-OTHER.json");
 const claudeJobFile = path.join(jobsDir, "TASK-CLAUDE.json");
 const planJobFile = path.join(jobsDir, "TASK-PLAN.json");
+const planSourceJobFile = path.join(jobsDir, "TASK-PLAN-SOURCE.json");
 const gateJobFile = path.join(jobsDir, "TASK-GATE.json");
 assert(fs.existsSync(progress), "work-progress runtime missing");
 assert(fs.existsSync(bridge), "provider bridge missing");
@@ -166,7 +167,7 @@ claudeStatus(4000, 400, 20);
 claudeJob = readJson(claudeJobFile);
 assert(claudeJob.metrics.prose_only_cycles === 2, "Claude stalled turns did not feed the anti-slop guard");
 
-// Plan-file churn remains planning and never earns implementation credit.
+// Recognized planning-artifact churn remains planning and never earns implementation credit.
 run(process.execPath, [
   progress, "start", "--task-id", "TASK-PLAN", "--classification", "MEDIUM",
   "--title", "Planning churn classification", "--project", project,
@@ -191,6 +192,54 @@ let planJob = readJson(planJobFile);
 assert(planJob.metrics.planning_cycles === 2, "planning turns were not counted");
 assert(planJob.metrics.implementation_cycles === 0, "plan-file edits masqueraded as implementation progress");
 assert(planJob.anti_slop.violation === true, "plan-file churn did not trigger anti-slop");
+
+// Source-code edits while explicitly PLANNING and unapproved are governance violations, not planning progress.
+run(process.execPath, [
+  progress, "start", "--task-id", "TASK-PLAN-SOURCE", "--classification", "MEDIUM",
+  "--title", "Planning source-delta guard", "--project", project,
+], { cwd: project });
+run(process.execPath, [
+  progress, "update", "--task-id", "TASK-PLAN-SOURCE", "--status", "PLANNING",
+  "--agent", "web-orchestrator", "--plan-bullets", "3", "--next", "complete approval before code changes",
+  "--project", project,
+], { cwd: project });
+const planSourceEnv = {
+  ...process.env,
+  WEB_KIT_PROJECT_ROOT: project,
+  WEB_KIT_SUPERVISOR_ID: "planning-source-bridge-progress-smoke",
+  CODEX_HOME: path.join(project, ".codex-empty"),
+};
+const planSourceTurnFile = path.join(project, ".agent-core", "state", "context-rollover", "turns", "planning-source-bridge-progress-smoke.json");
+notify("Planning is active; no source edits yet.", planSourceEnv, "planning-source-smoke-thread");
+let planSourceState = readJson(planSourceTurnFile);
+const planningAuthorizedBaseline = planSourceState.repository_fingerprint;
+fs.writeFileSync(path.join(project, "src", "planning-source.js"), "export const planningSource = true;\n");
+notify("Changed application source while planning was still unapproved.", planSourceEnv, "planning-source-smoke-thread");
+planSourceState = readJson(planSourceTurnFile);
+let planSourceJob = readJson(planSourceJobFile);
+assert(planSourceState.governance_violation?.type === "PRE_APPROVAL_REPOSITORY_DELTA", "PLANNING source edit did not record a pre-approval governance violation");
+assert(planSourceState.repository_fingerprint === planningAuthorizedBaseline, "PLANNING source edit advanced the authorized repository fingerprint");
+assert(planSourceState.pending_changed_paths?.includes("src/planning-source.js"), "PLANNING source edit was not identified in pending changed paths");
+assert(planSourceJob.metrics.planning_cycles === 0, "source edit during PLANNING was incorrectly credited as planning");
+assert(planSourceJob.metrics.implementation_cycles === 0, "source edit during PLANNING received implementation credit before approval");
+
+notify("Still waiting for approval with the same source delta present.", planSourceEnv, "planning-source-smoke-thread");
+planSourceState = readJson(planSourceTurnFile);
+assert(planSourceState.repository_fingerprint === planningAuthorizedBaseline, "repeated PLANNING source delta advanced the baseline");
+assert(planSourceState.governance_violation?.type === "PRE_APPROVAL_REPOSITORY_DELTA", "PLANNING source violation disappeared before approval");
+
+run(process.execPath, [
+  progress, "update", "--task-id", "TASK-PLAN-SOURCE", "--status", "PLANNING",
+  "--plan-bullets", "3", "--plan-status", "APPROVED", "--evidence", "short plan approved after source-delta violation",
+  "--project", project,
+], { cwd: project });
+notify("Approval is now present; account for the pending source delta.", planSourceEnv, "planning-source-smoke-thread");
+planSourceState = readJson(planSourceTurnFile);
+planSourceJob = readJson(planSourceJobFile);
+assert(planSourceJob.metrics.implementation_cycles === 1, "pending PLANNING source delta was not recorded after approval");
+assert(planSourceJob.status === "IMPLEMENTING", "approved pending source delta did not transition into implementation");
+assert(planSourceState.repository_fingerprint !== planningAuthorizedBaseline, "resolved PLANNING source delta did not advance the fingerprint");
+assert(planSourceState.governance_violation === null, "resolved PLANNING source violation was not cleared");
 
 // A repository change before required plan approval remains pending instead of becoming the new baseline.
 run(process.execPath, [
