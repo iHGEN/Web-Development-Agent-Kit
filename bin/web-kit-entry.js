@@ -100,7 +100,7 @@ function runSecurityReview(rawArgs) {
 function runWorkProgress(rawArgs, alias = "progress") {
   const { setup, rest } = splitSetupArgs(rawArgs);
   const project = resolve(getOption(setup, "--project") || process.cwd());
-  const commandArgs = alias === "status" && !rest.length ? ["show"] : rest.length ? rest : ["show"];
+  const commandArgs = alias === "status" ? ["show", ...rest] : rest.length ? rest : ["show"];
 
   const setupStatus = ensureInstalled(project, setup);
   if (setupStatus !== 0) return setupStatus;
@@ -137,6 +137,6 @@ if (args[0] === "progress" || args[0] === "status") {
 const status = runNode(legacyCli, args);
 if ((args.includes("--help") || args.includes("-h") || args[0] === "help") && status === 0) {
   console.log("Security review:\n  npx @ihgen/web-kit security-review\n  Inside AI providers: run security-review\n");
-  console.log("Work progress:\n  npx @ihgen/web-kit status\n  npx @ihgen/web-kit progress show --task-id <id>\n  npx @ihgen/web-kit progress help\n");
+  console.log("Work progress:\n  npx @ihgen/web-kit status\n  npx @ihgen/web-kit status --task-id <id>\n  npx @ihgen/web-kit progress show --task-id <id>\n  npx @ihgen/web-kit progress help\n");
 }
 process.exit(status);
