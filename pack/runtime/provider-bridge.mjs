@@ -302,6 +302,18 @@ function activeJobForObservation(paths, observation) {
   return activeJobById(paths, observation?.task_id) || latestActiveJob(paths);
 }
 
+function planGateReady(job) {
+  if (!job?.governance?.plan_required) return true;
+  const min = Number(job.governance.min_plan_bullets ?? (job.classification === "MEDIUM" && !job.high_risk ? 3 : 1));
+  const max = Number(job.governance.max_plan_bullets ?? 20);
+  const bullets = Number(job.plan?.bullets || 0);
+  if (bullets < min || bullets > max || job.plan?.status !== "APPROVED") return false;
+  if (!job.governance.plan_validator_required) return true;
+  return job.plan?.validator?.status === "APPROVED"
+    && Boolean(job.plan?.validator?.source)
+    && Number(job.plan?.validator?.plan_version) === Number(job.plan?.version || 0);
+}
+
 function invokeWorkProgress(paths, job, kind, evidence) {
   if (!fs.existsSync(paths.workProgress) || !job?.task_id) return false;
   const result = spawnSync(process.execPath, [
@@ -328,6 +340,7 @@ function recordProviderTurn(provider, sessionId, turnKey) {
 
   const active = activeJobForObservation(paths, observation);
   const fingerprint = repositoryFingerprint(paths.project);
+  const previousFingerprint = observation.repository_fingerprint || null;
   const job = active?.job || null;
   const jobId = job?.task_id || null;
   const currentCycles = Number(job?.metrics?.ai_cycles || 0);
@@ -335,32 +348,62 @@ function recordProviderTurn(provider, sessionId, turnKey) {
   const providerAlreadyRecordedCycle = sameJob
     && Number.isFinite(Number(observation.job_ai_cycles))
     && currentCycles > Number(observation.job_ai_cycles);
+  const repositoryChanged = Boolean(previousFingerprint && fingerprint && previousFingerprint !== fingerprint);
 
   let recorded = false;
-  if (job && sameJob && !providerAlreadyRecordedCycle && observation.repository_fingerprint && fingerprint) {
+  let attempted = false;
+  let governanceViolation = null;
+
+  if (job && sameJob && !providerAlreadyRecordedCycle && previousFingerprint && fingerprint) {
     const status = String(job.status || "").toUpperCase();
     if (status === "PLANNING") {
-      // Planning remains planning even when the AI edits plan/design artifacts in the repository.
-      // Do not let plan-file churn masquerade as implementation progress.
+      attempted = true;
       recorded = invokeWorkProgress(paths, job, "planning", "");
-    } else if (observation.repository_fingerprint !== fingerprint) {
-      recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: repository diff/status changed`);
+    } else if (repositoryChanged) {
+      attempted = true;
+      if (!planGateReady(job)) {
+        governanceViolation = {
+          type: "PRE_APPROVAL_REPOSITORY_DELTA",
+          task_id: jobId,
+          status,
+          message: "Repository changed before the required plan/validator gate was approved. The prior repository fingerprint is preserved so this delta remains pending.",
+          pending_repository_fingerprint: fingerprint,
+          detected_at: new Date().toISOString(),
+        };
+      } else {
+        recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: repository diff/status changed`);
+      }
     } else if (status === "IMPLEMENTING") {
+      attempted = true;
       recorded = invokeWorkProgress(paths, job, "prose", "");
     }
   }
 
+  if (attempted && !recorded && repositoryChanged && !governanceViolation) {
+    governanceViolation = {
+      type: "PROGRESS_RECORDING_FAILED",
+      task_id: jobId,
+      status: String(job?.status || "").toUpperCase(),
+      message: "Repository changed, but the progress engine rejected or failed to record the cycle. The previous fingerprint is preserved for retry.",
+      pending_repository_fingerprint: fingerprint,
+      detected_at: new Date().toISOString(),
+    };
+  }
+
   const refreshed = active?.file ? readJson(active.file, job) : job;
+  const shouldPreserveFingerprint = Boolean(repositoryChanged && attempted && !recorded);
   atomicWrite(paths.turnState, {
-    schema_version: 1,
+    schema_version: 2,
     supervisor_id: paths.supervisorId,
     provider,
     session_id: sessionId || null,
     last_turn_key: turnKey,
     task_id: refreshed?.task_id || jobId,
     job_ai_cycles: Number(refreshed?.metrics?.ai_cycles || currentCycles),
-    repository_fingerprint: fingerprint,
+    repository_fingerprint: shouldPreserveFingerprint ? previousFingerprint : fingerprint,
+    pending_repository_fingerprint: shouldPreserveFingerprint ? fingerprint : null,
     automatic_cycle_recorded: recorded,
+    governance_violation: governanceViolation,
     observed_at: new Date().toISOString(),
   });
 }
