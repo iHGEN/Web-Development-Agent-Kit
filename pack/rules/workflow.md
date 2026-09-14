@@ -1,602 +1,359 @@
 # Canonical Web Engineering Workflow
 
-This file is the **single authoritative lifecycle** for the Web Development Agent Kit.
+This file is the **single authoritative lifecycle** for Web Kit. Supporting rules may add detail but must not contradict this workflow.
 
-Shorter checklists may summarize one phase, but they MUST NOT replace or bypass this workflow.
+Repository navigation: `.agent-core/rules/repository-navigation.md`  
+Implementation-first / anti-slop policy: `.agent-core/rules/implementation-first.md`  
+Context rollover: `.agent-core/rules/context-rollover.md`  
+Security review: `.agent-core/rules/security-review.md`
 
-Repository-navigation tool selection is governed by the supporting rule `.agent-core/rules/repository-navigation.md`.
-Automatic provider-session rollover is governed by the supporting rule `.agent-core/rules/context-rollover.md`.
+## Core operating principle
+
+Web Kit exists to deliver working software, not workflow artifacts.
+
+```text
+evidence -> route the right agent -> implement -> verify -> track real progress -> continue
+```
+
+Planning, routing, handoffs, summaries, and validation metadata are support mechanisms. Once the next safe repository change is known, implementation begins.
 
 ## Runtime contract
 
-Web Kit itself requires **Node.js + npm only**. A system Python installation is not a Web-Kit requirement.
+Web Kit itself requires Node.js + npm only. Graphify remains optional and must never block standard routing. Current repository source, current diff, relevant tests/build/runtime evidence remain authoritative over indexes, graphs, plans, and handoffs.
 
-- Run managed Web-Kit helpers with `node`.
-- Graphify is optional and may use Python internally; when Graphify is requested and Python is not already available, Web Kit may bootstrap `uv` and let `uv` manage Graphify's Python runtime.
-- Absence of Python, `uv`, or Graphify must never block the standard Web-Kit workflow.
-- Automatic context rollover uses `.agent-core/bin/session-controller.mjs` and currently has tested provider adapters for Codex CLI and Claude Code.
+## Phase 0 — Intake and job creation
 
-The lifecycle has two repository-navigation capabilities:
-- `standard` — lightweight project profile/index/targeted current-source search/symbol routing;
-- `graphify-assisted` — a fresh Graphify project graph can narrow relationship/dependency/impact exploration before exact source verification.
+**Owner:** Captain / Web Orchestrator
 
-Graphify is a navigation and relationship aid. Current repository source, current diffs, tests/build checks, and runtime evidence remain authoritative.
-
-## Session Controller overlay — automatic fresh contexts
-
-The Session Controller changes **provider-session lifetime only**. It does not change this engineering lifecycle, approvals, plan state, ownership, or validation requirements.
-
-Default controlled-session threshold:
-
-```text
-50% current context usage
-```
-
-When a task is launched through:
+1. Preserve the original request.
+2. Assign/reuse a task ID.
+3. Classify `SMALL`, `MEDIUM`, or `LARGE`.
+4. Escalate governance to formal/high-risk when the change materially touches security/trust boundaries, public contracts, schema/migrations, destructive operations, major dependencies, or release/deployment architecture.
+5. Start evidence-based job tracking:
 
 ```bash
-node .agent-core/bin/session-controller.mjs --provider codex --threshold 50 --prompt "<task>"
+node .agent-core/bin/work-progress.mjs start \
+  --task-id <task-id> \
+  --classification <SMALL|MEDIUM|LARGE> \
+  --title "<short task title>"
 ```
 
-or:
+Use `--high-risk` when formal governance is required regardless of size.
+
+Managed state:
+
+```text
+.agent-core/state/jobs/<task-id>.json
+.agent-core/state/project-status.json
+.agent-core/state/metrics/workflow-efficiency.json
+```
+
+Job progress and whole-project/application status are separate concepts.
+
+## Phase 1 — Minimum repository navigation
+
+**Owner:** Repository Indexer + Context Router as needed
+
+Read the generated project profile first. Use the smallest evidence path that can answer the current question.
+
+Direct source lookup:
+
+```text
+targeted current-source search -> exact file/symbol -> current source
+```
+
+Relationship/dependency/impact question with ready Graphify:
+
+```text
+Graph Refresh Gate -> narrow Graphify relationship query -> verify exact current source
+```
+
+Graphify is a navigation aid, never behavioral authority and never a blocker.
+
+Stop discovery when the next safe implementation action is sufficiently supported. Do not continue repository exploration merely to increase certainty.
+
+## Phase 2 — Classification-specific execution
+
+### SMALL
+
+Default lifecycle:
+
+```text
+targeted discovery -> implement -> local checks -> review diff -> final validation -> done
+```
+
+Rules:
+- no formal plan;
+- no Plan Validator by default;
+- do not create an Impact Map/Execution Registry merely for ceremony;
+- route directly to the responsible implementer once ownership/target is known;
+- one coherent small change may be completed in one implementation unit.
+
+A SMALL task that discovers material architectural/security/schema risk must be escalated.
+
+### MEDIUM
+
+Default lifecycle:
+
+```text
+targeted discovery -> 3-6 execution bullets -> implement coherent chunks -> test/review -> final validation -> done
+```
+
+Rules:
+- one short planning pass only;
+- maximum six execution bullets;
+- begin implementation immediately after the short plan;
+- independent Plan Validator is optional and used only when verified risk justifies it;
+- do not split DTO/service/route/test or similar tightly related work into separately approved mini-projects unless independent risk requires it.
+
+### LARGE / HIGH-RISK
+
+Default lifecycle:
+
+```text
+discovery -> impact/design -> formal plan -> independent Plan Validator -> implementation routing -> handoff/specialist gates -> final validation
+```
+
+Formal planning remains appropriate here, but even LARGE tasks should plan only to the level required to safely implement. Planning is not rewarded for detail beyond executable necessity.
+
+## Phase 3 — Agent routing
+
+**Owner:** Captain + Context Router
+
+Route by required expertise, not ceremony.
+
+Examples:
+
+```text
+backend bug: Captain -> Bug Hunter -> Backend Developer -> relevant tests/review
+UI feature: Captain -> Frontend Developer -> relevant tests/accessibility only when needed
+schema change: Captain -> Database Engineer -> Backend/Integration as required -> validation
+```
+
+Installed agents are available capabilities, not mandatory stops.
+
+Each worker receives the smallest Context Packet containing:
+- relevant original intent/acceptance criteria;
+- exact current task/chunk;
+- relevant files/symbols/contracts;
+- verified repository evidence;
+- relevant Graphify evidence only when actually useful/fresh;
+- required local validation;
+- exact downstream contract when another worker depends on it.
+
+Do not forward the full discovery transcript or every installed skill.
+
+## Phase 4 — Implementation-first execution
+
+**Owner:** routed implementation agent
+
+The worker:
+- makes the next evidence-supported repository change;
+- keeps changes within user scope and existing ownership boundaries;
+- prefers existing owners/framework capabilities over parallel abstractions;
+- runs relevant local checks/tests;
+- records actual changed files/symbols and validation evidence;
+- continues through a coherent implementation chunk instead of stopping after every tiny file-level action.
+
+When uncertain between another planning pass and a small reversible implementation plus a check, prefer the implementation plus check.
+
+Record meaningful cycles:
 
 ```bash
-node .agent-core/bin/session-controller.mjs --provider claude --threshold 50 --prompt "<task>"
+node .agent-core/bin/work-progress.mjs cycle \
+  --task-id <task-id> \
+  --kind implementation \
+  --evidence "<concrete diff/test/runtime evidence>"
 ```
 
-the current AI completes **one safe Web-Kit workflow unit per controller cycle** and writes `.agent-core/state/session-progress.json` before returning control.
-
-The controller then evaluates provider context usage:
-
-```text
-below threshold
-  -> resume the same provider session
-
-threshold reached
-  -> do not interrupt an in-progress edit/tool call
-  -> finish the current safe workflow unit
-  -> validate/write compact context handoff
-  -> start a genuinely fresh provider process/session
-  -> fresh context reads the handoff first
-  -> verify material handoff claims against current source/diff/tests/runtime
-  -> resume the exact recorded next action
-```
-
-Managed rollover state:
-
-```text
-.agent-core/state/session-controller.json
-.agent-core/state/session-progress.json
-.agent-core/state/context-handoff.json
-.agent-core/state/handoffs/
-```
-
-The Context Rollover Manager is an always-available control role. A context handoff is routing/state evidence, not behavioral authority.
-
-In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), the AI MUST NOT run `/clear`, `/new`, `/compact`, or ask the user to reset context. The Node Session Controller owns the fresh-context transition. The controller uses provider structured/headless modes rather than fragile terminal-keystroke injection.
-
-If exact provider context telemetry is unavailable, a configured conservative fallback rollover may be used. It must be recorded as `telemetry-unavailable-safety`, never represented as an exact 50% measurement.
-
-A controlled task may report `done` only after the original request has passed the required final validation below. `blocked` is reserved for a genuine user/permission dependency.
-
-## Phase 0 — User Intake
-
-**Owner:** Web Orchestrator / Captain
-
-1. Receive the user request.
-2. Record the original prompt verbatim before interpretation.
-3. Keep the original prompt attached to the task for the entire lifecycle, including across context rollovers.
-
-The original user request is authoritative over all later interpretations and context-handoff summaries.
-
-## Phase 1 — Task Classification
-
-**Owner:** Captain
-
-Classify the task as `SMALL`, `MEDIUM`, or `LARGE`.
-
-Classification controls discovery breadth, context/token budget, expected dependency depth, likely agent team, and validation depth. It does not change user scope.
-
-Assign a task ID that is reused by the Graph Refresh Gate, task-local fallback state, Session Controller state, and context handoffs.
-
-## Phase 2 — Repository Navigation Mode, Question Type, Freshness, and Index
-
-**Owner:** Repository Indexer + Context Router
-
-Read the generated project profile first, including `capabilities.graphify`.
-
-Always build or reuse the lightweight structural repository index so the workflow has a cheap deterministic fallback.
-
-Before selecting a navigation tool, classify the repository question being answered.
-
-### Direct source lookup
-
-For precise questions such as:
-- where is this function defined;
-- find this exact error message;
-- where is this endpoint implemented;
-- find references to this exact symbol;
-- inspect the current implementation of this file/path.
-
-Use targeted current-source search first (`rg` when shell/ripgrep are available, otherwise the runtime's equivalent targeted search):
-
-`targeted current-source search -> exact file/symbol -> current source`
-
-Do not force Graphify before a precise lookup merely because a graph exists.
-
-### Relationship / dependency / impact discovery
-
-For questions such as:
-- what calls this function;
-- what depends on this service;
-- what components are connected to this API;
-- what could be affected by changing this interface;
-- trace endpoint -> service -> database;
-- find related owners/contracts around changed symbols.
-
-When the generated profile reports a ready Graphify graph, **do not query it before confirming freshness**.
-
-Before the first Graphify query for the task, run:
+Update observable job state as work changes:
 
 ```bash
-node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
+node .agent-core/bin/work-progress.mjs update \
+  --task-id <task-id> \
+  --status IMPLEMENTING \
+  --agent <role> \
+  --implementation-total <n> \
+  --implementation-completed <n> \
+  --files-changed <n> \
+  --next "<exact next action>" \
+  --evidence "<evidence>"
 ```
 
-The gate writes:
+## Phase 5 — Anti-slop guard
+
+After initial discovery, two consecutive cycles may not contain only planning, routing, summaries, handoffs, or prose without concrete implementation/verification evidence.
+
+Useful evidence includes:
+- repository diff/change;
+- test added/changed;
+- build/static/test result;
+- migration/config/infrastructure change;
+- runtime evidence;
+- independent review result;
+- genuine user/permission/external blocker.
+
+Record meta-only cycles honestly:
+
+```bash
+node .agent-core/bin/work-progress.mjs cycle --task-id <task-id> --kind prose
+```
+
+Two consecutive post-discovery meta-only cycles force the job back to `IMPLEMENTING`. The next action is to make the next evidence-supported repository change.
+
+Target diagnostic ratio for normal work:
 
 ```text
-.agent-core/state/graphify.json
+implementation + verification: 80-90%
+planning + routing + summaries: 10-20%
 ```
 
-Use Graphify only when the state reports:
-- `routing_mode: graphify-assisted`;
-- `dirty: false`.
+Required safety work is never skipped merely to improve the ratio.
 
-When fresh, use narrow Graphify operations to reduce repository exploration, for example to:
-- locate feature owners and likely entry symbols;
-- inspect direct callers/callees/neighbors;
-- trace a relationship path between relevant concepts;
-- identify a small affected relationship/community slice;
-- map changed symbols to nearby contracts during validation.
-
-Then inspect exact current source before planning, editing, or asserting behavior.
-
-Do not broadly search the repository before Graphify when the current question is primarily relationship/impact discovery and a fresh graph can first reduce the candidate set.
-
-### Standard fallback
-
-Use standard routing when:
-- Graphify is not detected;
-- Graphify configuration exists but `graphify-out/graph.json` is not ready;
-- Graphify refresh/query capability is unavailable;
-- the Graph Refresh Gate reports standard fallback for the current task;
-- Graphify evidence is stale/incomplete for the needed decision or conflicts with current source.
-
-Preferred progression:
-
-`project profile -> repository index -> targeted current-source search -> exact symbol/range -> full file only when needed -> evidence-backed dependency expansion`
-
-Graphify must never block the task.
-
-Do not load the complete Graphify graph into model context.
-
-Mental model:
-
-```text
-Graphify = Where should I look?
-targeted search + source = What actually exists?
-diff = What changed?
-tests / build / runtime = Does the relevant behavior actually work?
-```
-
-## Phase 3 — Initial Context Routing
-
-**Owner:** Context Router / Token Governor
-
-Create the smallest discovery Context Packet needed to understand the request safely.
-
-Route only:
-- relevant slice of the original user intent;
-- selected repository-navigation capability;
-- current navigation question type when it affects tool selection;
-- Graphify freshness/fallback state when relevant;
-- structural index facts still needed;
-- compact Graphify findings when actually used;
-- likely entry points/candidate symbols;
-- relevant detected project skills;
-- context budget and expansion/fallback policy.
-
-After a Session Controller rollover, reconstruct this minimum packet from the validated compact handoff plus current repository evidence. Do not forward the previous full transcript.
-
-No worker receives unrestricted repository context or the full Graphify graph.
-
-## Phase 4 — Intent Clarification
-
-**Owner:** Intent & Discovery Agent
-
-Enhance clarity only.
-
-Produce an **Intent Contract** containing:
-- original prompt verbatim;
-- normalized goal;
-- success criteria;
-- constraints;
-- must-preserve behavior;
-- assumptions;
-- non-goals.
-
-Never change meaning, scope, requested outcome, or constraints for implementation convenience.
-
-## Phase 5 — Read-only Discovery
-
-**Owner:** Intent & Discovery Agent, with Architect/specialists only when needed
-
-Discovery is strictly read-only.
-
-Start from the requested feature entry points and expand only to dependencies that could realistically be touched or are necessary to understand/validate the feature.
-
-For each discovery question:
-- use targeted current-source search first for direct text/symbol/path lookup;
-- for relationship/dependency/ownership/impact questions, prefer fresh Graphify first when it can narrow the candidate set;
-- after Graphify identifies candidates, verify exact source symbols/ranges before relying on them;
-- use targeted search after Graphify only for gaps or source verification, not as an automatic broad pre-pass.
-
-Search/verify before creating anything new:
-- existing functions and utilities;
-- services;
-- routes/endpoints;
-- UI components;
-- APIs/contracts;
-- models/entities/schema;
-- repositories/data access;
-- validation;
-- authentication/authorization;
-- tests;
-- configuration/infrastructure;
-- conventions and ownership boundaries;
-- framework-native capabilities.
-
-Record evidence using current paths and symbols. Distinguish graph-derived routing evidence from source-verified behavioral evidence.
-
-Do not edit files, install dependencies, refactor, rename, or generate implementation during discovery.
-
-## Phase 6 — Impact Map
-
-Separate and document:
-- **definitely affected** areas;
-- **potentially affected** areas;
-- **intentionally untouched** areas.
-
-For every proposed impact, record why repository evidence connects it to the user request.
-
-Graphify may identify likely callers, dependents, paths, or neighboring contracts, but every material impact that drives implementation must be confirmed from current source/contracts/tests.
-
-## Phase 7 — Implementation Design
-
-Design the **smallest coherent implementation** that satisfies the Intent Contract and fits existing ownership boundaries.
-
-Prefer extending existing owners, framework-native capabilities already used by the project, existing contracts/conventions, and minimal new abstractions.
-
-Do not create parallel services/components/repositories solely to avoid understanding current code.
-
-## Phase 8 — Execution Registry
-
-Before any code change, register every code-changing step.
-
-Each step MUST contain:
-- step ID;
-- objective/action;
-- repository evidence;
-- why the step is necessary;
-- expected files/components/symbols;
-- dependencies;
-- behavior change;
-- risk;
-- validation required;
-- intended downstream handoff when relevant.
-
-Plan status remains `DRAFT` until independently validated.
-
-Graphify-only conclusions are not sufficient repository evidence for a code-changing step; relevant source/contract evidence must be verified.
-
-## Phase 9 — Plan Validation Loop
+## Phase 6 — Plan validation (only when required)
 
 **Owner:** Independent Plan Validator
 
-For every step classify:
-- `APPROVED`
-- `REVISE`
-- `REJECTED`
-- `UNNECESSARY`
-- `MISSING_DEPENDENCY`
+Formal plan validation is mandatory for LARGE/high-risk work and optional for MEDIUM work only when verified risk warrants it.
 
-Validator checks necessity against original intent, repository evidence, ownership correctness, duplication, unnecessary abstraction/refactoring, missing dependencies/tests, sequence safety, meaningful validation, and scope creep.
+Validate material implementation chunks, not every file edit.
 
-Any required non-approved step returns to planning for revision and then re-enters Plan Validation.
+The validator checks necessity, ownership, duplication, sequence, contract/schema/security effects, validation sufficiency, and scope creep.
 
-**No application/infrastructure implementation is allowed while required steps are not approved.**
+Do not expand an already executable plan into more ceremony. A validator must never implement or self-approve authored work.
 
-## Phase 10 — Lock Plan
+## Phase 7 — Plan Delta threshold
 
-When every required registered step is approved:
-- set plan status to `APPROVED/LOCKED`;
-- record plan version;
-- implementation permission begins.
+Do not reopen planning for ordinary implementation details.
 
-A locked plan defines what is allowed to change. It is not permission to improvise.
+A Plan Delta is justified only when verified new evidence materially changes:
+- architecture/ownership;
+- public API/cross-component contract;
+- database/schema/migration strategy;
+- security/trust boundary;
+- major dependency/platform choice;
+- destructive/deployment behavior;
+- requested product scope.
 
-The locked-plan version and any later Plan Delta state must survive context rollovers through compact session progress/handoffs.
+Helper reuse, variable naming, normal local refactoring, ordinary test adjustments, or discovering a better existing utility do not justify a Plan Delta.
 
-## Phase 11 — Per-step Context Routing
+## Phase 8 — Graph Refresh Gate
 
-Before every approved implementation step, the Context Router creates a **fresh implementation Context Packet** for that step only.
-
-Packet includes only:
-- relevant original intent/acceptance criteria;
-- approved step;
-- selected repository-navigation capability;
-- navigation question type when relevant;
-- Graphify freshness state when relevant;
-- exact candidate files/symbols/contracts;
-- compact verified discovery findings;
-- only relevant fresh Graphify relationship evidence when useful;
-- relevant downstream contract;
-- active skills needed by the selected worker;
-- step validation requirements;
-- context budget and fallback policy.
-
-If Graphify is about to be queried and freshness is not already proven for the current repository fingerprint, run the Graph Refresh Gate first.
-
-Do not forward the full discovery transcript or all installed skills.
-
-## Phase 12 — Implement One Approved Step
-
-**Owner:** Captain-selected worker agent
-
-The worker:
-- implements only the current approved step;
-- stays inside the routed context and approved scope;
-- may request specific evidence-backed context expansion;
-- runs the step-local checks/tests required by the plan;
-- records actual files/symbols changed and validation performed.
-
-A controlled Session Controller cycle must not batch multiple independent approved implementation steps merely to avoid a rollover. One approved implementation step plus its required local gate/handoff is a valid safe workflow unit.
-
-## Phase 13 — Graph Refresh Gate
-
-This phase is **mandatory after every completed code-changing agent step** when a ready Graphify graph exists. It occurs **before Handoff Validator or another agent relies on Graphify**.
-
-Run exactly once for the completed repository state:
+When a ready Graphify graph exists and a completed code-changing chunk materially changes repository relationships, refresh once after the chunk before downstream work relies on Graphify:
 
 ```bash
 node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
-The gate behavior is:
+Do not refresh after every individual file write. Failure/unavailability falls back to standard navigation and must not block implementation.
+
+## Phase 9 — Testing and reviews
+
+Move the job through evidence-backed states such as:
 
 ```text
-no Graphify graph
-  -> standard mode, continue
-
-repository fingerprint unchanged since last successful refresh
-  -> skip Graphify update
-  -> graphify-assisted remains fresh
-
-repository fingerprint changed
-  -> run one `graphify update .`
-
-refresh succeeds
-  -> write fresh fingerprint/state
-  -> graphify-assisted may continue
-
-CLI missing / refresh fails / timeout
-  -> write task-local fallback state
-  -> standard mode
-  -> continue workflow without blocking
+IMPLEMENTING -> TESTING -> REVIEWING -> FIXING (only when needed) -> VALIDATING
 ```
 
-The managed state file is `.agent-core/state/graphify.json`.
+Update test/build evidence with `work-progress.mjs update`.
 
-Do not refresh after every individual file write. Refresh once after the worker finishes the approved step and its local validation.
+Only invoke specialist reviewers relevant to the changed surface. Code Simplifier, performance, accessibility, API-contract, DevSecOps, SRE, etc. are targeted capabilities, not mandatory universal stages.
 
-This rule also applies to later code-changing stages such as Code Simplifier changes, failure-recovery fixes, security fixes, and final-integration fixes.
+Validation should inspect the actual diff/results; it should not recreate the original task analysis.
 
-## Phase 14 — Handoff Validation Loop
+## Phase 10 — Security Review
 
-**Owner:** Independent Handoff Validator
+`run security-review` remains an independent, read-only review of implemented code.
 
-After the Graph Refresh Gate, compare:
-- approved step;
-- actual diff;
-- changed symbols;
-- claimed behavior;
-- relevant build/lint/static checks;
-- relevant tests;
-- downstream interface/contract;
-- approved scope.
+Run it after implementation/tests when:
+- the change affects authentication/authorization, sessions/tokens, API trust boundaries, database/data isolation, uploads/filesystem, payments, secrets, dependencies, CI/CD, containers/cloud/IaC, outbound network/webhooks, or another meaningful attack surface; or
+- a release/final security gate requires a full review.
 
-If Graphify-assisted mode remains fresh and the validator needs relationship/impact discovery, it may query a small relationship slice around changed symbols to locate potentially affected callers/contracts, then verifies any material finding against current source/diff/tests.
-
-For direct lookup during validation, use targeted current-source search instead of forcing Graphify.
-
-### FAIL
-
-Return exact evidence to the responsible worker. The worker fixes only the failure scope, reruns step-local validation, then re-enters **Phase 13 Graph Refresh Gate** before resubmitting the handoff.
-
-### PASS
-
-The Captain may route the next registered step.
-
-Dependent work must not consume an unvalidated handoff.
-
-## Phase 15 — Repeat for Every Registered Step
-
-For each remaining step:
-
-`Context Router -> Selected Worker -> Implement Step -> Graph Refresh Gate -> Handoff Validator`
-
-The next step begins only after its dependencies have passed handoff validation.
-
-A provider-session rollover may occur between these safe workflow units without changing the Execution Registry or implementation sequence.
-
-## Phase 16 — Plan Delta Loop
-
-If implementation discovers new repository evidence that materially invalidates the locked plan:
-
-1. Stop the affected step.
-2. Record the new evidence.
-3. Propose a Plan Delta describing additions/removals/changes.
-4. Return the delta to the independent Plan Validator.
-5. Validate the delta using the same plan criteria.
-6. Relock the new plan version.
-7. Route fresh context and continue.
-
-Never silently improvise outside the locked plan.
-
-A Graphify relationship that suggests new impact is a discovery lead; verify it from current source/contracts before using it as Plan Delta evidence.
-
-## Phase 17 — All Registered Steps Pass
-
-Whole-feature post-implementation work begins only when every required implementation step has passed independent handoff validation.
-
-## Phase 18 — Code Simplification
-
-**Owner:** Code Simplifier / Maintainability Refactorer
-
-Review the completed changed scope for readability, maintainability, flexibility at real extension points, cohesion, coupling, naming, unnecessary nesting/indirection, meaningful duplication, dead/redundant code, and speculative abstraction.
-
-Preserve requested behavior and approved public contracts. Do not conduct unrelated cleanup.
-
-If the simplifier changes code, run **Phase 13 Graph Refresh Gate** once after simplifier validation before downstream reviewers use Graphify.
-
-## Phase 19 — Re-run Affected Tests
-
-After simplification, rerun the tests/checks necessary to prove behavior was preserved.
-
-## Phase 20 — Specialized Validation
-
-**Owner:** Captain routes only relevant independent specialists.
-
-Possible gates include:
-- Test / QA Engineer;
-- Security Reviewer;
-- Code Reviewer;
-- Performance Reviewer when material;
-- Accessibility Reviewer when UI/accessibility is affected;
-- Bug Hunter;
-- API Contract Reviewer when interfaces/contracts changed;
-- DevSecOps Reviewer for delivery/infrastructure/security-sensitive pipeline changes;
-- SRE/Reliability/Observability specialists when operational behavior changed;
-- other domain specialists only when repository/task evidence requires them.
-
-Do not run every specialist for every trivial task.
-
-When Graphify-assisted mode is fresh, specialist reviewers may use narrow graph queries for relationship-oriented discovery around the final diff. Direct symbol/text lookups still use targeted current-source search. All findings that affect PASS/FAIL must be verified against current source/diff/tests.
-
-If a specialist causes a code fix, the owning worker must run the Graph Refresh Gate before the fix is handed back for validation.
-
-## Phase 21 — Final Integration Validation
-
-**Owner:** Final Integration Validator
-
-Validate the feature as a whole against:
-- original Intent Contract;
-- original prompt verbatim;
-- final repository diff;
-- approved Execution Registry and all Plan Deltas;
-- cross-agent/cross-layer contracts;
-- relevant build/tests/checks;
-- migration/deployment impacts;
-- integration behavior;
-- unresolved handoffs;
-- regression risks;
-- known limitations.
-
-Graphify may assist in locating cross-layer relationships only when the freshness state is clean. Final integration verdicts must be grounded in current repository evidence and test/build results.
-
-## Phase 22 — Final Failure Recovery Loop
-
-If Final Integration Validation fails:
-
-1. Identify the agent/ownership boundary responsible for each failure.
-2. Context Router creates a minimal failure-specific packet.
-3. Responsible agent fixes only the failure scope.
-4. Run the Graph Refresh Gate if code changed.
-5. Handoff Validator independently validates the fix.
-6. Rerun only affected downstream specialist validation.
-7. Re-enter Final Integration Validation.
-
-Do not restart unrelated work from zero.
-
-## Phase 23 — Final Pass and Captain Closure
-
-After Final Integration Validator returns `PASS`:
-
-Captain:
-- compares the final state against the original verbatim user prompt;
-- confirms all required acceptance criteria are satisfied;
-- reports known limitations or intentionally deferred non-goals;
-- declares `DONE`.
-
-Under the Session Controller, only now may `.agent-core/state/session-progress.json` be written with `status: done`.
-
-## Continuous Context/Token Routing
-
-The Context Router / Token Governor runs throughout the lifecycle, not only once.
-
-It is invoked before discovery, before each implementation step, for evidence-backed context expansion, before specialist validation when required, during handoff/failure recovery, and after a controlled fresh-context rollover to rebuild only the minimal next packet.
-
-### Direct lookup progression
-
-For exact text/symbol/path questions:
-
-`targeted current-source search (rg when available) -> exact file/symbol -> current source`
-
-### Standard relationship fallback progression
-
-`project profile -> repository index -> targeted search -> symbol/range -> full file only when needed -> evidence-backed dependency expansion`
-
-### Graphify-assisted relationship progression
-
-Use only when the generated project profile reports a ready graph **and** `.agent-core/state/graphify.json` reports a fresh graph:
-
-`project profile -> Graph Refresh Gate -> narrow Graphify query/path/neighbors -> small candidate symbol set -> exact source symbol/range -> targeted search for gaps -> full file only when needed -> evidence-backed expansion`
-
-### Controlled-session rollover progression
+Flow:
 
 ```text
-one safe workflow unit
-  -> session-progress.json
-  -> read provider current-context telemetry
-  -> below threshold: resume same provider session
-  -> threshold reached: validate context-handoff.json
-  -> fresh provider process/session
-  -> verify handoff against current repository evidence
-  -> rebuild minimum Context Packet
-  -> continue same canonical lifecycle
+implemented code -> tests -> security-review -> findings?
+  yes -> route findings to responsible developer -> fix/test -> independent re-review
+  no  -> continue final validation
 ```
 
-Do not copy the full previous transcript into a fresh provider context.
+The Security Reviewer does not fix its own findings. `--scan-only` remains `INCONCLUSIVE` and cannot grant approval.
 
-### Continuous rules
+Release-level work requires a full approving Security Review before version/tag/publish actions.
 
-- default deny arbitrary repository reads;
-- choose navigation tool by question type, not tool availability alone;
-- direct text/symbol/path lookup uses targeted current-source search first;
-- relationship/dependency/ownership/impact discovery prefers fresh Graphify when useful;
-- do not broadly search before Graphify for a relationship question when Graphify can narrow first;
-- do not force Graphify before a precise direct lookup;
-- Graphify available does not mean Graphify authoritative;
-- Graphify ready does not mean Graphify fresh — enforce the refresh state;
-- refresh once per completed changed repository state, not per file write;
-- never load the complete Graphify graph into model context;
-- verify behavior from current source before planning/editing;
-- Graphify refresh/query failure must fall back to standard routing, not block the task;
-- installed skill != active skill;
-- compact findings/handoffs instead of forwarding full transcripts;
-- context-handoff summaries are not behavioral authority and must be source-verified in a fresh context;
-- when the Session Controller is active, do not manually `/clear`, `/new`, or `/compact`; let the controller own rollover;
-- never interrupt an active implementation/tool call solely to hit the threshold exactly; roll over at the next safe workflow-unit boundary;
-- reuse evidence-linked summaries when sufficient;
-- validate diffs first after implementation;
-- never save tokens by omitting context required for correctness, security, or user intent.
+## Phase 11 — Job progress and project/application status
+
+Progress percentages are evidence-weighted, not prose-weighted.
+
+Default weights:
+
+```text
+SMALL:  discovery 5 | implementation 70 | testing 15 | review 5 | validation 5
+MEDIUM: discovery 10 | planning 5 | implementation 60 | testing 15 | review 5 | validation 5
+LARGE:  discovery 10 | planning 15 | implementation 45 | testing 15 | review 10 | validation 5
+```
+
+A detailed plan cannot make an unimplemented task appear mostly complete.
+
+Project/application status is maintained separately and requires evidence:
+
+```bash
+node .agent-core/bin/work-progress.mjs project-update \
+  --area backend \
+  --progress 65 \
+  --status ACTIVE \
+  --evidence "TASK-042: cancellation endpoint implemented; 14/14 tests passing"
+```
+
+Do not invent application-completion percentages from intuition.
+
+## Phase 12 — Context rollover
+
+Context rollover changes provider-session lifetime only. It does not reset job/workflow state.
+
+At a safe boundary:
+
+```text
+finish coherent work/check -> persist compact progress -> handoff exact next action -> fresh context -> verify current repo -> continue exact next action
+```
+
+A fresh context must not restart discovery or recreate an approved/short plan unless current repository evidence materially invalidates it.
+
+Handoffs should stay compact: task ID, classification/status, completed work, current diff/test evidence, active agent, next action, blockers.
+
+Current source/diff/tests/runtime override handoff summaries.
+
+## Phase 13 — Final validation and completion
+
+A job may be `DONE` only when:
+- requested behavior is implemented;
+- relevant tests/build/checks pass or limitations are explicitly accepted by the user;
+- required specialist/security reviews pass;
+- final integrated state satisfies the original request;
+- final validation is recorded as `PASS`.
+
+Then:
+
+```bash
+node .agent-core/bin/work-progress.mjs update \
+  --task-id <task-id> \
+  --final-validation PASS \
+  --status DONE \
+  --evidence "<final validation evidence>"
+```
+
+Update relevant project/application areas from concrete completed evidence.
+
+## Output economy
+
+Agent updates are terse. Prefer edits, tests, and tool evidence over narration.
+
+Normal status update:
+
+```text
+Changed: <what changed>
+Validation: <pass/fail evidence>
+Next: <exact next action>
+```
+
+Do not repeatedly restate the request, narrate routine searches, summarize the same decision in several artifacts, or create implementation documentation before the implementation exists.
