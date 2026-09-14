@@ -29,9 +29,9 @@ function getOption(args, name) {
   return null;
 }
 
-function splitSecurityArgs(args) {
+function splitSetupArgs(args) {
   const setup = [];
-  const review = [];
+  const rest = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     const setupValue = [...SETUP_VALUE_OPTIONS].find((name) => arg === name || arg.startsWith(`${name}=`));
@@ -44,10 +44,20 @@ function splitSecurityArgs(args) {
       setup.push(arg);
       continue;
     }
+    rest.push(arg);
+  }
+  return { setup, rest };
+}
+
+function splitSecurityArgs(args) {
+  const { setup, rest } = splitSetupArgs(args);
+  const review = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
     const reviewValue = [...REVIEW_VALUE_OPTIONS].find((name) => arg === name || arg.startsWith(`${name}=`));
     if (reviewValue) {
       review.push(arg);
-      if (arg === reviewValue && i + 1 < args.length) review.push(args[++i]);
+      if (arg === reviewValue && i + 1 < rest.length) review.push(rest[++i]);
       continue;
     }
     if (REVIEW_FLAGS.has(arg) || arg === "--help" || arg === "-h") {
@@ -59,6 +69,12 @@ function splitSecurityArgs(args) {
   return { setup, review };
 }
 
+function ensureInstalled(project, setup) {
+  const setupStatus = runNode(legacyCli, setup);
+  if (setupStatus !== 0) return setupStatus;
+  return 0;
+}
+
 function runSecurityReview(rawArgs) {
   const { setup, review } = splitSecurityArgs(rawArgs);
   const project = resolve(getOption(setup, "--project") || process.cwd());
@@ -68,9 +84,7 @@ function runSecurityReview(rawArgs) {
     return 0;
   }
 
-  // Use the existing smart installer first. It decides install/update/doctor
-  // without duplicating release/source/downgrade logic in this entrypoint.
-  const setupStatus = runNode(legacyCli, setup);
+  const setupStatus = ensureInstalled(project, setup);
   if (setupStatus !== 0) return setupStatus;
 
   const engine = join(project, ".agent-core", "bin", "security-review.mjs");
@@ -83,6 +97,24 @@ function runSecurityReview(rawArgs) {
   return runNode(engine, ["--project", project, ...review], { cwd: project });
 }
 
+function runWorkProgress(rawArgs, alias = "progress") {
+  const { setup, rest } = splitSetupArgs(rawArgs);
+  const project = resolve(getOption(setup, "--project") || process.cwd());
+  const commandArgs = alias === "status" && !rest.length ? ["show"] : rest.length ? rest : ["show"];
+
+  const setupStatus = ensureInstalled(project, setup);
+  if (setupStatus !== 0) return setupStatus;
+
+  const engine = join(project, ".agent-core", "bin", "work-progress.mjs");
+  if (!existsSync(engine)) {
+    console.error(`Work Progress Engine is missing: ${engine}`);
+    console.error("Update Web Kit to a version that includes implementation-first progress tracking and retry.");
+    return 1;
+  }
+
+  return runNode(engine, ["--project", project, ...commandArgs], { cwd: project });
+}
+
 const args = process.argv.slice(2);
 if (args[0] === "security-review") {
   try {
@@ -93,8 +125,18 @@ if (args[0] === "security-review") {
   }
 }
 
+if (args[0] === "progress" || args[0] === "status") {
+  try {
+    process.exit(runWorkProgress(args.slice(1), args[0]));
+  } catch (error) {
+    console.error(`[Web Kit] ${error.message}`);
+    process.exit(2);
+  }
+}
+
 const status = runNode(legacyCli, args);
 if ((args.includes("--help") || args.includes("-h") || args[0] === "help") && status === 0) {
   console.log("Security review:\n  npx @ihgen/web-kit security-review\n  Inside AI providers: run security-review\n");
+  console.log("Work progress:\n  npx @ihgen/web-kit status\n  npx @ihgen/web-kit progress show --task-id <id>\n  npx @ihgen/web-kit progress help\n");
 }
 process.exit(status);
