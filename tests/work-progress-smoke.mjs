@@ -33,7 +33,8 @@ const progressBin = path.join(project, ".agent-core", "bin", "work-progress.mjs"
 assert(fs.existsSync(progressBin), "work-progress runtime was not installed");
 assert(fs.existsSync(path.join(project, ".agent-core", "rules", "implementation-first.md")), "implementation-first rule was not installed");
 
-const cmd = (...args) => run(process.execPath, [progressBin, "--project", project, ...args], { cwd: project });
+const cmd = (...args) => run(process.execPath, [progressBin, ...args, "--project", project], { cwd: project });
+const failCmd = (...args) => runFail(process.execPath, [progressBin, ...args, "--project", project], { cwd: project });
 const jobFile = (id) => path.join(project, ".agent-core", "state", "jobs", `${id}.json`);
 
 // SMALL: no planning gate, implementation carries most progress.
@@ -41,7 +42,7 @@ cmd("start", "--task-id", "TASK-SMALL", "--classification", "SMALL", "--title", 
 let small = readJson(jobFile("TASK-SMALL"));
 assert(small.governance.plan_required === false, "SMALL unexpectedly requires planning");
 assert(small.governance.plan_validator_required === false, "SMALL unexpectedly requires Plan Validator");
-runFail(process.execPath, [progressBin, "--project", project, "update", "--task-id", "TASK-SMALL", "--status", "PLANNING"], { cwd: project });
+failCmd("update", "--task-id", "TASK-SMALL", "--status", "PLANNING");
 
 cmd(
   "update", "--task-id", "TASK-SMALL", "--status", "IMPLEMENTING", "--agent", "backend-developer",
@@ -87,7 +88,7 @@ assert(medium.governance.plan_mode === "short", "MEDIUM plan mode should be shor
 assert(medium.governance.max_plan_bullets === 6, "MEDIUM plan must be capped at six bullets");
 assert(medium.governance.plan_validator_required === false, "MEDIUM should not require Plan Validator by default");
 cmd("update", "--task-id", "TASK-MEDIUM", "--status", "PLANNING", "--plan-bullets", "6", "--plan-status", "APPROVED", "--evidence", "six executable bullets");
-runFail(process.execPath, [progressBin, "--project", project, "update", "--task-id", "TASK-MEDIUM", "--plan-bullets", "7"], { cwd: project });
+failCmd("update", "--task-id", "TASK-MEDIUM", "--plan-bullets", "7");
 
 // LARGE/high-risk keeps formal governance.
 cmd("start", "--task-id", "TASK-LARGE", "--classification", "LARGE", "--title", "Large implementation");
@@ -107,7 +108,7 @@ const projectStatus = readJson(path.join(project, ".agent-core", "state", "proje
 assert(projectStatus.areas.backend.progress === 80, "backend project status missing");
 assert(projectStatus.areas.frontend.progress === 40, "frontend project status missing");
 assert(projectStatus.overall_progress === 60, `unexpected project overall progress ${projectStatus.overall_progress}`);
-runFail(process.execPath, [progressBin, "--project", project, "project-update", "--area", "database", "--progress", "100"], { cwd: project });
+failCmd("project-update", "--area", "database", "--progress", "100");
 
 const efficiency = readJson(path.join(project, ".agent-core", "state", "metrics", "workflow-efficiency.json"));
 assert(efficiency.jobs === 4, `expected four tracked jobs, got ${efficiency.jobs}`);
