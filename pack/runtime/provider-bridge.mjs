@@ -6,6 +6,9 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const TERMINAL_JOB_STATUSES = new Set(["DONE", "BLOCKED", "WAITING_USER", "WAITING_EXTERNAL", "FAILED", "CANCELLED"]);
+const MAX_UNTRACKED_FILES = 200;
+const MAX_UNTRACKED_BYTES_PER_FILE = 64 * 1024;
+const MAX_UNTRACKED_TOTAL_BYTES = 512 * 1024;
 
 function readAllStdin() {
   try { return fs.readFileSync(0, "utf8"); }
@@ -29,7 +32,10 @@ function atomicWrite(file, value) {
   fs.renameSync(tmp, file);
 }
 
-function hash(value) { return crypto.createHash("sha256").update(String(value ?? "")).digest("hex"); }
+function hash(value) {
+  const input = Buffer.isBuffer(value) ? value : Buffer.from(String(value ?? ""), "utf8");
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
 
 function decodeJsonEnv(name, fallback = null) {
   const raw = process.env[name];
@@ -209,13 +215,59 @@ function filteredStatus(project) {
     });
 }
 
+function boundedUntrackedFingerprint(project) {
+  const root = path.resolve(project);
+  const files = gitRun(project, ["ls-files", "--others", "--exclude-standard"])
+    .split(/\r?\n/)
+    .map((file) => file.trim())
+    .filter(Boolean)
+    .filter((file) => !managedStatePath(file))
+    .sort()
+    .slice(0, MAX_UNTRACKED_FILES);
+  const records = [];
+  let totalBytes = 0;
+  for (const relative of files) {
+    const absolute = path.resolve(project, relative);
+    if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) continue;
+    let stat;
+    try { stat = fs.lstatSync(absolute); } catch { continue; }
+    if (!stat.isFile()) {
+      records.push(`${relative}|non-regular`);
+      continue;
+    }
+    const remaining = Math.max(0, MAX_UNTRACKED_TOTAL_BYTES - totalBytes);
+    if (!remaining) {
+      records.push(`${relative}|${stat.size}|total-limit`);
+      continue;
+    }
+    const captureBytes = Math.min(stat.size, MAX_UNTRACKED_BYTES_PER_FILE, remaining);
+    let bytes = Buffer.alloc(0);
+    try {
+      const fd = fs.openSync(absolute, "r");
+      try {
+        bytes = Buffer.alloc(captureBytes);
+        const read = fs.readSync(fd, bytes, 0, captureBytes, 0);
+        bytes = bytes.subarray(0, read);
+      } finally { fs.closeSync(fd); }
+    } catch {
+      records.push(`${relative}|${stat.size}|unreadable`);
+      continue;
+    }
+    totalBytes += bytes.length;
+    records.push(`${relative}|${stat.size}|${bytes.length}|${hash(bytes)}`);
+  }
+  return hash(records.join("\n"));
+}
+
 function repositoryFingerprint(project) {
   if (gitRun(project, ["rev-parse", "--is-inside-work-tree"]).trim() !== "true") return null;
-  const diff = gitRun(project, ["diff", "--no-ext-diff", "--binary"]);
-  const staged = gitRun(project, ["diff", "--cached", "--no-ext-diff", "--binary"]);
+  const pathspec = ["--", ".", ":(exclude).agent-core/state/**", ":(exclude).agent-core/security-reviews/**"];
+  const diff = gitRun(project, ["diff", "--no-ext-diff", "--binary", ...pathspec]);
+  const staged = gitRun(project, ["diff", "--cached", "--no-ext-diff", "--binary", ...pathspec]);
   const status = filteredStatus(project).join("\n");
+  const untracked = boundedUntrackedFingerprint(project);
   const head = gitRun(project, ["rev-parse", "HEAD"]).trim();
-  return hash(`${head}\n--status--\n${status}\n--diff--\n${diff}\n--staged--\n${staged}`);
+  return hash(`${head}\n--status--\n${status}\n--diff--\n${diff}\n--staged--\n${staged}\n--untracked--\n${untracked}`);
 }
 
 function latestActiveJob(paths) {
