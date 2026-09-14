@@ -37,6 +37,7 @@ const bridge = path.join(project, ".agent-core", "bin", "provider-bridge.mjs");
 const jobsDir = path.join(project, ".agent-core", "state", "jobs");
 const jobFile = path.join(jobsDir, "TASK-BRIDGE.json");
 const otherJobFile = path.join(jobsDir, "TASK-OTHER.json");
+const claudeJobFile = path.join(jobsDir, "TASK-CLAUDE.json");
 assert(fs.existsSync(progress), "work-progress runtime missing");
 assert(fs.existsSync(bridge), "provider bridge missing");
 
@@ -50,7 +51,7 @@ run(process.execPath, [
   "--next", "implement the requested change", "--project", project,
 ], { cwd: project });
 
-const env = {
+const codexEnv = {
   ...process.env,
   WEB_KIT_PROJECT_ROOT: project,
   WEB_KIT_SUPERVISOR_ID: "bridge-progress-smoke",
@@ -62,7 +63,7 @@ function notify(message) {
     "input-messages": ["implement the task"],
     "last-assistant-message": message,
   };
-  run(process.execPath, [bridge, "codex-notify", JSON.stringify(event)], { cwd: project, env });
+  run(process.execPath, [bridge, "codex-notify", JSON.stringify(event)], { cwd: project, env: codexEnv });
 }
 
 // First callback establishes a repository baseline and pins this supervisor to TASK-BRIDGE.
@@ -130,5 +131,60 @@ job = readJson(jobFile);
 assert(job.metrics.implementation_cycles === 3, "Web-Kit state files were misclassified as repository implementation");
 other = readJson(otherJobFile);
 assert(other.metrics.ai_cycles === 0, "unrelated active job received cycles from the pinned provider session");
+
+// Claude status-line bridge follows the same baseline/delta/dedup/anti-slop behavior.
+run(process.execPath, [
+  progress, "start", "--task-id", "TASK-CLAUDE", "--classification", "SMALL",
+  "--title", "Claude automatic bridge progress", "--project", project,
+], { cwd: project });
+run(process.execPath, [
+  progress, "update", "--task-id", "TASK-CLAUDE", "--status", "IMPLEMENTING",
+  "--agent", "backend-developer", "--implementation-total", "2", "--implementation-completed", "0",
+  "--next", "implement Claude-routed change", "--project", project,
+], { cwd: project });
+
+const claudeEnv = {
+  ...process.env,
+  WEB_KIT_PROJECT_ROOT: project,
+  WEB_KIT_SUPERVISOR_ID: "claude-bridge-progress-smoke",
+};
+function claudeStatus(inputTokens, outputTokens, usedPercentage) {
+  const payload = {
+    session_id: "claude-bridge-session",
+    model: { id: "claude-smoke" },
+    context_window: {
+      used_percentage: usedPercentage,
+      context_window_size: 200000,
+      total_input_tokens: inputTokens,
+      total_output_tokens: outputTokens,
+    },
+  };
+  run(process.execPath, [bridge, "claude-statusline"], {
+    cwd: project,
+    env: claudeEnv,
+    input: JSON.stringify(payload),
+  });
+}
+
+claudeStatus(1000, 100, 5);
+let claudeJob = readJson(claudeJobFile);
+assert(claudeJob.metrics.ai_cycles === 0, "Claude baseline callback should not count as a cycle");
+
+fs.writeFileSync(path.join(project, "src", "claude.js"), "export const claudeValue = 1;\n");
+claudeStatus(2000, 200, 10);
+claudeJob = readJson(claudeJobFile);
+assert(claudeJob.metrics.implementation_cycles === 1, "Claude repository delta was not classified as implementation");
+
+const claudeCyclesBeforeDuplicate = claudeJob.metrics.ai_cycles;
+claudeStatus(2000, 200, 10);
+claudeJob = readJson(claudeJobFile);
+assert(claudeJob.metrics.ai_cycles === claudeCyclesBeforeDuplicate, "duplicate Claude status callback was double-counted");
+
+claudeStatus(3000, 300, 15);
+claudeStatus(4000, 400, 20);
+claudeJob = readJson(claudeJobFile);
+assert(claudeJob.metrics.prose_only_cycles === 2, "Claude stalled turns did not feed the anti-slop guard");
+assert(claudeJob.anti_slop.violation === true, "Claude anti-slop guard did not trigger");
+assert(claudeJob.anti_slop.forced_next_phase === "IMPLEMENTING", "Claude anti-slop guard did not force implementation");
 
 console.log("Provider bridge automatic progress smoke: PASS");
