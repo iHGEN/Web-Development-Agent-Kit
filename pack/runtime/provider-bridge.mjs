@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+
+const TERMINAL_JOB_STATUSES = new Set(["DONE", "BLOCKED", "WAITING_USER", "WAITING_EXTERNAL", "FAILED", "CANCELLED"]);
 
 function readAllStdin() {
   try { return fs.readFileSync(0, "utf8"); }
@@ -14,12 +17,19 @@ function readJsonText(text, fallback = null) {
   catch { return fallback; }
 }
 
+function readJson(file, fallback = null) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { return fallback; }
+}
+
 function atomicWrite(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   fs.renameSync(tmp, file);
 }
+
+function hash(value) { return crypto.createHash("sha256").update(String(value ?? "")).digest("hex"); }
 
 function decodeJsonEnv(name, fallback = null) {
   const raw = process.env[name];
@@ -35,8 +45,12 @@ function statePaths() {
   return {
     project,
     supervisorId,
+    root,
     telemetry: path.join(root, "telemetry", `${supervisorId}.json`),
     request: path.join(root, "requests", `${supervisorId}.json`),
+    turnState: path.join(root, "turns", `${supervisorId}.json`),
+    jobs: path.join(project, ".agent-core", "state", "jobs"),
+    workProgress: path.join(project, ".agent-core", "bin", "work-progress.mjs"),
   };
 }
 
@@ -175,6 +189,110 @@ function writeTelemetryAndMaybeRequest(provider, sessionId, percent, source, ext
   }
 }
 
+function gitRun(project, args) {
+  const result = spawnSync("git", args, { cwd: project, encoding: "utf8", windowsHide: true });
+  return !result.error && result.status === 0 ? String(result.stdout || "") : "";
+}
+
+function managedStatePath(file) {
+  const normalized = String(file || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  return normalized.startsWith(".agent-core/state/") || normalized.startsWith(".agent-core/security-reviews/");
+}
+
+function filteredStatus(project) {
+  return gitRun(project, ["status", "--porcelain=v1", "--untracked-files=all"])
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .filter((line) => {
+      const file = line.slice(3).replace(/^"|"$/g, "");
+      return !managedStatePath(file);
+    });
+}
+
+function repositoryFingerprint(project) {
+  if (gitRun(project, ["rev-parse", "--is-inside-work-tree"]).trim() !== "true") return null;
+  const diff = gitRun(project, ["diff", "--no-ext-diff", "--binary"]);
+  const staged = gitRun(project, ["diff", "--cached", "--no-ext-diff", "--binary"]);
+  const status = filteredStatus(project).join("\n");
+  const head = gitRun(project, ["rev-parse", "HEAD"]).trim();
+  return hash(`${head}\n--status--\n${status}\n--diff--\n${diff}\n--staged--\n${staged}`);
+}
+
+function latestActiveJob(paths) {
+  if (!fs.existsSync(paths.jobs)) return null;
+  let latest = null;
+  for (const name of fs.readdirSync(paths.jobs)) {
+    if (!name.endsWith(".json")) continue;
+    const file = path.join(paths.jobs, name);
+    const job = readJson(file, null);
+    if (!job || TERMINAL_JOB_STATUSES.has(String(job.status || "").toUpperCase())) continue;
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(file).mtimeMs; } catch {}
+    if (!latest || mtimeMs > latest.mtimeMs) latest = { file, job, mtimeMs };
+  }
+  return latest;
+}
+
+function invokeWorkProgress(paths, job, kind, evidence) {
+  if (!fs.existsSync(paths.workProgress) || !job?.task_id) return false;
+  const result = spawnSync(process.execPath, [
+    paths.workProgress,
+    "cycle",
+    "--task-id", String(job.task_id),
+    "--kind", kind,
+    "--project", paths.project,
+    ...(evidence ? ["--evidence", evidence] : []),
+  ], {
+    cwd: paths.project,
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  return !result.error && result.status === 0;
+}
+
+function recordProviderTurn(provider, sessionId, turnKey) {
+  const paths = statePaths();
+  if (!turnKey || !fs.existsSync(paths.workProgress)) return;
+  const observation = readJson(paths.turnState, {});
+  if (observation.last_turn_key === turnKey) return;
+
+  const active = latestActiveJob(paths);
+  const fingerprint = repositoryFingerprint(paths.project);
+  const job = active?.job || null;
+  const jobId = job?.task_id || null;
+  const currentCycles = Number(job?.metrics?.ai_cycles || 0);
+  const sameJob = Boolean(jobId && observation.task_id === jobId);
+  const providerAlreadyRecordedCycle = sameJob
+    && Number.isFinite(Number(observation.job_ai_cycles))
+    && currentCycles > Number(observation.job_ai_cycles);
+
+  let recorded = false;
+  if (job && sameJob && !providerAlreadyRecordedCycle && observation.repository_fingerprint && fingerprint) {
+    if (observation.repository_fingerprint !== fingerprint) {
+      recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: repository diff/status changed`);
+    } else {
+      const status = String(job.status || "").toUpperCase();
+      if (status === "PLANNING") recorded = invokeWorkProgress(paths, job, "planning", "");
+      else if (status === "IMPLEMENTING") recorded = invokeWorkProgress(paths, job, "prose", "");
+    }
+  }
+
+  const refreshed = active?.file ? readJson(active.file, job) : job;
+  atomicWrite(paths.turnState, {
+    schema_version: 1,
+    supervisor_id: paths.supervisorId,
+    provider,
+    session_id: sessionId || null,
+    last_turn_key: turnKey,
+    task_id: refreshed?.task_id || jobId,
+    job_ai_cycles: Number(refreshed?.metrics?.ai_cycles || currentCycles),
+    repository_fingerprint: fingerprint,
+    automatic_cycle_recorded: recorded,
+    observed_at: new Date().toISOString(),
+  });
+}
+
 function runOriginalCodexNotify(rawEvent) {
   const original = decodeJsonEnv("WEB_KIT_ORIGINAL_CODEX_NOTIFY_B64", null);
   if (!Array.isArray(original) || !original.length) return;
@@ -212,14 +330,17 @@ function codexNotify() {
   const event = readJsonText(raw, {});
   const threadId = event["thread-id"] || event.thread_id || null;
   const context = codexContext(threadId);
+  const inputMessages = Array.isArray(event["input-messages"]) ? event["input-messages"].slice(-8) : [];
+  const lastAssistant = typeof event["last-assistant-message"] === "string" ? event["last-assistant-message"].slice(-12000) : "";
   if (context) {
     writeTelemetryAndMaybeRequest("codex", threadId, context.percent, context.source, {
       context_window: context.context_window ?? null,
       input_tokens: context.input_tokens ?? null,
-      input_messages: Array.isArray(event["input-messages"]) ? event["input-messages"].slice(-8) : [],
-      last_assistant_message: typeof event["last-assistant-message"] === "string" ? event["last-assistant-message"].slice(-12000) : "",
+      input_messages: inputMessages,
+      last_assistant_message: lastAssistant,
     });
   }
+  recordProviderTurn("codex", threadId, hash(JSON.stringify([threadId, inputMessages, lastAssistant])));
   runOriginalCodexNotify(raw);
 }
 
@@ -228,14 +349,19 @@ function claudeStatusline() {
   const data = readJsonText(raw, {});
   const pct = numeric(data?.context_window, "used_percentage");
   const sessionId = typeof data.session_id === "string" ? data.session_id : null;
+  const contextWindow = numeric(data?.context_window, "context_window_size");
+  const totalInput = numeric(data?.context_window, "total_input_tokens");
+  const totalOutput = numeric(data?.context_window, "total_output_tokens");
+  const model = data?.model?.id || data?.model?.display_name || null;
   if (pct !== null) {
     writeTelemetryAndMaybeRequest("claude", sessionId, pct, "claude-statusline", {
-      context_window: numeric(data?.context_window, "context_window_size"),
-      total_input_tokens: numeric(data?.context_window, "total_input_tokens"),
-      total_output_tokens: numeric(data?.context_window, "total_output_tokens"),
-      model: data?.model?.id || data?.model?.display_name || null,
+      context_window: contextWindow,
+      total_input_tokens: totalInput,
+      total_output_tokens: totalOutput,
+      model,
     });
   }
+  recordProviderTurn("claude", sessionId, hash(JSON.stringify([sessionId, totalInput, totalOutput, pct, model])));
   if (!runOriginalClaudeStatusline(raw)) {
     const shown = pct === null ? "--" : Math.round(pct);
     process.stdout.write(`[WK ctx ${shown}%]\n`);
