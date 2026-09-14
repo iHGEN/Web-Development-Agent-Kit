@@ -82,6 +82,23 @@ small = readJson(jobFile("TASK-SMALL"));
 assert(small.status === "DONE" && small.progress === 100, "SMALL job did not reach evidence-backed DONE");
 assert(small.anti_slop.violation === false, "concrete work did not clear anti-slop state");
 
+// Automatic implementation evidence must move a fresh SMALL job into IMPLEMENTING.
+cmd("start", "--task-id", "TASK-AUTO", "--classification", "SMALL", "--title", "Automatic phase transition");
+let auto = readJson(jobFile("TASK-AUTO"));
+assert(auto.status === "QUEUED", "fresh automatic job should start QUEUED");
+cmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--evidence", "automatic repository delta detected");
+auto = readJson(jobFile("TASK-AUTO"));
+assert(auto.status === "IMPLEMENTING" && auto.current_phase === "IMPLEMENTING", "implementation cycle did not move fresh SMALL job into IMPLEMENTING");
+assert(auto.metrics.implementation_cycles === 1, "automatic implementation cycle was not counted");
+
+// Discovery evidence also advances a fresh job without requiring a separate manual status update.
+cmd("start", "--task-id", "TASK-DISCOVERY", "--classification", "SMALL", "--title", "Automatic discovery transition");
+let discovery = readJson(jobFile("TASK-DISCOVERY"));
+assert(discovery.status === "QUEUED", "fresh discovery job should start QUEUED");
+cmd("cycle", "--task-id", "TASK-DISCOVERY", "--kind", "discovery", "--evidence", "target implementation owner found");
+discovery = readJson(jobFile("TASK-DISCOVERY"));
+assert(discovery.status === "DISCOVERING" && discovery.current_phase === "DISCOVERING", "discovery cycle did not move fresh job into DISCOVERING");
+
 // MEDIUM: short plan, capped at six bullets, no mandatory Plan Validator, but implementation waits for plan approval.
 cmd("start", "--task-id", "TASK-MEDIUM", "--classification", "MEDIUM", "--title", "Medium implementation");
 let medium = readJson(jobFile("TASK-MEDIUM"));
@@ -127,12 +144,12 @@ assert(projectStatus.overall_progress === 60, `unexpected project overall progre
 failCmd("project-update", "--area", "database", "--progress", "100");
 
 const status = JSON.parse(cmd("show").stdout);
-assert(Array.isArray(status.jobs) && status.jobs.length === 4, "status output should summarize tracked jobs");
+assert(Array.isArray(status.jobs) && status.jobs.length === 6, "status output should summarize tracked jobs");
 assert(status.jobs.some((item) => item.task_id === "TASK-SMALL" && item.progress === 100), "status output is missing completed SMALL job");
 
 const efficiency = readJson(path.join(project, ".agent-core", "state", "metrics", "workflow-efficiency.json"));
-assert(efficiency.jobs === 4, `expected four tracked jobs, got ${efficiency.jobs}`);
-assert(efficiency.totals.ai_cycles >= 7, "workflow efficiency metrics were not aggregated");
+assert(efficiency.jobs === 6, `expected six tracked jobs, got ${efficiency.jobs}`);
+assert(efficiency.totals.ai_cycles >= 9, "workflow efficiency metrics were not aggregated");
 
 const workflow = fs.readFileSync(path.join(project, ".agent-core", "rules", "workflow.md"), "utf8");
 assert(workflow.includes("two consecutive cycles"), "canonical workflow is missing anti-slop guard");
