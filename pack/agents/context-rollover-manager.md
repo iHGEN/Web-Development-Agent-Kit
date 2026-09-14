@@ -2,112 +2,63 @@
 
 ## Mission
 
-Keep long Web-Kit tasks reliable when a provider context grows large by preserving compact workflow state across a **fresh native Codex/Claude session**.
+Keep long Web-Kit tasks reliable across fresh provider contexts without restarting discovery/planning or losing implementation progress.
 
-This is a control role. It does not replace the Captain, Context Router, implementation workers, Plan Validator, Handoff Validator, or Final Integration Validator.
+This is a control role. It does not replace the Captain, Context Router, implementation workers, reviewers, or final validation.
 
 ## Trigger
 
-The normal trigger path is the user-level Web-Kit Context Supervisor installed once by `npx @ihgen/web-kit`.
-
-Normal user commands remain:
-
-```text
-codex
-claude
-```
-
-Inside a project containing a valid `.agent-kit.json`, the transparent supervisor activates automatically. Outside a Web-Kit project the provider command passes through unchanged.
-
-Default rollover threshold:
-
-```text
-50% current context used
-```
+Normal users keep launching supported providers normally (`codex`, `claude`, etc.). The transparent supervisor activates inside a Web-Kit project when supported. Default rollover threshold remains 50% current context usage.
 
 ## Responsibilities
 
-When a fresh context is started from a Web-Kit rollover handoff:
+When a fresh context starts from a Web-Kit handoff:
 
-1. read the exact referenced handoff before broad rediscovery;
-2. preserve the original task/request, current workflow position, plan/delta state, completed work, decisions, constraints, validation state, and exact next action;
-3. keep the handoff compact rather than replaying the previous transcript;
-4. verify every material handoff claim that affects work against current repository source/diff/tests/runtime;
-5. record/reconcile discrepancies in favor of current repository evidence;
-6. continue the exact next safe action instead of restarting discovery from zero;
-7. never treat rollover as permission to skip an independent validator or alter the approved scope.
-
-## Transparent supervisor ownership
-
-When `WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1`:
-
-- do **not** run `/clear`, `/new`, `/compact`, or equivalent context-reset commands for rollover;
-- do **not** ask the user to restart the provider merely because context is large;
-- complete the current assistant turn safely;
-- the supervisor owns the old provider process and decides whether/when to start a fresh native provider TUI;
-- the supervisor handles telemetry, handoff persistence, and fresh-session bootstrap.
-
-The transparent path preserves the provider's normal interactive interface. It does not replace Codex/Claude with a Web-Kit chat shell.
+1. read the referenced handoff and `.agent-core/state/jobs/<task-id>.json` before broad rediscovery;
+2. preserve original request, task classification/governance, job progress, active agent, completed repository changes, validation evidence, project-status evidence, and exact next action;
+3. verify material claims against current source/diff/tests/build/runtime;
+4. reconcile discrepancies in favor of current repository evidence;
+5. continue the exact next action rather than restarting from zero;
+6. reopen planning only when verified new evidence meets the canonical Plan Delta threshold;
+7. if anti-slop state is active, route directly to implementation and make the next evidence-supported change.
 
 ## Safe-boundary behavior
 
-The threshold is evaluated from provider lifecycle telemetry at an assistant-turn boundary.
+Never intentionally interrupt an active edit/tool call to hit an exact token threshold. Rollover occurs after the current provider turn reaches a safe boundary.
 
-```text
-assistant turn completes
-      ↓
-context bridge records current occupancy
-      ↓
-< threshold → normal provider continues
->= threshold → rollover request
-                 ↓
-           old TUI becomes idle
-                 ↓
-           compact handoff
-                 ↓
-           fresh native TUI
-```
+Do not use `/clear`, `/new`, `/compact`, or ask the user to restart merely because context is large when Web Kit owns the rollover.
 
-Do not intentionally interrupt an in-progress tool/edit operation to hit an exact token percentage.
+## Compact handoff
 
-## Handoff contents
-
-A useful rollover handoff should contain, when known:
+Prefer state such as:
 
 ```json
 {
-  "original_request": "...",
-  "summary": "...",
-  "current_phase": "...",
-  "current_role": "...",
-  "completed_steps": [],
-  "current_step": "...",
-  "pending_steps": [],
-  "decisions": [],
-  "constraints": [],
-  "files_changed": [],
-  "validation_completed": [],
-  "validation_pending": [],
-  "next_action": "..."
+  "task_id": "TASK-042",
+  "classification": "MEDIUM",
+  "status": "IMPLEMENTING",
+  "current_agent": "backend-developer",
+  "completed": ["implemented token validation"],
+  "evidence": ["14/14 targeted tests pass"],
+  "next_action": "wire reset endpoint",
+  "blocker": null
 }
 ```
 
-The supervisor adds provider/session provenance, threshold/observed usage, telemetry source, timestamp, and a current Git snapshot containing staged and unstaged change summaries.
+Do not replay the full conversation, discovery transcript, or repeated plan narrative.
 
-Managed handoff/state lives under:
+Managed state includes:
 
 ```text
-.agent-core/state/context-rollover/
+.agent-core/state/jobs/<task-id>.json
+.agent-core/state/project-status.json
+.agent-core/state/metrics/workflow-efficiency.json
 .agent-core/state/context-handoff.json
+.agent-core/state/context-rollover/
+.agent-core/state/handoffs/
 ```
 
-Do not copy the entire old conversation into the new context.
-
-## Handoff authority
-
-A context handoff is **routing/state evidence**, not behavioral authority.
-
-Trust order:
+## Authority
 
 ```text
 runtime / relevant tests / build
@@ -116,29 +67,19 @@ runtime / relevant tests / build
             ↑
       current source
             ↑
- context handoff
+ job/handoff state
             ↑
  graph/index summaries
 ```
 
-If the handoff conflicts with current repository evidence, repository evidence wins.
+Repository evidence wins over handoff/state summaries.
 
 ## Provider telemetry
 
-### Codex
+Provider-specific context telemetry is an adapter concern. Codex/Claude mechanisms may differ, but engineering workflow/job state is provider-neutral.
 
-The transparent supervisor injects a process-local turn-complete notifier. The bridge uses the reported thread/session ID to read current Codex session context/token-count state. Cumulative lifetime token spend must not be treated as current context occupancy.
-
-### Claude Code
-
-The transparent supervisor injects a temporary status-line command through `--settings`. The bridge uses current `context_window.used_percentage` from the provider status-line payload.
-
-If provider/enterprise policy blocks telemetry injection, do not weaken or bypass that policy. Automatic threshold rollover may be unavailable for that invocation.
+If provider/enterprise policy blocks telemetry injection, do not weaken that policy. Preserve state and report the limitation instead of pretending an exact context measurement.
 
 ## Explicit controller fallback
 
-`.agent-core/bin/session-controller.mjs` remains available for CI/headless automation, debugging, and environments where user-level transparent supervision cannot be installed.
-
-When `WEB_KIT_SESSION_CONTROLLER=1`, follow the older explicit-controller progress protocol in that controller's prompt and let it own fresh-context rollover.
-
-The explicit session controller is a fallback. It is not the required day-to-day invocation.
+`.agent-core/bin/session-controller.mjs` remains available for CI/headless/debug scenarios. Its provider-session behavior must still follow the canonical implementation-first workflow and must not use a fresh context as an excuse for another planning cycle.

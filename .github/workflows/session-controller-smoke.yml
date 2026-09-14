@@ -9,9 +9,15 @@ on:
       - "scripts/**"
       - "pack/runtime/**"
       - "pack/agents/context-rollover-manager.md"
+      - "pack/agents/context-router.md"
+      - "pack/agents/web-orchestrator.md"
+      - "pack/agents/plan-validator.md"
       - "pack/rules/context-rollover.md"
+      - "pack/rules/implementation-first.md"
+      - "pack/rules/workflow.md"
       - "pack/router/**"
       - "tests/session-controller-smoke.mjs"
+      - "tests/work-progress-smoke.mjs"
       - "tests/fixtures/mock-session-provider.mjs"
       - ".github/workflows/session-controller-smoke.yml"
   pull_request:
@@ -22,9 +28,15 @@ on:
       - "scripts/**"
       - "pack/runtime/**"
       - "pack/agents/context-rollover-manager.md"
+      - "pack/agents/context-router.md"
+      - "pack/agents/web-orchestrator.md"
+      - "pack/agents/plan-validator.md"
       - "pack/rules/context-rollover.md"
+      - "pack/rules/implementation-first.md"
+      - "pack/rules/workflow.md"
       - "pack/router/**"
       - "tests/session-controller-smoke.mjs"
+      - "tests/work-progress-smoke.mjs"
       - "tests/fixtures/mock-session-provider.mjs"
       - ".github/workflows/session-controller-smoke.yml"
   workflow_dispatch:
@@ -48,8 +60,13 @@ jobs:
       - name: Validate controller sources
         run: |
           node --check pack/runtime/session-controller.mjs
+          node --check pack/runtime/work-progress.mjs
           node --check tests/fixtures/mock-session-provider.mjs
           node --check tests/session-controller-smoke.mjs
+          node --check tests/work-progress-smoke.mjs
 
       - name: Verify automatic Codex and Claude rollovers
         run: node tests/session-controller-smoke.mjs
+
+      - name: Verify implementation-first progress and anti-slop controls
+        run: node tests/work-progress-smoke.mjs

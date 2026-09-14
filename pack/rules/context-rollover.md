@@ -1,25 +1,10 @@
 # Automatic Context Rollover Rule
 
-This supporting rule governs **provider-session lifetime** around `.agent-core/rules/workflow.md`. It never changes engineering scope, plan approval, ownership, validation, or source authority.
+This rule governs provider-session lifetime around `.agent-core/rules/workflow.md`. It never changes user scope, repository authority, task classification, routing ownership, or validation requirements.
 
 ## Default UX
 
-`npx @ihgen/web-kit` installs/updates the project workflow and, once per user account, installs the lightweight transparent supervisor under:
-
-```text
-~/.web-kit/
-├── context-supervisor.mjs
-├── provider-bridge.mjs
-├── supervisor-setup.mjs
-├── config.json
-└── bin/
-    ├── codex
-    └── claude
-```
-
-On Windows the bin directory also contains `codex.cmd` and `claude.cmd`.
-
-After the install shell is restarted once, normal development remains:
+After Web Kit setup, users continue to launch providers normally:
 
 ```bash
 codex
@@ -31,135 +16,106 @@ or:
 claude
 ```
 
-The user does **not** need to type a Web-Kit session command for normal context rollover.
+The transparent supervisor activates only inside a Web-Kit project. Outside one, it passes the real provider through unchanged. Provider administrative/noninteractive commands are also passed through.
 
-Default threshold:
+Default rollover threshold:
 
 ```text
 50% current context used
 ```
 
-## Transparent activation
-
-The shim is deliberately cheap and conditional.
-
-```text
-normal codex / claude command
-        ↓
-~/.web-kit/bin shim
-        ↓
-search upward from current directory for .agent-kit.json
-        │
-        ├─ no Web Kit project
-        │     → execute the real provider unchanged
-        │
-        └─ Web Kit project
-              → start transparent Context Supervisor
-              → preserve the provider's native interactive TUI
-```
-
-Provider administrative/noninteractive commands such as help/version/login/update/doctor are passed through rather than placed under interactive rollover control.
-
-The real provider executable is resolved from `PATH` while excluding `~/.web-kit/bin`, preventing shim recursion.
-
-## Native provider strategy
-
-The transparent supervisor does **not** replace Codex or Claude with a custom chat UI and does not emulate `/clear` or `/new` keystrokes.
-
-### Codex
-
-The supervisor launches the normal interactive Codex CLI and injects a temporary `notify` override for that process only.
-
-At every Codex `agent-turn-complete` notification, the bridge receives the thread/session ID and reads that session's current token-count/context-window state from Codex's local session record. It uses current context occupancy, not cumulative lifetime token spend.
-
-Existing user `notify` configuration is preserved when it can be resolved: Web Kit's bridge invokes it after recording rollover telemetry.
-
-### Claude Code
-
-The supervisor launches the normal interactive Claude CLI with a temporary command-line `--settings` overlay containing a Web-Kit `statusLine` bridge.
-
-Claude's status-line input reports current `context_window.used_percentage` after assistant messages. The bridge records that value and, when possible, delegates to the user's existing effective status-line command so Web Kit does not intentionally replace their display.
-
-The temporary settings file is removed when the supervised process exits.
+The explicit `.agent-core/bin/session-controller.mjs` remains available for CI/headless/debug workflows but is not the normal developer UX.
 
 ## Safe-boundary rule
 
-Never intentionally terminate an AI in the middle of an edit/tool call because a token counter crossed the threshold.
-
-Rollover is requested only from provider lifecycle signals that occur at an assistant-turn boundary:
+Never terminate a provider in the middle of an edit/tool call merely because context crossed the threshold.
 
 ```text
-provider completes assistant turn
-        ↓
-bridge measures current context
-        ↓
-context < threshold
-        → do nothing
-
-context >= threshold
-        → write safe-boundary rollover request
-        → supervisor ends the now-idle old TUI
-        → prepare validated handoff
-        → start fresh native TUI
+assistant turn completes
+      ↓
+measure context
+      ↓
+< threshold -> keep session
+>= threshold -> persist compact state at this safe boundary -> fresh session
 ```
 
-This means `50%` is a trigger for the **next safe provider-turn boundary**, not an instruction to kill an active edit at exactly 50.000%.
+## Implementation-first rollover contract
 
-## Handoff preparation
+A rollover is **not** a new task and must not restart the workflow.
 
-Before starting the fresh interactive session, Web Kit attempts one read-only/programmatic resume of the old provider session solely to produce a compact JSON state summary.
+Before rollover, preserve:
+- original request / task ID;
+- SMALL/MEDIUM/LARGE classification and high-risk governance state;
+- current job status/progress;
+- active routed agent;
+- actual completed repository changes;
+- test/build/review evidence;
+- project/application status evidence already recorded;
+- exact next implementation/verification action;
+- genuine blockers only.
 
-That handoff pass must not continue implementation or make application changes.
-
-If structured handoff generation fails, Web Kit still creates a conservative handoff from provider notification data plus the actual repository snapshot rather than replaying the full transcript.
-
-Each handoff includes, when available:
-
-- original request;
-- provider/session provenance;
-- current workflow phase and role;
-- completed/current/pending work;
-- decisions and constraints;
-- changed-file summary;
-- validation completed/pending;
-- exact next action;
-- observed context percentage and telemetry source;
-- current Git HEAD/branch/status;
-- both staged and unstaged changed files/diff statistics;
-- source-authority reminder.
-
-Managed state:
+Primary state:
 
 ```text
-.agent-core/state/context-rollover/
-├── supervisors/
-├── telemetry/
-├── requests/
-└── handoffs/
-
+.agent-core/state/jobs/<task-id>.json
+.agent-core/state/project-status.json
+.agent-core/state/metrics/workflow-efficiency.json
+.agent-core/state/session-progress.json
 .agent-core/state/context-handoff.json
+.agent-core/state/handoffs/
 ```
 
-Per-run filenames use a unique supervisor ID so separate terminals do not share rollover request/telemetry files.
+The handoff is deliberately compact. Do not copy the full transcript, full discovery history, or repeated plan prose.
 
 ## Fresh-session rule
 
-The newly launched native provider session receives a short bootstrap prompt pointing to the exact handoff file.
+The fresh provider must:
 
-The fresh AI must:
+1. read the current handoff/job state before broad rediscovery;
+2. verify material claims against current source/diff/tests/build/runtime;
+3. preserve already completed work;
+4. resume the **exact recorded next action**;
+5. avoid restarting discovery or rewriting a plan simply because context is fresh;
+6. only reopen planning when verified evidence meets the canonical Plan Delta threshold.
 
-1. read that handoff before broad rediscovery;
-2. treat it as routing/state evidence rather than behavioral truth;
-3. verify material claims against current source, current diff, relevant tests/build, and runtime evidence;
-4. reconcile discrepancies in favor of current repository evidence;
-5. avoid repeating completed work;
-6. resume the recorded next safe action under the existing Web-Kit workflow.
+If the job state reports an anti-slop violation, the fresh context must route directly to `IMPLEMENTING` and make the next evidence-supported repository change.
 
-Do not load the whole prior transcript merely to recreate context.
+Current repository evidence always overrides handoff/state summaries.
+
+## Compact handoff shape
+
+A useful rollover handoff should contain approximately:
+
+```json
+{
+  "task_id": "TASK-042",
+  "classification": "MEDIUM",
+  "status": "IMPLEMENTING",
+  "current_agent": "backend-developer",
+  "completed": ["implemented token validation"],
+  "evidence": ["14/14 targeted tests pass"],
+  "next_action": "wire reset endpoint",
+  "blocker": null
+}
+```
+
+Do not create a narrative history when the state above is sufficient.
+
+## Provider strategy
+
+### Codex
+
+The transparent supervisor uses a process-local notification bridge to observe safe turn boundaries/context telemetry without rewriting the user's normal provider configuration.
+
+### Claude Code
+
+The transparent supervisor uses a temporary settings/status-line bridge to observe safe turn boundaries/context telemetry and removes temporary settings afterward.
+
+Provider-specific telemetry is an adapter concern. The canonical engineering workflow and work-progress state remain provider-neutral.
 
 ## Authority
 
-Trust order remains:
+Trust order:
 
 ```text
 runtime / relevant tests / build
@@ -168,78 +124,16 @@ runtime / relevant tests / build
             ↑
       current source
             ↑
- context handoff
+ job/handoff state
             ↑
  graph/index summaries
 ```
 
-The rollover supervisor may replace provider context. It never replaces plan/handoff/final validators.
-
-## Global and project configuration
-
-User-level defaults live in:
-
-```text
-~/.web-kit/config.json
-```
-
-Default:
-
-```json
-{
-  "enabled": true,
-  "threshold_percent": 50
-}
-```
-
-A project may override the threshold with:
-
-```json
-{
-  "context_rollover": {
-    "threshold_percent": 50
-  }
-}
-```
-
-Threshold values are bounded to `10..90` by the supervisor.
-
-Set `WEB_KIT_DISABLE_CONTEXT_SUPERVISOR=1` during installation when the user explicitly does not want user-level shims. Core Web Kit remains functional.
-
-## Provider configuration preservation
+## Configuration preservation
 
 The transparent layer is additive and best-effort:
+- do not overwrite project-owned `AGENTS.md`, `CLAUDE.md`, provider settings, or user provider configuration merely to monitor context;
+- do not weaken enterprise/managed provider policy to obtain telemetry;
+- if telemetry is unavailable, preserve workflow state and report the limitation rather than pretending an exact context percentage is known.
 
-- do not overwrite project `AGENTS.md`, `CLAUDE.md`, provider settings, or user provider configuration files just to monitor context;
-- Codex monitoring is injected as a process-local CLI config override;
-- Claude monitoring is injected through a temporary `--settings` overlay;
-- provider administrative commands pass through;
-- outside a Web-Kit project the real provider receives the original arguments unchanged.
-
-If an enterprise/managed provider policy prevents telemetry injection, Web Kit must not weaken that policy. The provider remains usable; automatic threshold rollover may be unavailable for that invocation and should be reported rather than bypassed.
-
-## Explicit Session Controller fallback
-
-Installed projects still contain:
-
-```text
-.agent-core/bin/session-controller.mjs
-```
-
-and the npm launcher may still expose `npx @ihgen/web-kit session ...` for CI, deterministic headless automation, debugging, or environments where transparent native supervision cannot be installed.
-
-That explicit controller is **not the normal developer UX**.
-
-Normal developer UX after one Web-Kit installation is:
-
-```text
-cd project
-codex
-```
-
-or:
-
-```text
-cd project
-claude
-```
+Project/user threshold configuration remains supported, bounded by the supervisor. `WEB_KIT_DISABLE_CONTEXT_SUPERVISOR=1` may disable user-level shims without disabling the core Web Kit workflow.

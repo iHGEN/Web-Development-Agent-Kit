@@ -1,6 +1,6 @@
 # Web Development Agent Kit
 
-A vendor-neutral multi-agent engineering kit for web projects with project discovery, strict context/token routing, transparent fresh-context rollover, independent plan/handoff validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
+A vendor-neutral multi-agent engineering kit for web projects with implementation-first routing, evidence-based job/project progress, transparent fresh-context rollover, proportional planning/validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
 
 ## Runtime requirement
 
@@ -34,7 +34,7 @@ Installed version = CLI version -> doctor
 Installed version > CLI version -> no downgrade; doctor
 ```
 
-Explicit maintenance commands:
+Explicit maintenance/status commands:
 
 ```bash
 npx @ihgen/web-kit install
@@ -42,7 +42,106 @@ npx @ihgen/web-kit update
 npx @ihgen/web-kit doctor
 npx @ihgen/web-kit scan
 npx @ihgen/web-kit graphify
+npx @ihgen/web-kit status
+npx @ihgen/web-kit status --task-id TASK-042
+npx @ihgen/web-kit progress help
+npx @ihgen/web-kit security-review
 ```
+
+Inside a capable AI provider, the security review can also be invoked as:
+
+```text
+run security-review
+run security-review deep
+run security-review base main
+```
+
+## Implementation-first workflow
+
+Web Kit routes by required expertise, not by ceremony. Planning exists to unlock implementation; it is not the default deliverable.
+
+```text
+Right Agent
+    ↓
+Minimum Sufficient Context
+    ↓
+Implement
+    ↓
+Verify
+    ↓
+Track Real Progress
+    ↓
+Continue
+```
+
+Classification changes the workflow:
+
+```text
+SMALL
+  targeted discovery -> implement -> local check -> review -> validate -> done
+
+MEDIUM
+  targeted discovery -> 3-6 execution bullets -> implement -> test/review -> validate -> done
+
+LARGE / HIGH-RISK
+  discovery/design -> formal plan -> independent plan validation
+  -> implementation -> specialist/final gates
+```
+
+After initial discovery, two consecutive planning/routing/prose-only cycles without concrete implementation/verification evidence trigger the anti-slop guard. Plan-required work keeps its required approval gate; plan-free/approved work is pushed back to implementation.
+
+Normal implementation work targets roughly:
+
+```text
+implementation + verification: 80-90%
+planning + routing + summaries: 10-20%
+```
+
+This is a diagnostic target; required safety work is never skipped just to improve the ratio.
+
+## Job progress and project/application status
+
+Web Kit tracks the current AI task separately from the whole application/project.
+
+```text
+Job Progress     = state of one user task
+Project Status   = evidence-backed state of the application/project
+```
+
+Job state is stored under:
+
+```text
+.agent-core/state/jobs/<task-id>.json
+.agent-core/state/metrics/workflow-efficiency.json
+```
+
+Whole-project/application status is stored under:
+
+```text
+.agent-core/state/project-status.json
+```
+
+Default progress weighting keeps planning from making an unimplemented task look mostly complete:
+
+```text
+SMALL:  discovery 5 | implementation 70 | testing 15 | review 5 | validation 5
+MEDIUM: discovery 10 | planning 5 | implementation 60 | testing 15 | review 5 | validation 5
+LARGE:  discovery 10 | planning 15 | implementation 45 | testing 15 | review 10 | validation 5
+```
+
+Show tracked jobs, project status, and workflow efficiency:
+
+```bash
+npx @ihgen/web-kit status
+```
+
+Show one task:
+
+```bash
+npx @ihgen/web-kit status --task-id TASK-042
+```
+
+Project/application percentages require evidence; Web Kit does not treat an AI's intuitive completion guess as project status.
 
 ## Transparent automatic context rollover
 
@@ -97,26 +196,22 @@ native Codex / Claude
         ↓
 assistant turn completes
         ↓
-measure current context
+measure current context + work evidence
         ↓
       < 50%
         └── continue the same native session
 
       >= 50%
         ↓
-finish current turn safely
+finish current safe work/check
+        ↓
+persist compact job state + exact next action
         ↓
 end the now-idle old TUI
         ↓
-prepare compact read-only handoff
-        ↓
-validate + save repository snapshot
-        ↓
 start a genuinely fresh native provider TUI
         ↓
-read exact handoff
-        ↓
-verify source / diff / tests / runtime
+verify current source / diff / tests / runtime
         ↓
 continue the recorded next action
 ```
@@ -125,11 +220,13 @@ Web Kit does **not** fake `/clear` or `/new` terminal keystrokes and does not re
 
 The threshold is checked at a provider turn boundary, so Web Kit does not intentionally kill an AI in the middle of an edit/tool call to hit exactly 50.000%.
 
-### Provider telemetry
+### Provider telemetry and work evidence
 
 Codex is supervised with a process-local turn-complete notifier. The notifier gives Web Kit the active thread/session ID, which is used to read that Codex session's current context/token-count state. Existing user notify configuration is preserved on a best-effort basis.
 
 Claude Code is supervised with a temporary `--settings` overlay that installs a status-line bridge. The bridge receives the provider's current `context_window.used_percentage`; when possible it also delegates to the user's existing status-line command.
+
+For supervised Codex/Claude sessions, the provider bridge also compares bounded repository fingerprints at safe turns. Real repository changes can be recorded as implementation evidence; repeated no-delta turns during implementation feed the anti-slop guard. Generated Web-Kit state/security-review artifacts are excluded from implementation evidence, and raw untracked file contents are not persisted by this progress fingerprinting.
 
 No provider configuration file is rewritten just to monitor context.
 
@@ -142,14 +239,18 @@ Project-local state is kept under:
 ├── supervisors/
 ├── telemetry/
 ├── requests/
+├── turns/
 └── handoffs/
 
+.agent-core/state/jobs/
+.agent-core/state/project-status.json
+.agent-core/state/metrics/workflow-efficiency.json
 .agent-core/state/context-handoff.json
 ```
 
 A rollover handoff is routing/state evidence only. Current repository source, current diff, relevant tests/build, and runtime evidence remain authoritative.
 
-The **Context Rollover Manager** role tells a fresh AI to verify the handoff, avoid repeating completed work, and resume the exact next safe action.
+The **Context Rollover Manager** role tells a fresh AI to verify the compact state, avoid repeating completed work, and resume the exact next safe action rather than restarting discovery/planning.
 
 ### Global configuration
 
@@ -188,6 +289,8 @@ The older explicit controller remains available for deterministic headless autom
 npx @ihgen/web-kit session codex --prompt "<task>"
 npx @ihgen/web-kit session claude --prompt "<task>"
 ```
+
+Its "one safe workflow unit" boundary is classification-aware: it does not create a formal plan requirement for SMALL work and does not cause a fresh provider process to restart planning.
 
 This is **not** the normal developer UX.
 
@@ -234,7 +337,7 @@ New installs do not create `AGENTS.web-kit.md`. An old `AGENTS.web-kit.md` from 
 
 ## One workflow across coding AIs
 
-All supported assistants route into the same lifecycle:
+All supported assistants route into the same provider-neutral lifecycle:
 
 ```text
 Codex ────────────┐
@@ -247,10 +350,14 @@ Other assistants ─┘
                   ↓
        .agent-core/rules/workflow.md
                   ↓
+ .agent-core/rules/implementation-first.md
+                  ↓
  .agent-core/rules/repository-navigation.md
                   ↓
    .agent-core/rules/context-rollover.md
 ```
+
+The workflow/rules are provider-neutral. Transparent automatic turn telemetry/progress adapters currently cover the providers implemented by the supervisor (Codex and Claude); other assistants still consume the same repository workflow/routing/state rules without those provider-specific telemetry guarantees.
 
 The assistant-specific files contain roles and project-owned instructions, not separate copies of the engineering workflow.
 
@@ -401,56 +508,70 @@ USER
   ↓
 CAPTAIN
   ↓
-Record original prompt + task ID
+Create/reuse task + classify SMALL / MEDIUM / LARGE (+ high-risk escalation)
   ↓
-Classify SMALL / MEDIUM / LARGE
+Minimum repository evidence + Context Router
   ↓
-Project Profile + Repository Index
+┌──────────────── SMALL ────────────────┐
+│ targeted discovery -> implementation │
+│ -> local checks -> review -> validate│
+└───────────────────────────────────────┘
+                 or
+┌─────────────── MEDIUM ────────────────┐
+│ targeted discovery -> 3-6 bullets    │
+│ -> implementation -> test/review     │
+│ -> final validation                  │
+└───────────────────────────────────────┘
+                 or
+┌──────────── LARGE / HIGH-RISK ───────┐
+│ discovery/design -> formal plan      │
+│ -> independent Plan Validator        │
+│ -> implementation/specialist gates  │
+│ -> final validation                  │
+└───────────────────────────────────────┘
   ↓
-Context Router / Token Governor
+Evidence-backed job/project status
   ↓
-Intent Contract + Read-only Discovery
-  ↓
-Impact Map
-  ↓
-Implementation Design
-  ↓
-Execution Registry
-  ↓
-Independent Plan Validator
-  ├─ revise/reject/missing dependency -> planning loop
-  └─ all required steps APPROVED
-       ↓
-    LOCK PLAN
-       ↓
-Fresh Context Packet for one step
-       ↓
-Selected Worker implements one approved step
-       ↓
-Step-local validation
-       ↓
-Graph Refresh Gate when Graphify is ready
-       ↓
-Independent Handoff Validator
-       ↓
-Repeat approved steps
-       ↓
-Code Simplifier
-       ↓
-Affected Tests
-       ↓
-Relevant Specialist Validation
-       ↓
-Final Integration Validator
-       ↓
-Captain closure against original request
-       ↓
 DONE
 ```
 
-Automatic context rollover is an outer provider-session overlay around this lifecycle; it does not skip or replace any phase, plan approval, handoff validation, or final integration gate.
+The Context Router, specialist agents, Graphify refresh, handoff validation, code simplification, testing, performance/accessibility/API/DevSecOps/SRE review, and other gates are invoked when the task/change surface actually needs them. Installed capabilities are not mandatory lifecycle stops.
 
-Material evidence that invalidates a locked plan enters the Plan Delta validation loop. Agents do not silently improvise outside the approved plan.
+Material evidence that invalidates the active plan enters a Plan Delta only when it changes architecture/ownership, public contracts, schema/migrations, security/trust boundaries, major dependencies/platforms, destructive/deployment behavior, or requested product scope. Ordinary implementation discoveries do not restart planning.
+
+## Security review
+
+`run security-review` remains an independent read-only review of **implemented code**.
+
+Use it after implementation/tests when the changed attack surface is security-sensitive and as a mandatory full release gate.
+
+```text
+implemented code
+    ↓
+tests/checks
+    ↓
+security-review
+    ↓
+findings? ── yes -> responsible developer fixes -> tests -> independent re-review
+    │
+    no
+    ↓
+final/release validation
+```
+
+The Security Reviewer never fixes its own findings. `--scan-only` remains informational/`INCONCLUSIVE` and cannot grant approval.
+
+Terminal command:
+
+```bash
+npx @ihgen/web-kit security-review
+```
+
+Inside a capable AI provider:
+
+```text
+run security-review
+```
 
 ## Context/token routing
 
@@ -460,12 +581,13 @@ Rules include:
 - project profile/index before broad source expansion;
 - navigation tool selected by question type;
 - installed skill does not mean active skill;
-- fresh Context Packet per approved implementation step;
+- compact Context Packets for coherent implementation chunks rather than every file edit;
 - compact evidence-linked handoffs instead of full transcripts;
 - validated compact context-rollover handoffs instead of replaying the whole prior conversation;
 - diff-first implementation review;
 - never put the entire Graphify graph into model context;
 - Graphify failure falls back to standard routing without blocking work;
+- stop discovery once the next safe implementation action is sufficiently supported;
 - token optimization never overrides correctness, security, or user intent.
 
 ## Local Node CLI
@@ -485,6 +607,8 @@ node scripts/agent-kit.mjs add-skill /path/to/project <skill-name>
 Installed projects receive Node helpers including:
 
 ```text
+.agent-core/bin/work-progress.mjs
+.agent-core/bin/security-review.mjs
 .agent-core/bin/session-controller.mjs
 .agent-core/bin/context-supervisor.mjs
 .agent-core/bin/provider-bridge.mjs
