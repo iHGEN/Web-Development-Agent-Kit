@@ -349,6 +349,12 @@ function recordProviderTurn(provider, sessionId, turnKey) {
     && Number.isFinite(Number(observation.job_ai_cycles))
     && currentCycles > Number(observation.job_ai_cycles);
   const repositoryChanged = Boolean(previousFingerprint && fingerprint && previousFingerprint !== fingerprint);
+  const pendingGovernanceDelta = Boolean(
+    repositoryChanged
+    && observation.pending_repository_fingerprint
+    && observation.pending_repository_fingerprint === fingerprint
+    && observation.governance_violation
+  );
 
   let recorded = false;
   let attempted = false;
@@ -356,7 +362,21 @@ function recordProviderTurn(provider, sessionId, turnKey) {
 
   if (job && sameJob && !providerAlreadyRecordedCycle && previousFingerprint && fingerprint) {
     const status = String(job.status || "").toUpperCase();
-    if (status === "PLANNING") {
+
+    if (pendingGovernanceDelta) {
+      attempted = true;
+      if (!planGateReady(job)) {
+        governanceViolation = {
+          ...observation.governance_violation,
+          status,
+          message: "The previously blocked repository delta is still pending because the required plan/validator gate is not approved.",
+          pending_repository_fingerprint: fingerprint,
+          detected_at: new Date().toISOString(),
+        };
+      } else {
+        recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: previously blocked repository delta now allowed by governance`);
+      }
+    } else if (status === "PLANNING") {
       attempted = true;
       recorded = invokeWorkProgress(paths, job, "planning", "");
     } else if (repositoryChanged) {
