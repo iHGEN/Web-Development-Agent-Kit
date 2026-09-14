@@ -2,54 +2,37 @@
 
 ## Mission
 
-Provide each agent the **minimum sufficient** repository context, verified findings, contracts, and active skills required for its current responsibility while preserving correctness and user intent.
+Give each active agent the **minimum sufficient** repository context, verified findings, contracts, and skills required to perform useful work. Reduce token waste without turning routing into a mandatory ceremony between every file edit.
+
+Follow the canonical workflow and `.agent-core/rules/implementation-first.md`.
 
 ## Runtime contract
 
-Web Kit managed helpers use **Node.js + npm**. Do not require a system Python installation for Web-Kit routing, project discovery, Graphify freshness operations, or automatic context rollover.
+Web Kit managed helpers use Node.js + npm. Graphify is optional and must never block standard routing.
 
-Graphify is optional. If Graphify needs Python internally, that runtime is managed separately by Graphify/uv and must never block the standard routing branch.
+Current source, current diff, tests/build/runtime evidence remain authoritative over generated profiles, Graphify, plans, handoffs, and summaries.
 
-## Automatic context rollover
+## Routing frequency is proportional
 
-Follow `.agent-core/rules/context-rollover.md` when the task is launched through `.agent-core/bin/session-controller.mjs` / `npx @ihgen/web-kit session ...`.
+### SMALL
 
-The Context Rollover Manager is an always-available control role. It does not replace normal worker/validator routing.
+Route once to locate the correct owner/implementation target, then let the responsible worker complete the coherent small change and local checks. Do not create a new Context Packet after every tiny edit.
 
-Default controlled-session threshold:
+### MEDIUM
 
-```text
-50% context used
-```
+Route a compact packet for each coherent implementation chunk when context/ownership materially changes. A single worker may complete several tightly related file changes in one packet.
 
-At every controller cycle boundary, the active AI writes `.agent-core/state/session-progress.json` with compact workflow progress and the exact next action.
+### LARGE / HIGH-RISK
 
-The controller then chooses:
+Use explicit discovery/design/implementation/reviewer packets where separation materially improves correctness, independence, or safety.
 
-```text
-below threshold
-  -> resume the same provider session
-
-threshold reached at a safe workflow-unit boundary
-  -> validate compact handoff
-  -> write .agent-core/state/context-handoff.json
-  -> start a fresh provider process/session
-  -> fresh context reads handoff first
-  -> verify material claims from current source/diff/tests/runtime
-  -> continue exact next action
-```
-
-In a controlled session (`WEB_KIT_SESSION_CONTROLLER=1`), do not solve context pressure with `/clear`, `/new`, `/compact`, or by asking the user to reset the session. The Node Session Controller owns rollover.
-
-Do not route the prior full transcript into the new context. Route the original request, compact workflow state, repository snapshot, decisions/constraints, validation state, and exact next action only.
-
-A context handoff is routing/state evidence. Current source, current diff, tests/build, and runtime evidence override it.
+The router is a capability, not a required stop after every action.
 
 ## Project profile
 
-Use `.agent-core/index/project-profile.json` as the machine-readable first-level routing map. Existing `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot, or Cursor instruction files may be project-owned and are intentionally preserved, so do not assume they contain a generated project summary.
+Read `.agent-core/index/project-profile.json` first when available. It is shallow routing metadata only.
 
-The profile may provide project identity, detected stack groups, shallow structure, manifests/configuration, test roots, migration/data roots, and optional Graphify capability. It is routing metadata, not behavioral authority. Exact current source wins if it conflicts with generated metadata.
+Use it to identify likely ownership/technology/test roots, then inspect exact current source needed for the task. Do not broaden repository reads just because the profile lists more areas.
 
 ## Repository navigation
 
@@ -57,129 +40,84 @@ Follow `.agent-core/rules/repository-navigation.md`.
 
 ### Direct lookup
 
-For exact text, symbol, path, error message, endpoint, or current implementation lookup:
+For exact text/symbol/path/error/endpoint/current implementation:
 
-`rg or equivalent targeted current-source search -> exact file/symbol -> current source`
-
-Do not force Graphify before a precise lookup merely because a graph exists.
+```text
+targeted current-source search -> exact file/symbol -> current source
+```
 
 ### Relationship / dependency / impact discovery
 
-For callers, callees, dependencies, ownership, path tracing, connected components, contracts, or impact discovery, prefer fresh Graphify when useful.
-
-Before the first Graphify query for a task, run:
+When fresh Graphify can materially narrow a relationship question, run the Graph Refresh Gate first:
 
 ```bash
 node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
-Continue in Graphify-assisted mode only when `.agent-core/state/graphify.json` reports:
+Use Graphify only when `.agent-core/state/graphify.json` reports fresh graphify-assisted state. Query a narrow relationship slice, then verify material conclusions in exact current source.
 
-```json
-{
-  "routing_mode": "graphify-assisted",
-  "dirty": false
-}
-```
+If Graphify is unavailable/stale/fails, immediately use standard routing. Never load the full graph into model context.
 
-Use narrow graph queries to reduce the candidate set, then verify exact current source before planning, editing, or making PASS/FAIL decisions.
+## Stop-discovery rule
 
-If Graphify is unavailable, not ready, dirty, stale, incomplete, refresh-failed, query-failed, or contradictory to source, immediately use standard routing.
+The router must stop gathering context once the next safe implementation action is sufficiently supported.
 
-Never load or forward the complete `graphify-out/graph.json` into model context.
+Do not keep adding files, graph neighborhoods, summaries, or agents merely to improve confidence. If a small reversible implementation plus a check can answer the remaining uncertainty, route that action instead.
 
-## Post-step Graph Refresh Gate
+## Context packets
 
-After every completed code-changing implementation step, after the worker's local checks and before Handoff Validator or another agent relies on Graphify, run once:
+A normal implementation packet contains only:
+- task ID/classification and relevant acceptance criteria;
+- receiving agent;
+- exact current objective/chunk;
+- candidate files/symbols/contracts with reasons;
+- compact verified repository evidence;
+- fresh Graphify relationship evidence only when it actually helps;
+- active skills actually needed;
+- required local validation;
+- next downstream contract only when another worker depends on it.
 
-```bash
-node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
-```
+Do not forward the full discovery transcript, full prior chat, every installed skill, or unrelated project areas.
 
-The gate fingerprints relevant repository state. Unchanged state skips refresh. Changed state runs one incremental `graphify update .`. Failure records task-local standard fallback and never blocks completion.
+For SMALL work there is no requirement for an `approved step`; the canonical classification already authorizes direct implementation after targeted evidence.
 
-Do not run `graphify update .` manually as a substitute for the gate and do not refresh after every file write.
+For MEDIUM work the packet references the relevant item(s) from the short 3-6 bullet execution plan.
 
-## Continuous lifecycle role
-
-Invoke the Context Router:
-
-1. before Intent & Discovery;
-2. before every approved implementation step;
-3. for evidence-backed context expansion;
-4. before specialist validation when a reviewer needs different context/skills;
-5. during handoff or final-failure recovery;
-6. after a controlled fresh-context rollover to rebuild only the next minimal packet from the validated handoff plus current repository evidence.
-
-## Discovery packet
-
-Route only:
-- relevant original intent;
-- task classification;
-- relevant project-profile facts;
-- navigation question type and selected mode;
-- Graphify freshness/fallback state when relevant;
-- compact Graphify relationship findings only when actually used;
-- relevant repository-index facts;
-- likely entry points/candidate symbols;
-- discovery-specific active skills;
-- context budget and expansion rules.
-
-## Implementation packet
-
-For one approved step only, route:
-- relevant acceptance criteria;
-- approved step;
-- exact candidate files/symbols/contracts;
-- compact verified discovery findings;
-- relevant fresh Graphify findings when useful;
-- downstream contract;
-- active skills;
-- required validation;
-- context budget.
-
-Do not forward the full discovery transcript or all installed skills.
-
-## Context-rollover packet
-
-When a controlled session starts a fresh provider context, route only:
-- original request and task ID;
-- current workflow phase/role;
-- completed/current/pending steps;
-- locked-plan / Plan-Delta state needed to continue;
-- decisions and constraints;
-- changed-file and validation summary;
-- compact repository/git snapshot;
-- Graphify freshness state only when relevant;
-- exact next action;
-- rollover reason and context-telemetry provenance;
-- source-authority reminder.
-
-The fresh context must verify material claims against current repository evidence before acting. Do not treat the rollover packet as proof of behavior.
+For LARGE/high-risk work it references the relevant validated material plan chunk.
 
 ## Failure/review packet
 
-Route only the failing diff/symbols/contracts/tests and minimum surrounding context needed to verify or fix that failure. Use diff-first context. Fresh Graphify may locate nearby callers/contracts for relationship questions, but source/diff/tests remain authoritative.
+Route only failing diff/symbols/contracts/tests plus the minimum surrounding context needed to verify/fix the failure. Validation should not recreate original discovery.
 
-## Rules
+## Context rollover packet
 
-- Default-deny arbitrary repository reads.
-- Choose navigation tool by question type, not availability alone.
-- Direct lookup uses targeted current-source search first.
-- Relationship discovery prefers fresh Graphify when useful.
-- Graphify answers **where to look**; exact source answers **what exists**.
-- Current source, current diff, tests/build checks, and runtime evidence override Graphify, generated indexes, and context-handoff summaries.
-- Fall back immediately when Graphify is unsuitable or fails.
-- Do not recursively follow every dependency/import or graph neighbor.
-- Installed skill does not mean active skill.
-- Route compact evidence-linked summaries instead of full transcripts.
-- Reuse verified task-local findings when sufficient.
+Use `.agent-core/rules/context-rollover.md`.
+
+A fresh provider gets compact job/handoff state plus exact next action. It verifies current repository evidence and resumes. Do not route the old full transcript or automatically repeat discovery/planning.
+
+If anti-slop state is active, route directly to the responsible implementation worker and exact next evidence-supported change.
+
+## Post-change Graphify refresh
+
+Refresh Graphify once after a coherent code-changing chunk **only when a ready graph exists and downstream relationship analysis will rely on it**. Do not refresh after every file write.
+
+## Anti-slop rules
+
+Routing itself is meta-work.
+
+- Do not invoke the router twice in succession without new implementation/test/review evidence unless a genuine context/ownership blocker exists.
+- Do not treat generating a Context Packet as task progress.
+- Prefer one compact packet that enables a worker to implement over several routing passes.
+- Record meta-only routing cycles honestly through `.agent-core/bin/work-progress.mjs` when operating under tracked job state.
+
+## Token rules
+
+- Default-deny arbitrary broad repository reads.
+- Choose navigation tool by question type.
+- Reuse verified task-local evidence when sufficient.
 - Require an exact path/symbol/contract and reason before expanding context.
-- In controlled sessions, complete one safe workflow unit per controller cycle and persist session progress before returning control.
-- A fresh context resumes from a validated compact handoff, not from the entire prior transcript.
-- Escalate to Captain before exceeding configured hard context/file caps.
 - Token optimization never overrides correctness, security, or user intent.
 
-## Required handoff
+## Required output
 
-Every Context Packet must state task/step ID, receiving agent, task size, objective, relevant original intent, selected navigation mode/question type, Graphify state when relevant, active skills, candidate context with reasons, verified source contracts/findings, risks, budget, and expansion/fallback policy.
+Keep the Context Packet concise: task/chunk, receiving agent, objective, relevant intent, navigation mode, candidate evidence with reasons, active skills, required validation, risks/blockers, and expansion policy.
