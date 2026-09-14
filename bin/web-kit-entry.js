@@ -112,7 +112,7 @@ function runWorkProgress(rawArgs, alias = "progress") {
     return 1;
   }
 
-  return runNode(engine, ["--project", project, ...commandArgs], { cwd: project });
+  return runNode(engine, [...commandArgs, "--project", project], { cwd: project });
 }
 
 const args = process.argv.slice(2);
