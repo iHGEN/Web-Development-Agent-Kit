@@ -9,6 +9,7 @@ const JOB_STATUSES = new Set([
   "FAILED", "CANCELLED",
 ]);
 const CYCLE_KINDS = new Set(["discovery", "planning", "routing", "implementation", "testing", "review", "validation", "prose"]);
+const IMPLEMENTATION_OR_LATER = new Set(["IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING", "DONE"]);
 const WEIGHTS = {
   SMALL: { discovery: 5, planning: 0, implementation: 70, testing: 15, review: 5, validation: 5 },
   MEDIUM: { discovery: 10, planning: 5, implementation: 60, testing: 15, review: 5, validation: 5 },
@@ -51,7 +52,10 @@ function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function safeTaskId(value) {
   const id = String(value || "").trim();
   if (!id) throw new Error("--task-id is required");
-  return id.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120) || "task";
+  if (id.length > 120 || !/^[a-zA-Z0-9._-]+$/.test(id)) {
+    throw new Error("--task-id must be 1-120 characters using only letters, numbers, '.', '_', or '-'");
+  }
+  return id;
 }
 function statePaths(project, taskId = null) {
   const root = path.join(project, ".agent-core", "state");
@@ -115,9 +119,7 @@ function recalculate(job) {
   return job;
 }
 function appendEvidence(job, values, kind = "note") {
-  for (const value of values) {
-    job.evidence.items.push({ kind, value: String(value), at: nowIso() });
-  }
+  for (const value of values) job.evidence.items.push({ kind, value: String(value), at: nowIso() });
   if (job.evidence.items.length > 200) job.evidence.items = job.evidence.items.slice(-200);
 }
 function loadJob(project, taskId) {
@@ -136,7 +138,10 @@ function writeJob(project, job) {
 function writeEfficiency(project) {
   const paths = statePaths(project);
   fs.mkdirSync(paths.jobs, { recursive: true });
-  const jobs = fs.readdirSync(paths.jobs).filter((name) => name.endsWith(".json")).map((name) => readJson(path.join(paths.jobs, name), null)).filter(Boolean);
+  const jobs = fs.readdirSync(paths.jobs)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => readJson(path.join(paths.jobs, name), null))
+    .filter(Boolean);
   const totals = defaultMetrics();
   for (const job of jobs) {
     const metrics = job.metrics || {};
@@ -186,19 +191,7 @@ function start(project, args) {
 function update(project, args) {
   const taskId = safeTaskId(getArg(args, "--task-id"));
   const { job } = loadJob(project, taskId);
-  const status = getArg(args, "--status");
-  if (status) {
-    const normalized = String(status).toUpperCase();
-    if (!JOB_STATUSES.has(normalized)) throw new Error(`Unsupported status: ${normalized}`);
-    if (normalized === "PLANNING" && !job.governance.plan_required) throw new Error("SMALL/non-plan job cannot enter PLANNING; route to implementation instead.");
-    if (normalized === "DONE" && job.final_validation.status !== "PASS") throw new Error("DONE requires --final-validation PASS first.");
-    job.status = normalized;
-    job.current_phase = normalized;
-  }
-  const agent = getArg(args, "--agent");
-  if (agent) job.current_agent = agent;
-  const next = getArg(args, "--next");
-  if (next) job.next_action = next;
+
   const planStatus = getArg(args, "--plan-status");
   if (planStatus) job.plan.status = String(planStatus).toUpperCase();
   const planBullets = numberArg(args, "--plan-bullets");
@@ -208,6 +201,30 @@ function update(project, args) {
   }
   const planVersion = numberArg(args, "--plan-version");
   if (planVersion !== null) job.plan.version = Math.max(0, Math.floor(planVersion));
+
+  const finalValidation = getArg(args, "--final-validation");
+  if (finalValidation) job.final_validation.status = String(finalValidation).toUpperCase();
+  const review = getArg(args, "--review");
+  if (review) job.review.status = String(review).toUpperCase();
+
+  const status = getArg(args, "--status");
+  if (status) {
+    const normalized = String(status).toUpperCase();
+    if (!JOB_STATUSES.has(normalized)) throw new Error(`Unsupported status: ${normalized}`);
+    if (normalized === "PLANNING" && !job.governance.plan_required) throw new Error("SMALL/non-plan job cannot enter PLANNING; route to implementation instead.");
+    if (IMPLEMENTATION_OR_LATER.has(normalized) && job.governance.plan_required && job.plan.status !== "APPROVED") {
+      throw new Error(`${job.classification}${job.high_risk ? "/high-risk" : ""} job requires an approved ${job.governance.plan_mode} plan before implementation.`);
+    }
+    if (normalized === "DONE" && job.final_validation.status !== "PASS") throw new Error("DONE requires final validation PASS.");
+    job.status = normalized;
+    job.current_phase = normalized;
+  }
+
+  const agent = getArg(args, "--agent");
+  if (agent) job.current_agent = agent;
+  const next = getArg(args, "--next");
+  if (next) job.next_action = next;
+
   const implTotal = numberArg(args, "--implementation-total");
   const implCompleted = numberArg(args, "--implementation-completed");
   if (implTotal !== null) job.implementation.total = Math.max(0, Math.floor(implTotal));
@@ -215,6 +232,7 @@ function update(project, args) {
   if (job.implementation.total && job.implementation.completed > job.implementation.total) throw new Error("implementation completed cannot exceed total");
   const active = getArg(args, "--active");
   if (active) job.implementation.active = active;
+
   for (const [argName, field] of [["--files-changed", "files_changed"], ["--tests-added", "tests_added"], ["--tests-total", "tests_total"], ["--tests-passing", "tests_passing"]]) {
     const value = numberArg(args, argName);
     if (value !== null) job.evidence[field] = Math.max(0, Math.floor(value));
@@ -222,10 +240,7 @@ function update(project, args) {
   if (job.evidence.tests_total && job.evidence.tests_passing > job.evidence.tests_total) throw new Error("tests passing cannot exceed tests total");
   const build = getArg(args, "--build");
   if (build) job.evidence.build = String(build).toUpperCase();
-  const review = getArg(args, "--review");
-  if (review) job.review.status = String(review).toUpperCase();
-  const finalValidation = getArg(args, "--final-validation");
-  if (finalValidation) job.final_validation.status = String(finalValidation).toUpperCase();
+
   appendEvidence(job, getAllArgs(args, "--evidence"), "update");
   if (hasArg(args, "--replan")) job.metrics.replans += 1;
   if (hasArg(args, "--handoff")) job.metrics.handoffs += 1;
@@ -255,9 +270,16 @@ function cycle(project, args) {
       reason: "Two consecutive post-discovery cycles produced planning/routing/prose without implementation, test, review, validation, or concrete evidence.",
       forced_next_phase: "IMPLEMENTING",
     };
-    job.status = "IMPLEMENTING";
-    job.current_phase = "IMPLEMENTING";
-    job.next_action = "Stop meta-work. Make the next evidence-supported repository change now, then run its local check.";
+    if (!job.governance.plan_required || job.plan.status === "APPROVED") {
+      job.status = "IMPLEMENTING";
+      job.current_phase = "IMPLEMENTING";
+      job.next_action = "Stop meta-work. Make the next evidence-supported repository change now, then run its local check.";
+    } else {
+      job.status = "PLANNING";
+      job.current_phase = "PLANNING";
+      job.next_action = `Stop expanding the plan. Finish the smallest ${job.governance.plan_mode} plan allowed by policy, mark it APPROVED through the required validation path, then implement immediately.`;
+      job.anti_slop.forced_next_phase = "PLANNING_APPROVAL_THEN_IMPLEMENTING";
+    }
   } else if (!["prose", "planning", "routing"].includes(kind)) {
     job.anti_slop = { violation: false, reason: null, forced_next_phase: null };
   }
@@ -298,7 +320,7 @@ function show(project, args) {
   };
 }
 function printHelp() {
-  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff]\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. Planning alone cannot make a task appear mostly complete, and two consecutive post-discovery meta-only cycles force the job back to IMPLEMENTING.`);
+  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff]\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM is capped at six bullets, formal/high-risk work cannot enter implementation until its plan is approved, and two consecutive post-discovery meta-only cycles trigger the anti-slop guard.`);
 }
 
 const args = process.argv.slice(2);
