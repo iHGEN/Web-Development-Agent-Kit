@@ -34,7 +34,9 @@ run("git", ["commit", "-m", "baseline"], { cwd: project });
 
 const progress = path.join(project, ".agent-core", "bin", "work-progress.mjs");
 const bridge = path.join(project, ".agent-core", "bin", "provider-bridge.mjs");
-const jobFile = path.join(project, ".agent-core", "state", "jobs", "TASK-BRIDGE.json");
+const jobsDir = path.join(project, ".agent-core", "state", "jobs");
+const jobFile = path.join(jobsDir, "TASK-BRIDGE.json");
+const otherJobFile = path.join(jobsDir, "TASK-OTHER.json");
 assert(fs.existsSync(progress), "work-progress runtime missing");
 assert(fs.existsSync(bridge), "provider bridge missing");
 
@@ -63,17 +65,29 @@ function notify(message) {
   run(process.execPath, [bridge, "codex-notify", JSON.stringify(event)], { cwd: project, env });
 }
 
-// First callback establishes a repository baseline and is not charged as a cycle.
+// First callback establishes a repository baseline and pins this supervisor to TASK-BRIDGE.
 notify("I inspected the target and am starting implementation.");
 let job = readJson(jobFile);
 assert(job.metrics.ai_cycles === 0, `baseline callback should not count as a cycle, got ${job.metrics.ai_cycles}`);
 
-// A real tracked source edit between safe turns is automatically implementation evidence.
+// A different job may become more recently updated; this provider session must stay attached to its original job.
+run(process.execPath, [
+  progress, "start", "--task-id", "TASK-OTHER", "--classification", "SMALL",
+  "--title", "Concurrent other task", "--project", project,
+], { cwd: project });
+run(process.execPath, [
+  progress, "update", "--task-id", "TASK-OTHER", "--status", "IMPLEMENTING",
+  "--agent", "frontend-developer", "--next", "unrelated concurrent work", "--project", project,
+], { cwd: project });
+
+// A real tracked source edit between safe turns is automatically implementation evidence on TASK-BRIDGE, not TASK-OTHER.
 fs.writeFileSync(path.join(project, "src", "index.js"), "export const value = 2;\n");
 notify("Implemented the tracked source change.");
 job = readJson(jobFile);
+let other = readJson(otherJobFile);
 assert(job.metrics.ai_cycles === 1, `expected one automatic cycle, got ${job.metrics.ai_cycles}`);
 assert(job.metrics.implementation_cycles === 1, "tracked repository delta was not classified as implementation");
+assert(other.metrics.ai_cycles === 0, "provider bridge drifted to a newer unrelated active job");
 assert(job.metrics.prose_only_cycles === 0, "implementation turn was incorrectly classified as prose");
 
 // New untracked files and later edits to the same untracked file must both count as repository work.
@@ -114,5 +128,7 @@ run(process.execPath, [
 notify("State was updated but application code was not changed.");
 job = readJson(jobFile);
 assert(job.metrics.implementation_cycles === 3, "Web-Kit state files were misclassified as repository implementation");
+other = readJson(otherJobFile);
+assert(other.metrics.ai_cycles === 0, "unrelated active job received cycles from the pinned provider session");
 
 console.log("Provider bridge automatic progress smoke: PASS");
