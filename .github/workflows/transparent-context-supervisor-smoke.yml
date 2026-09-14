@@ -7,9 +7,11 @@ on:
       - "scripts/**"
       - "pack/runtime/**"
       - "pack/rules/context-rollover.md"
+      - "pack/rules/implementation-first.md"
       - "pack/agents/context-rollover-manager.md"
       - "pack/router/context-policy.json"
       - "tests/transparent-context-supervisor-smoke.mjs"
+      - "tests/provider-bridge-progress-smoke.mjs"
       - "tests/linux-provider-process-tree-smoke.mjs"
       - "tests/fixtures/mock-transparent-provider.mjs"
       - "tests/fixtures/mock-provider-tree-root.mjs"
@@ -21,9 +23,11 @@ on:
       - "scripts/**"
       - "pack/runtime/**"
       - "pack/rules/context-rollover.md"
+      - "pack/rules/implementation-first.md"
       - "pack/agents/context-rollover-manager.md"
       - "pack/router/context-policy.json"
       - "tests/transparent-context-supervisor-smoke.mjs"
+      - "tests/provider-bridge-progress-smoke.mjs"
       - "tests/linux-provider-process-tree-smoke.mjs"
       - "tests/fixtures/mock-transparent-provider.mjs"
       - "tests/fixtures/mock-provider-tree-root.mjs"
@@ -62,10 +66,12 @@ jobs:
           node --check pack/runtime/provider-bridge.mjs
           node --check pack/runtime/provider-process-wrapper.mjs
           node --check pack/runtime/supervisor-setup.mjs
+          node --check pack/runtime/work-progress.mjs
           node --check tests/fixtures/mock-transparent-provider.mjs
           node --check tests/fixtures/mock-provider-tree-root.mjs
           node --check tests/fixtures/mock-provider-tree-leaf.mjs
           node --check tests/transparent-context-supervisor-smoke.mjs
+          node --check tests/provider-bridge-progress-smoke.mjs
           node --check tests/linux-provider-process-tree-smoke.mjs
           node -e "const p=require('./pack/router/context-policy.json'); if(p.version!==7 || !p.session_control?.normal_install_installs_user_supervisor) process.exit(1)"
 
@@ -74,6 +80,12 @@ jobs:
         run: |
           set -euo pipefail
           node tests/transparent-context-supervisor-smoke.mjs
+
+      - name: Verify provider turns update evidence-based progress
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/provider-bridge-progress-smoke.mjs
 
       - name: Verify Linux rollover kills the full provider process tree
         if: runner.os == 'Linux'
