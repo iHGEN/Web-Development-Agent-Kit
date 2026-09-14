@@ -102,12 +102,14 @@ let large = readJson(jobFile("TASK-LARGE"));
 assert(large.governance.plan_mode === "formal", "LARGE should use formal planning");
 assert(large.governance.plan_validator_required === true, "LARGE should require Plan Validator");
 failCmd("update", "--task-id", "TASK-LARGE", "--status", "IMPLEMENTING");
+cmd("update", "--task-id", "TASK-LARGE", "--status", "PLANNING", "--plan-bullets", "2", "--evidence", "formal plan drafting started");
 cmd("cycle", "--task-id", "TASK-LARGE", "--kind", "planning");
 cmd("cycle", "--task-id", "TASK-LARGE", "--kind", "routing");
 large = readJson(jobFile("TASK-LARGE"));
 assert(large.anti_slop.violation === true, "formal planning loop was not detected");
 assert(large.status === "PLANNING", "formal planning anti-slop guard bypassed plan approval");
 assert(large.anti_slop.forced_next_phase === "PLANNING_APPROVAL_THEN_IMPLEMENTING", "formal planning guard did not preserve approval gate");
+failCmd("cycle", "--task-id", "TASK-LARGE", "--kind", "implementation", "--evidence", "must not bypass approval");
 
 cmd("start", "--task-id", "TASK-RISK", "--classification", "SMALL", "--high-risk", "--title", "Small but high risk");
 const risk = readJson(jobFile("TASK-RISK"));
@@ -124,6 +126,10 @@ assert(projectStatus.areas.frontend.progress === 40, "frontend project status mi
 assert(projectStatus.overall_progress === 60, `unexpected project overall progress ${projectStatus.overall_progress}`);
 failCmd("project-update", "--area", "database", "--progress", "100");
 
+const status = JSON.parse(cmd("show").stdout);
+assert(Array.isArray(status.jobs) && status.jobs.length === 4, "status output should summarize tracked jobs");
+assert(status.jobs.some((item) => item.task_id === "TASK-SMALL" && item.progress === 100), "status output is missing completed SMALL job");
+
 const efficiency = readJson(path.join(project, ".agent-core", "state", "metrics", "workflow-efficiency.json"));
 assert(efficiency.jobs === 4, `expected four tracked jobs, got ${efficiency.jobs}`);
 assert(efficiency.totals.ai_cycles >= 7, "workflow efficiency metrics were not aggregated");
@@ -132,5 +138,6 @@ const workflow = fs.readFileSync(path.join(project, ".agent-core", "rules", "wor
 assert(workflow.includes("two consecutive cycles"), "canonical workflow is missing anti-slop guard");
 assert(workflow.includes("3-6 execution bullets"), "canonical workflow is missing MEDIUM plan cap");
 assert(workflow.includes("run security-review"), "canonical workflow is missing Security Review integration");
+assert(workflow.includes("Explicit Session Controller interpretation"), "canonical workflow is missing explicit controller compatibility rules");
 
 console.log("Implementation-first work progress smoke: PASS");
