@@ -270,6 +270,14 @@ function repositoryFingerprint(project) {
   return hash(`${head}\n--status--\n${status}\n--diff--\n${diff}\n--staged--\n${staged}\n--untracked--\n${untracked}`);
 }
 
+function activeJobById(paths, taskId) {
+  if (!taskId) return null;
+  const file = path.join(paths.jobs, `${taskId}.json`);
+  const job = readJson(file, null);
+  if (!job || TERMINAL_JOB_STATUSES.has(String(job.status || "").toUpperCase())) return null;
+  return { file, job };
+}
+
 function latestActiveJob(paths) {
   if (!fs.existsSync(paths.jobs)) return null;
   let latest = null;
@@ -283,6 +291,10 @@ function latestActiveJob(paths) {
     if (!latest || mtimeMs > latest.mtimeMs) latest = { file, job, mtimeMs };
   }
   return latest;
+}
+
+function activeJobForObservation(paths, observation) {
+  return activeJobById(paths, observation?.task_id) || latestActiveJob(paths);
 }
 
 function invokeWorkProgress(paths, job, kind, evidence) {
@@ -309,7 +321,7 @@ function recordProviderTurn(provider, sessionId, turnKey) {
   const observation = readJson(paths.turnState, {});
   if (observation.last_turn_key === turnKey) return;
 
-  const active = latestActiveJob(paths);
+  const active = activeJobForObservation(paths, observation);
   const fingerprint = repositoryFingerprint(paths.project);
   const job = active?.job || null;
   const jobId = job?.task_id || null;
