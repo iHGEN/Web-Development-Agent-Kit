@@ -38,6 +38,7 @@ const jobsDir = path.join(project, ".agent-core", "state", "jobs");
 const jobFile = path.join(jobsDir, "TASK-BRIDGE.json");
 const otherJobFile = path.join(jobsDir, "TASK-OTHER.json");
 const claudeJobFile = path.join(jobsDir, "TASK-CLAUDE.json");
+const planJobFile = path.join(jobsDir, "TASK-PLAN.json");
 assert(fs.existsSync(progress), "work-progress runtime missing");
 assert(fs.existsSync(bridge), "provider bridge missing");
 
@@ -57,21 +58,19 @@ const codexEnv = {
   WEB_KIT_SUPERVISOR_ID: "bridge-progress-smoke",
   CODEX_HOME: path.join(project, ".codex-empty"),
 };
-function notify(message) {
+function notify(message, env = codexEnv, threadId = "bridge-smoke-thread") {
   const event = {
-    "thread-id": "bridge-smoke-thread",
+    "thread-id": threadId,
     "input-messages": ["implement the task"],
     "last-assistant-message": message,
   };
-  run(process.execPath, [bridge, "codex-notify", JSON.stringify(event)], { cwd: project, env: codexEnv });
+  run(process.execPath, [bridge, "codex-notify", JSON.stringify(event)], { cwd: project, env });
 }
 
-// First callback establishes a repository baseline and pins this supervisor to TASK-BRIDGE.
 notify("I inspected the target and am starting implementation.");
 let job = readJson(jobFile);
 assert(job.metrics.ai_cycles === 0, `baseline callback should not count as a cycle, got ${job.metrics.ai_cycles}`);
 
-// A different job may become more recently updated; this provider session must stay attached to its original job.
 run(process.execPath, [
   progress, "start", "--task-id", "TASK-OTHER", "--classification", "SMALL",
   "--title", "Concurrent other task", "--project", project,
@@ -81,7 +80,6 @@ run(process.execPath, [
   "--agent", "frontend-developer", "--next", "unrelated concurrent work", "--project", project,
 ], { cwd: project });
 
-// A real tracked source edit between safe turns is automatically implementation evidence on TASK-BRIDGE, not TASK-OTHER.
 fs.writeFileSync(path.join(project, "src", "index.js"), "export const value = 2;\n");
 notify("Implemented the tracked source change.");
 job = readJson(jobFile);
@@ -91,7 +89,6 @@ assert(job.metrics.implementation_cycles === 1, "tracked repository delta was no
 assert(other.metrics.ai_cycles === 0, "provider bridge drifted to a newer unrelated active job");
 assert(job.metrics.prose_only_cycles === 0, "implementation turn was incorrectly classified as prose");
 
-// New untracked files and later edits to the same untracked file must both count as repository work.
 fs.writeFileSync(path.join(project, "src", "new.js"), "export const newValue = 1;\n");
 notify("Added a new untracked implementation file.");
 job = readJson(jobFile);
@@ -102,7 +99,6 @@ notify("Updated the existing untracked implementation file.");
 job = readJson(jobFile);
 assert(job.metrics.implementation_cycles === 3, "content change inside an already-untracked file was not detected");
 
-// No repository delta during IMPLEMENTING is meta-only evidence.
 notify("I am thinking about the next step.");
 job = readJson(jobFile);
 assert(job.metrics.prose_only_cycles === 1, "first stalled implementation turn was not counted");
@@ -115,13 +111,11 @@ assert(job.anti_slop.violation === true, "anti-slop did not trigger after two st
 assert(job.anti_slop.forced_next_phase === "IMPLEMENTING", "anti-slop did not force IMPLEMENTING");
 assert(/Stop meta-work/.test(job.next_action), "anti-slop did not write an implementation next action");
 
-// Provider bridge callbacks can repeat; identical callback payload must not double-count.
 const cyclesBeforeDuplicate = job.metrics.ai_cycles;
 notify("I will think about the plan again.");
 job = readJson(jobFile);
 assert(job.metrics.ai_cycles === cyclesBeforeDuplicate, "duplicate provider callback was double-counted");
 
-// Web-Kit state writes themselves must not look like application implementation.
 run(process.execPath, [
   progress, "update", "--task-id", "TASK-BRIDGE", "--status", "IMPLEMENTING",
   "--next", "implement now", "--evidence", "state-only update", "--project", project,
@@ -132,7 +126,6 @@ assert(job.metrics.implementation_cycles === 3, "Web-Kit state files were miscla
 other = readJson(otherJobFile);
 assert(other.metrics.ai_cycles === 0, "unrelated active job received cycles from the pinned provider session");
 
-// Claude status-line bridge follows the same baseline/delta/dedup/anti-slop behavior.
 run(process.execPath, [
   progress, "start", "--task-id", "TASK-CLAUDE", "--classification", "SMALL",
   "--title", "Claude automatic bridge progress", "--project", project,
@@ -186,5 +179,35 @@ claudeJob = readJson(claudeJobFile);
 assert(claudeJob.metrics.prose_only_cycles === 2, "Claude stalled turns did not feed the anti-slop guard");
 assert(claudeJob.anti_slop.violation === true, "Claude anti-slop guard did not trigger");
 assert(claudeJob.anti_slop.forced_next_phase === "IMPLEMENTING", "Claude anti-slop guard did not force implementation");
+
+run(process.execPath, [
+  progress, "start", "--task-id", "TASK-PLAN", "--classification", "MEDIUM",
+  "--title", "Planning churn classification", "--project", project,
+], { cwd: project });
+run(process.execPath, [
+  progress, "update", "--task-id", "TASK-PLAN", "--status", "PLANNING",
+  "--agent", "web-orchestrator", "--plan-bullets", "3", "--next", "finish the short plan",
+  "--project", project,
+], { cwd: project });
+const planEnv = {
+  ...process.env,
+  WEB_KIT_PROJECT_ROOT: project,
+  WEB_KIT_SUPERVISOR_ID: "planning-bridge-progress-smoke",
+  CODEX_HOME: path.join(project, ".codex-empty"),
+};
+notify("Starting the short plan.", planEnv, "planning-smoke-thread");
+fs.writeFileSync(path.join(project, "PLAN.md"), "# Plan\n1. First version\n");
+notify("Expanded the plan file.", planEnv, "planning-smoke-thread");
+let planJob = readJson(planJobFile);
+assert(planJob.metrics.planning_cycles === 1, "planning repository change was not classified as planning");
+assert(planJob.metrics.implementation_cycles === 0, "plan-file edit masqueraded as implementation progress");
+fs.writeFileSync(path.join(project, "PLAN.md"), "# Plan\n1. First version\n2. More planning\n");
+notify("Expanded the plan again.", planEnv, "planning-smoke-thread");
+planJob = readJson(planJobFile);
+assert(planJob.metrics.planning_cycles === 2, "second planning turn was not counted");
+assert(planJob.metrics.implementation_cycles === 0, "repeated plan-file edits were credited as implementation");
+assert(planJob.anti_slop.violation === true, "plan-file churn did not trigger anti-slop");
+assert(planJob.status === "PLANNING", "planning anti-slop incorrectly bypassed plan approval");
+assert(planJob.anti_slop.forced_next_phase === "PLANNING_APPROVAL_THEN_IMPLEMENTING", "planning anti-slop did not preserve the approval gate");
 
 console.log("Provider bridge automatic progress smoke: PASS");
