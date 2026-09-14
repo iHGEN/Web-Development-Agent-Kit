@@ -128,6 +128,31 @@ function loadJob(project, taskId) {
   if (!job) throw new Error(`Job ${taskId} does not exist. Run 'start' first.`);
   return { job, paths };
 }
+function listJobs(project) {
+  const paths = statePaths(project);
+  if (!fs.existsSync(paths.jobs)) return [];
+  return fs.readdirSync(paths.jobs)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => readJson(path.join(paths.jobs, name), null))
+    .filter(Boolean)
+    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+}
+function jobSummary(job) {
+  return {
+    task_id: job.task_id,
+    title: job.title,
+    classification: job.classification,
+    high_risk: Boolean(job.high_risk),
+    status: job.status,
+    progress: job.progress,
+    current_agent: job.current_agent,
+    active_implementation: job.implementation?.active || null,
+    next_action: job.next_action,
+    anti_slop: job.anti_slop,
+    useful_work_ratio: Number(job.metrics?.useful_work_ratio || 0),
+    updated_at: job.updated_at,
+  };
+}
 function writeJob(project, job) {
   const paths = statePaths(project, job.task_id);
   recalculate(job);
@@ -138,10 +163,7 @@ function writeJob(project, job) {
 function writeEfficiency(project) {
   const paths = statePaths(project);
   fs.mkdirSync(paths.jobs, { recursive: true });
-  const jobs = fs.readdirSync(paths.jobs)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => readJson(path.join(paths.jobs, name), null))
-    .filter(Boolean);
+  const jobs = listJobs(project);
   const totals = defaultMetrics();
   for (const job of jobs) {
     const metrics = job.metrics || {};
@@ -252,6 +274,9 @@ function cycle(project, args) {
   const kind = String(getArg(args, "--kind") || "").toLowerCase();
   if (!CYCLE_KINDS.has(kind)) throw new Error(`--kind must be one of: ${[...CYCLE_KINDS].join(", ")}`);
   const { job } = loadJob(project, taskId);
+  if (kind === "implementation" && job.governance.plan_required && job.plan.status !== "APPROVED") {
+    throw new Error(`Cannot record implementation before the required ${job.governance.plan_mode} plan is APPROVED.`);
+  }
   const evidence = getAllArgs(args, "--evidence");
   const m = job.metrics;
   m.ai_cycles += 1;
@@ -313,8 +338,10 @@ function projectUpdate(project, args) {
 function show(project, args) {
   const taskId = getArg(args, "--task-id");
   const paths = statePaths(project, taskId || null);
+  const jobs = listJobs(project);
   return {
     job: taskId ? readJson(paths.job, null) : null,
+    jobs: taskId ? undefined : jobs.slice(0, 50).map(jobSummary),
     project_status: readJson(paths.projectStatus, null),
     workflow_efficiency: readJson(paths.efficiency, null),
   };
