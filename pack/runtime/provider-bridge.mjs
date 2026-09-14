@@ -9,6 +9,8 @@ const TERMINAL_JOB_STATUSES = new Set(["DONE", "BLOCKED", "WAITING_USER", "WAITI
 const MAX_UNTRACKED_FILES = 200;
 const MAX_UNTRACKED_BYTES_PER_FILE = 64 * 1024;
 const MAX_UNTRACKED_TOTAL_BYTES = 512 * 1024;
+const MAX_CHANGED_PATHS = 250;
+const MAX_PATH_FINGERPRINT_BYTES = 64 * 1024;
 
 function readAllStdin() {
   try { return fs.readFileSync(0, "utf8"); }
@@ -270,6 +272,76 @@ function repositoryFingerprint(project) {
   return hash(`${head}\n--status--\n${status}\n--diff--\n${diff}\n--staged--\n${staged}\n--untracked--\n${untracked}`);
 }
 
+function changedRepositoryPaths(project) {
+  const pathspec = ["--", ".", ":(exclude).agent-core/state/**", ":(exclude).agent-core/security-reviews/**"];
+  const tracked = gitRun(project, ["diff", "--name-only", ...pathspec]);
+  const staged = gitRun(project, ["diff", "--cached", "--name-only", ...pathspec]);
+  const untracked = gitRun(project, ["ls-files", "--others", "--exclude-standard"]);
+  return [...new Set(`${tracked}\n${staged}\n${untracked}`.split(/\r?\n/)
+    .map((file) => file.trim())
+    .filter(Boolean)
+    .filter((file) => !managedStatePath(file)))]
+    .sort()
+    .slice(0, MAX_CHANGED_PATHS);
+}
+
+function pathContentFingerprint(project, relative) {
+  const root = path.resolve(project);
+  const absolute = path.resolve(project, relative);
+  if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) return "outside-project";
+  let stat;
+  try { stat = fs.lstatSync(absolute); }
+  catch { return "missing"; }
+  if (stat.isSymbolicLink()) {
+    try { return `symlink:${fs.readlinkSync(absolute)}`; }
+    catch { return "symlink:unreadable"; }
+  }
+  if (!stat.isFile()) return `non-file:${stat.mode}`;
+  const firstLength = Math.min(stat.size, MAX_PATH_FINGERPRINT_BYTES);
+  const lastLength = stat.size > MAX_PATH_FINGERPRINT_BYTES ? Math.min(MAX_PATH_FINGERPRINT_BYTES, stat.size - firstLength) : 0;
+  let fd;
+  try {
+    fd = fs.openSync(absolute, "r");
+    const first = Buffer.alloc(firstLength);
+    if (firstLength) fs.readSync(fd, first, 0, firstLength, 0);
+    let last = Buffer.alloc(0);
+    if (lastLength) {
+      last = Buffer.alloc(lastLength);
+      fs.readSync(fd, last, 0, lastLength, stat.size - lastLength);
+    }
+    return hash(Buffer.concat([Buffer.from(`${stat.size}|`, "utf8"), first, last]));
+  } catch {
+    return `unreadable:${stat.size}`;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function repositoryPathFingerprints(project) {
+  const result = {};
+  for (const relative of changedRepositoryPaths(project)) result[relative] = pathContentFingerprint(project, relative);
+  return result;
+}
+
+function changedPathsSince(previous, current, repositoryChanged) {
+  const before = previous && typeof previous === "object" ? previous : {};
+  const after = current && typeof current === "object" ? current : {};
+  const paths = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((file) => before[file] !== after[file])
+    .sort();
+  if (repositoryChanged && !paths.length) return ["<unknown-repository-delta>"];
+  return paths;
+}
+
+function isPlanningArtifact(file) {
+  const normalized = String(file || "").replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  if (!normalized || normalized.startsWith("<")) return false;
+  const base = normalized.split("/").pop();
+  if (["plan.md", "plan.txt", "implementation-plan.md", "design.md", "technical-design.md", "solution-design.md", "architecture.md"].includes(base)) return true;
+  if (/\.(?:plan|design|architecture|adr)\.md$/.test(base)) return true;
+  return ["docs/plans/", "docs/design/", "docs/architecture/", "docs/adr/", "docs/adrs/", ".agent-core/plans/", ".agent-core/design/"].some((prefix) => normalized.startsWith(prefix));
+}
+
 function validTaskId(taskId) {
   const value = String(taskId || "");
   return value.length > 0 && value.length <= 120 && /^[a-zA-Z0-9._-]+$/.test(value);
@@ -340,7 +412,9 @@ function recordProviderTurn(provider, sessionId, turnKey) {
 
   const active = activeJobForObservation(paths, observation);
   const fingerprint = repositoryFingerprint(paths.project);
+  const currentPathFingerprints = repositoryPathFingerprints(paths.project);
   const previousFingerprint = observation.repository_fingerprint || null;
+  const previousPathFingerprints = observation.repository_path_fingerprints || {};
   const job = active?.job || null;
   const jobId = job?.task_id || null;
   const currentCycles = Number(job?.metrics?.ai_cycles || 0);
@@ -349,6 +423,8 @@ function recordProviderTurn(provider, sessionId, turnKey) {
     && Number.isFinite(Number(observation.job_ai_cycles))
     && currentCycles > Number(observation.job_ai_cycles);
   const repositoryChanged = Boolean(previousFingerprint && fingerprint && previousFingerprint !== fingerprint);
+  const changedPaths = changedPathsSince(previousPathFingerprints, currentPathFingerprints, repositoryChanged);
+  const planningArtifactsOnly = repositoryChanged && changedPaths.length > 0 && changedPaths.every(isPlanningArtifact);
   const pendingGovernanceDelta = Boolean(
     repositoryChanged
     && observation.pending_repository_fingerprint
@@ -369,6 +445,7 @@ function recordProviderTurn(provider, sessionId, turnKey) {
         governanceViolation = {
           ...observation.governance_violation,
           status,
+          changed_paths: changedPaths,
           message: "The previously blocked repository delta is still pending because the required plan/validator gate is not approved.",
           pending_repository_fingerprint: fingerprint,
           detected_at: new Date().toISOString(),
@@ -376,23 +453,32 @@ function recordProviderTurn(provider, sessionId, turnKey) {
       } else {
         recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: previously blocked repository delta now allowed by governance`);
       }
-    } else if (status === "PLANNING") {
-      attempted = true;
-      recorded = invokeWorkProgress(paths, job, "planning", "");
-    } else if (repositoryChanged) {
-      attempted = true;
-      if (!planGateReady(job)) {
+    } else if (repositoryChanged && !planGateReady(job)) {
+      if (status === "PLANNING" && planningArtifactsOnly) {
+        attempted = true;
+        recorded = invokeWorkProgress(paths, job, "planning", "");
+      } else {
+        attempted = true;
         governanceViolation = {
           type: "PRE_APPROVAL_REPOSITORY_DELTA",
           task_id: jobId,
           status,
-          message: "Repository changed before the required plan/validator gate was approved. The prior repository fingerprint is preserved so this delta remains pending.",
+          changed_paths: changedPaths,
+          message: "Repository source changed before the required plan/validator gate was approved. Only recognized planning/design artifacts may change during PLANNING; the prior repository fingerprint is preserved so this delta remains pending.",
           pending_repository_fingerprint: fingerprint,
           detected_at: new Date().toISOString(),
         };
+      }
+    } else if (repositoryChanged) {
+      attempted = true;
+      if (status === "PLANNING" && planningArtifactsOnly) {
+        recorded = invokeWorkProgress(paths, job, "planning", "");
       } else {
         recorded = invokeWorkProgress(paths, job, "implementation", `automatic ${provider} safe-turn evidence: repository diff/status changed`);
       }
+    } else if (status === "PLANNING") {
+      attempted = true;
+      recorded = invokeWorkProgress(paths, job, "planning", "");
     } else if (status === "IMPLEMENTING") {
       attempted = true;
       recorded = invokeWorkProgress(paths, job, "prose", "");
@@ -404,6 +490,7 @@ function recordProviderTurn(provider, sessionId, turnKey) {
       type: "PROGRESS_RECORDING_FAILED",
       task_id: jobId,
       status: String(job?.status || "").toUpperCase(),
+      changed_paths: changedPaths,
       message: "Repository changed, but the progress engine rejected or failed to record the cycle. The previous fingerprint is preserved for retry.",
       pending_repository_fingerprint: fingerprint,
       detected_at: new Date().toISOString(),
@@ -413,7 +500,7 @@ function recordProviderTurn(provider, sessionId, turnKey) {
   const refreshed = active?.file ? readJson(active.file, job) : job;
   const shouldPreserveFingerprint = Boolean(repositoryChanged && attempted && !recorded);
   atomicWrite(paths.turnState, {
-    schema_version: 2,
+    schema_version: 3,
     supervisor_id: paths.supervisorId,
     provider,
     session_id: sessionId || null,
@@ -421,7 +508,9 @@ function recordProviderTurn(provider, sessionId, turnKey) {
     task_id: refreshed?.task_id || jobId,
     job_ai_cycles: Number(refreshed?.metrics?.ai_cycles || currentCycles),
     repository_fingerprint: shouldPreserveFingerprint ? previousFingerprint : fingerprint,
+    repository_path_fingerprints: shouldPreserveFingerprint ? previousPathFingerprints : currentPathFingerprints,
     pending_repository_fingerprint: shouldPreserveFingerprint ? fingerprint : null,
+    pending_changed_paths: shouldPreserveFingerprint ? changedPaths : [],
     automatic_cycle_recorded: recorded,
     governance_violation: governanceViolation,
     observed_at: new Date().toISOString(),
