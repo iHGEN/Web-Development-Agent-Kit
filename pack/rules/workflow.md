@@ -199,7 +199,7 @@ Record meta-only cycles honestly:
 node .agent-core/bin/work-progress.mjs cycle --task-id <task-id> --kind prose
 ```
 
-Two consecutive post-discovery meta-only cycles force the job back to `IMPLEMENTING`. The next action is to make the next evidence-supported repository change.
+For plan-free work, or work whose required plan is already approved, two consecutive post-discovery meta-only cycles force the job back to `IMPLEMENTING`. If a required short/formal plan is not yet approved, the guard stops further plan expansion and requires the smallest allowed plan/approval to complete before implementation begins.
 
 Target diagnostic ratio for normal work:
 
@@ -322,6 +322,18 @@ A fresh context must not restart discovery or recreate an approved/short plan un
 Handoffs should stay compact: task ID, classification/status, completed work, current diff/test evidence, active agent, next action, blockers.
 
 Current source/diff/tests/runtime override handoff summaries.
+
+### Explicit Session Controller interpretation
+
+The older explicit `.agent-core/bin/session-controller.mjs` may describe one "safe workflow unit" per controller cycle. Interpret that unit using this canonical classification, not as a universal planning gate:
+
+- `SMALL`: once the implementation target is known, the next safe unit is a coherent implementation change plus its required local check; an "approved implementation step" does **not** create a plan requirement for SMALL work.
+- `MEDIUM`: at most one short 3–6 bullet planning unit is allowed before implementation units begin.
+- `LARGE/high-risk`: formal plan/approval units remain valid where required.
+- A fresh controller cycle must read current job state and exact next action. It must not repeat discovery/planning merely because the provider process/session is fresh.
+- If the anti-slop guard is active, honor its forced next phase and do not choose another prose-only unit.
+
+The explicit controller's one-unit boundary limits session batching; it does not override this implementation-first lifecycle.
 
 ## Phase 13 — Final validation and completion
 
