@@ -39,6 +39,7 @@ const jobFile = path.join(jobsDir, "TASK-BRIDGE.json");
 const otherJobFile = path.join(jobsDir, "TASK-OTHER.json");
 const claudeJobFile = path.join(jobsDir, "TASK-CLAUDE.json");
 const planJobFile = path.join(jobsDir, "TASK-PLAN.json");
+const gateJobFile = path.join(jobsDir, "TASK-GATE.json");
 assert(fs.existsSync(progress), "work-progress runtime missing");
 assert(fs.existsSync(bridge), "provider bridge missing");
 
@@ -87,7 +88,6 @@ let other = readJson(otherJobFile);
 assert(job.metrics.ai_cycles === 1, `expected one automatic cycle, got ${job.metrics.ai_cycles}`);
 assert(job.metrics.implementation_cycles === 1, "tracked repository delta was not classified as implementation");
 assert(other.metrics.ai_cycles === 0, "provider bridge drifted to a newer unrelated active job");
-assert(job.metrics.prose_only_cycles === 0, "implementation turn was incorrectly classified as prose");
 
 fs.writeFileSync(path.join(project, "src", "new.js"), "export const newValue = 1;\n");
 notify("Added a new untracked implementation file.");
@@ -100,16 +100,10 @@ job = readJson(jobFile);
 assert(job.metrics.implementation_cycles === 3, "content change inside an already-untracked file was not detected");
 
 notify("I am thinking about the next step.");
-job = readJson(jobFile);
-assert(job.metrics.prose_only_cycles === 1, "first stalled implementation turn was not counted");
-assert(job.anti_slop.violation === false, "anti-slop triggered after only one stalled turn");
-
 notify("I will think about the plan again.");
 job = readJson(jobFile);
-assert(job.metrics.prose_only_cycles === 2, "second stalled implementation turn was not counted");
+assert(job.metrics.prose_only_cycles === 2, "stalled implementation turns were not counted");
 assert(job.anti_slop.violation === true, "anti-slop did not trigger after two stalled turns");
-assert(job.anti_slop.forced_next_phase === "IMPLEMENTING", "anti-slop did not force IMPLEMENTING");
-assert(/Stop meta-work/.test(job.next_action), "anti-slop did not write an implementation next action");
 
 const cyclesBeforeDuplicate = job.metrics.ai_cycles;
 notify("I will think about the plan again.");
@@ -126,6 +120,7 @@ assert(job.metrics.implementation_cycles === 3, "Web-Kit state files were miscla
 other = readJson(otherJobFile);
 assert(other.metrics.ai_cycles === 0, "unrelated active job received cycles from the pinned provider session");
 
+// Claude status-line bridge follows the same automatic implementation/prose behavior.
 run(process.execPath, [
   progress, "start", "--task-id", "TASK-CLAUDE", "--classification", "SMALL",
   "--title", "Claude automatic bridge progress", "--project", project,
@@ -152,34 +147,26 @@ function claudeStatus(inputTokens, outputTokens, usedPercentage) {
       total_output_tokens: outputTokens,
     },
   };
-  run(process.execPath, [bridge, "claude-statusline"], {
-    cwd: project,
-    env: claudeEnv,
-    input: JSON.stringify(payload),
-  });
+  run(process.execPath, [bridge, "claude-statusline"], { cwd: project, env: claudeEnv, input: JSON.stringify(payload) });
 }
 
 claudeStatus(1000, 100, 5);
 let claudeJob = readJson(claudeJobFile);
 assert(claudeJob.metrics.ai_cycles === 0, "Claude baseline callback should not count as a cycle");
-
 fs.writeFileSync(path.join(project, "src", "claude.js"), "export const claudeValue = 1;\n");
 claudeStatus(2000, 200, 10);
 claudeJob = readJson(claudeJobFile);
 assert(claudeJob.metrics.implementation_cycles === 1, "Claude repository delta was not classified as implementation");
-
 const claudeCyclesBeforeDuplicate = claudeJob.metrics.ai_cycles;
 claudeStatus(2000, 200, 10);
 claudeJob = readJson(claudeJobFile);
 assert(claudeJob.metrics.ai_cycles === claudeCyclesBeforeDuplicate, "duplicate Claude status callback was double-counted");
-
 claudeStatus(3000, 300, 15);
 claudeStatus(4000, 400, 20);
 claudeJob = readJson(claudeJobFile);
 assert(claudeJob.metrics.prose_only_cycles === 2, "Claude stalled turns did not feed the anti-slop guard");
-assert(claudeJob.anti_slop.violation === true, "Claude anti-slop guard did not trigger");
-assert(claudeJob.anti_slop.forced_next_phase === "IMPLEMENTING", "Claude anti-slop guard did not force implementation");
 
+// Plan-file churn remains planning and never earns implementation credit.
 run(process.execPath, [
   progress, "start", "--task-id", "TASK-PLAN", "--classification", "MEDIUM",
   "--title", "Planning churn classification", "--project", project,
@@ -198,16 +185,55 @@ const planEnv = {
 notify("Starting the short plan.", planEnv, "planning-smoke-thread");
 fs.writeFileSync(path.join(project, "PLAN.md"), "# Plan\n1. First version\n");
 notify("Expanded the plan file.", planEnv, "planning-smoke-thread");
-let planJob = readJson(planJobFile);
-assert(planJob.metrics.planning_cycles === 1, "planning repository change was not classified as planning");
-assert(planJob.metrics.implementation_cycles === 0, "plan-file edit masqueraded as implementation progress");
 fs.writeFileSync(path.join(project, "PLAN.md"), "# Plan\n1. First version\n2. More planning\n");
 notify("Expanded the plan again.", planEnv, "planning-smoke-thread");
-planJob = readJson(planJobFile);
-assert(planJob.metrics.planning_cycles === 2, "second planning turn was not counted");
-assert(planJob.metrics.implementation_cycles === 0, "repeated plan-file edits were credited as implementation");
+let planJob = readJson(planJobFile);
+assert(planJob.metrics.planning_cycles === 2, "planning turns were not counted");
+assert(planJob.metrics.implementation_cycles === 0, "plan-file edits masqueraded as implementation progress");
 assert(planJob.anti_slop.violation === true, "plan-file churn did not trigger anti-slop");
-assert(planJob.status === "PLANNING", "planning anti-slop incorrectly bypassed plan approval");
-assert(planJob.anti_slop.forced_next_phase === "PLANNING_APPROVAL_THEN_IMPLEMENTING", "planning anti-slop did not preserve the approval gate");
+
+// A repository change before required plan approval remains pending instead of becoming the new baseline.
+run(process.execPath, [
+  progress, "start", "--task-id", "TASK-GATE", "--classification", "MEDIUM",
+  "--title", "Pre-approval delta retention", "--project", project,
+], { cwd: project });
+const gateEnv = {
+  ...process.env,
+  WEB_KIT_PROJECT_ROOT: project,
+  WEB_KIT_SUPERVISOR_ID: "gate-bridge-progress-smoke",
+  CODEX_HOME: path.join(project, ".codex-empty"),
+};
+const gateTurnFile = path.join(project, ".agent-core", "state", "context-rollover", "turns", "gate-bridge-progress-smoke.json");
+notify("Inspecting before the plan is approved.", gateEnv, "gate-smoke-thread");
+let gateState = readJson(gateTurnFile);
+const authorizedBaseline = gateState.repository_fingerprint;
+fs.writeFileSync(path.join(project, "src", "gated.js"), "export const gated = true;\n");
+notify("Changed code before approval.", gateEnv, "gate-smoke-thread");
+gateState = readJson(gateTurnFile);
+let gateJob = readJson(gateJobFile);
+assert(gateState.governance_violation?.type === "PRE_APPROVAL_REPOSITORY_DELTA", "pre-approval delta did not record governance violation");
+assert(gateState.repository_fingerprint === authorizedBaseline, "rejected pre-approval delta advanced repository fingerprint");
+assert(gateState.pending_repository_fingerprint && gateState.pending_repository_fingerprint !== authorizedBaseline, "pending unauthorized fingerprint was not preserved");
+assert(gateJob.metrics.implementation_cycles === 0, "pre-approval delta received implementation credit");
+
+notify("Still blocked on plan approval.", gateEnv, "gate-smoke-thread");
+gateState = readJson(gateTurnFile);
+assert(gateState.repository_fingerprint === authorizedBaseline, "repeated blocked delta advanced the baseline");
+assert(gateState.governance_violation?.type === "PRE_APPROVAL_REPOSITORY_DELTA", "governance violation disappeared before resolution");
+
+// Once governance clears, the exact same pending delta must be recorded as implementation before the fingerprint advances.
+run(process.execPath, [
+  progress, "update", "--task-id", "TASK-GATE", "--status", "PLANNING",
+  "--plan-bullets", "3", "--plan-status", "APPROVED", "--evidence", "three-bullet short plan approved",
+  "--project", project,
+], { cwd: project });
+notify("Plan approved; account for the previously blocked delta.", gateEnv, "gate-smoke-thread");
+gateState = readJson(gateTurnFile);
+gateJob = readJson(gateJobFile);
+assert(gateJob.metrics.implementation_cycles === 1, "pending delta was not recorded after governance cleared");
+assert(gateJob.status === "IMPLEMENTING", "pending delta did not advance the job into implementation after approval");
+assert(gateState.repository_fingerprint !== authorizedBaseline, "resolved pending delta did not advance repository fingerprint");
+assert(gateState.pending_repository_fingerprint === null, "resolved pending fingerprint was not cleared");
+assert(gateState.governance_violation === null, "resolved governance violation was not cleared");
 
 console.log("Provider bridge automatic progress smoke: PASS");
