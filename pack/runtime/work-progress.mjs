@@ -277,6 +277,18 @@ function cycle(project, args) {
   if (kind === "implementation" && job.governance.plan_required && job.plan.status !== "APPROVED") {
     throw new Error(`Cannot record implementation before the required ${job.governance.plan_mode} plan is APPROVED.`);
   }
+
+  if (kind === "discovery" && job.status === "QUEUED") {
+    job.status = "DISCOVERING";
+    job.current_phase = "DISCOVERING";
+  } else if (kind === "planning" && job.governance.plan_required && ["QUEUED", "DISCOVERING"].includes(job.status)) {
+    job.status = "PLANNING";
+    job.current_phase = "PLANNING";
+  } else if (kind === "implementation" && ["QUEUED", "DISCOVERING", "PLANNING"].includes(job.status)) {
+    job.status = "IMPLEMENTING";
+    job.current_phase = "IMPLEMENTING";
+  }
+
   const evidence = getAllArgs(args, "--evidence");
   const m = job.metrics;
   m.ai_cycles += 1;
