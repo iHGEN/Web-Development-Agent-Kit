@@ -232,61 +232,30 @@ Completion is refused while the graph is missing. Successful completion removes 
 
 ## Canonical lifecycle
 
+The canonical workflow classifies tasks and applies proportionate execution paths:
+
 ```text
-USER
-  ↓
-CAPTAIN
-  ↓
-Classify task + task ID
-  ↓
-Project Profile + Repository Index
-  ↓
-Context Router / Token Governor
-  ↓
-Intent Contract
-  ↓
-Read-only Discovery
-  ↓
-Impact Map
-  ↓
-Implementation Design
-  ↓
-Execution Registry
-  ↓
-Independent Plan Validator
-  ↓
-APPROVED / LOCKED
-  ↓
-Fresh per-step Context Packet
-  ↓
-Selected Worker implements ONE approved step
-  ↓
-Step-local validation
-  ↓
-Graph Refresh Gate when Graphify is ready
-  ↓
-Independent Handoff Validator
-  ↓
-Repeat approved steps
-  ↓
-Code Simplifier
-  ↓
-Affected tests
-  ↓
-Relevant specialist validation only
-  ↓
-Final Integration Validator
-  ↓
-Captain closure against original request
-  ↓
-DONE
+USER -> CAPTAIN -> classify SMALL / MEDIUM / LARGE (+ high-risk escalation)
+                     |
+                     +-- SMALL: targeted discovery -> implementation
+                     |          -> affected checks -> relevant review -> final validation
+                     |
+                     +-- MEDIUM: targeted discovery -> 3-6 execution bullets
+                     |           -> implementation -> affected checks/review -> validation
+                     |
+                     +-- LARGE / HIGH-RISK: discovery / impact / formal plan
+                                           -> independent Plan Validator
+                                           -> routed implementation / required handoff gates
+                                           -> specialist + final integration validation
+                     |
+                     +-- DONE only after original acceptance criteria and required gates pass
 ```
 
-Transparent context rollover is an outer provider-session overlay around the lifecycle above. It never skips or replaces plan approval, per-step handoff validation, specialist validation, Plan Delta control, or final integration validation.
+Minimum sufficient current repository evidence is authoritative for every path. A Context Packet, Graph Refresh Gate, Code Simplifier, or specialist agent runs only when required by task scope, changed contracts, fresh relationship analysis, or governance. No universal step-by-step ceremony applies to small fixes and routine Git operations.
 
-No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
+Transparent context rollover is an **outer provider-session overlay**, never a second workflow. It cannot reset approval state or skip validations required by the chosen classification and risk. No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
 
-Material new evidence that invalidates the locked plan requires a Plan Delta and independent revalidation before affected work continues.
+Material new evidence that invalidates an approved plan requires a Plan Delta and independent revalidation before affected work continues. Ordinary implementation discoveries do not restart planning.
 
 ## Efficiency and backwards compatibility
 
