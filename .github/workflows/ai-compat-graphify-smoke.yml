@@ -182,8 +182,8 @@ jobs:
           grep -q 'Direct source lookup' "$RULE"
           grep -q 'Relationship / dependency / impact discovery' "$RULE"
           grep -q 'node .agent-core/rules/graphify-refresh.mjs' "$RULE"
-          grep -q 'Automatic context rollover' "$ROUTER"
-          grep -q 'normal development remains' "$ROLLOVER"
+          grep -q 'Context rollover packet' "$ROUTER"
+          grep -q '## Default UX' "$ROLLOVER"
           grep -q 'Relationship / dependency / impact discovery' "$WORKFLOW"
           node - "$POLICY" <<'NODE'
           const fs = require('fs');
