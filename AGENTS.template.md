@@ -56,6 +56,12 @@ Automatic provider-session rollover is governed by:
 .agent-core/rules/context-rollover.md
 ```
 
+Adaptive execution, focused Git maintenance, no-progress recovery, proportional verification, and stop conditions are governed by the supporting rule:
+
+```text
+.agent-core/rules/efficiency-policy.md
+```
+
 Machine-readable project metadata is:
 
 ```text
@@ -281,6 +287,10 @@ Transparent context rollover is an outer provider-session overlay around the lif
 No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
 
 Material new evidence that invalidates the locked plan requires a Plan Delta and independent revalidation before affected work continues.
+
+## Efficiency and backwards compatibility
+
+Apply the Efficiency Policy through the existing Captain and Context Router. Do not activate another efficiency agent, create a separate lifecycle, or restart discovery unnecessarily. In Git conflict resolution, prefer the current Git state and unresolved hunks over broad project planning. Optional `work-progress.mjs cycle --action-key ... --outcome ...` tracking detects repeated identical no-progress attempts; existing cycle commands remain valid. Any telemetry fields must come from measured provider/runtime output. These policies never override required independent approvals, security/validation gates, or permission for destructive Git operations.
 
 ## Context/token policy
 
