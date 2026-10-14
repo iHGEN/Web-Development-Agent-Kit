@@ -1,6 +1,6 @@
 # Implementation-First Work Policy
 
-This rule is provider-neutral and applies to Codex, Claude, Gemini, and any other provider using Web Kit. It exists to prevent planning, routing, summaries, and handoffs from replacing implementation.
+This rule is provider-neutral and applies to Codex, Claude, Gemini, and any other provider using Web Kit. It exists to prevent planning, routing, summaries, and handoffs from replacing implementation. Follow `.agent-core/rules/efficiency-policy.md` for minimal tooling, repeated-action recovery, focused Git maintenance, proportional validation, and stopping rules.
 
 ## Core rule
 
@@ -65,7 +65,7 @@ Captain -> Bug Hunter -> Backend Developer -> relevant tests/review
 
 Avoid routing through planner/architect/validator roles when the task does not need those capabilities.
 
-Installed agents are available capabilities, not mandatory lifecycle stops.
+Installed agents are available capabilities, not mandatory lifecycle stops. One worker should retain ownership of a coherent task unless an independent required gate or changed expertise makes delegation necessary.
 
 ## Anti-slop guard
 
@@ -81,6 +81,8 @@ A normal productive cycle should produce at least one concrete evidence class:
 - genuine blocker that requires user/permission/external dependency.
 
 Two consecutive post-discovery meta-only cycles are a workflow violation. Route the next cycle to `IMPLEMENTING` and perform the next evidence-supported change.
+
+Independently, two tagged no-progress attempts with the same action key trigger the optional efficiency guard (`work-progress.mjs cycle --action-key <id> --outcome no-progress`). Switch approach or report a precise blocker; do not retry indefinitely. A rebase advancing to a new conflict/commit counts as progress, not an identical failure.
 
 ## Work ratio
 
@@ -129,6 +131,10 @@ A Plan Delta is justified only when new verified evidence materially changes one
 
 Variable names, helper reuse, minor file movement, local test adjustments, or ordinary implementation discoveries do not justify a Plan Delta.
 
+## Proportional validation and focused Git operations
+
+Check only affected behavior first and expand as required by risk or explicit release gates. For rebase/merge/cherry-pick, inspect current Git state and unresolved hunks, resolve, stage, continue, and verify. Never reset, skip, abort, discard changes, or force-push without approval. Git focus does not waive high-risk governance.
+
 ## Output economy
 
 Keep coordination terse.
@@ -139,6 +145,8 @@ Do not:
 - summarize the same decision in multiple artifacts;
 - create documentation about implementation before implementation exists;
 - produce a new plan when the next implementation action is already known.
+
+After successful required validation, stop work instead of initiating optional refactoring, unrelated documentation, or additional agents.
 
 Status updates should normally contain only:
 - what changed;
