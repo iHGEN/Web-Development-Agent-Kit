@@ -9,7 +9,7 @@ The goal is "give each agent the minimum verified context needed to complete its
 
 Agents do not have permission to read arbitrary repository files by default.
 
-Before an agent reads source code, the Context Router must provide a **Context Packet** containing:
+For **explicit multi-agent routing**, the Context Router provides a compact **Context Packet** containing:
 - task/step ID;
 - agent role;
 - objective;
@@ -21,7 +21,7 @@ Before an agent reads source code, the Context Router must provide a **Context P
 - token/context budget;
 - expansion rules.
 
-An agent may request more context, but must state why.
+An agent may request more context, but must state why. For SMALL/direct execution, the Captain and worker may keep the equivalent minimum task context in memory; generating a separate on-disk packet for each edit is not required. See `.agent-core/rules/efficiency-policy.md`.
 
 ## Index first, source second
 
@@ -185,4 +185,4 @@ If the agent believes it cannot safely complete the task inside the routed conte
 3. name the file/symbol/contract required;
 4. explain why current context is insufficient.
 
-The Context Router or Captain approves/rejects the expansion.
+The Context Router or Captain approves/rejects the expansion. Do not re-invoke routing solely to repeat an unchanged file list, identical search, or already validated handoff.
