@@ -32,6 +32,11 @@ run(process.execPath, [path.join(repo, "scripts", "agent-kit.mjs"), "install", p
 const progressBin = path.join(project, ".agent-core", "bin", "work-progress.mjs");
 assert(fs.existsSync(progressBin), "work-progress runtime was not installed");
 assert(fs.existsSync(path.join(project, ".agent-core", "rules", "implementation-first.md")), "implementation-first rule was not installed");
+assert(fs.existsSync(path.join(project, ".agent-core", "rules", "efficiency-policy.md")), "efficiency policy was not installed");
+const routing = readJson(path.join(project, ".agent-core", "routing", "context-policy.json"));
+assert(routing.efficiency_policy?.repeat_no_progress_threshold === 2, "efficiency configuration missing or invalid");
+const agentInstructions = fs.readFileSync(path.join(project, "AGENTS.md"), "utf8");
+assert(agentInstructions.includes(".agent-core/rules/efficiency-policy.md"), "managed roles do not link to efficiency policy");
 
 const cmd = (...args) => run(process.execPath, [progressBin, ...args, "--project", project], { cwd: project });
 const failCmd = (...args) => runFail(process.execPath, [progressBin, ...args, "--project", project], { cwd: project });
@@ -94,6 +99,37 @@ assert(auto.status === "QUEUED", "fresh automatic job should start QUEUED");
 cmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--evidence", "automatic repository delta detected");
 auto = readJson(jobFile("TASK-AUTO"));
 assert(auto.status === "IMPLEMENTING" && auto.current_phase === "IMPLEMENTING", "implementation cycle did not move fresh SMALL job into IMPLEMENTING");
+
+// Action-level efficiency tracking is opt-in, evidence-based, and distinct from anti-slop.
+failCmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:resolve");
+failCmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--outcome", "no-progress");
+failCmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "bad key with spaces", "--outcome", "no-progress");
+failCmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:resolve", "--outcome", "progress");
+failCmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:resolve", "--outcome", "no-progress", "--input-tokens", "-1");
+
+cmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:resolve", "--outcome", "no-progress");
+auto = readJson(jobFile("TASK-AUTO"));
+assert(auto.efficiency_guard.repeat_detected === false && auto.efficiency_guard.consecutive_no_progress === 1, "first no-progress attempt incorrectly raised alert");
+cmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:resolve", "--outcome", "no-progress");
+auto = readJson(jobFile("TASK-AUTO"));
+assert(auto.efficiency_guard.repeat_detected === true && auto.efficiency_guard.consecutive_no_progress === 2, "repeated no-progress action not detected");
+assert(auto.metrics.repeated_action_alerts === 1, "repeated action alert counter incorrect");
+assert(auto.next_action.includes("Change strategy"), "repeated action did not require a different approach");
+assert(auto.metrics.useful_work_ratio < 50, "no-progress implementation was incorrectly counted as useful work");
+
+// Different Git conflict/state is not the same logical action and must not create another alert.
+cmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:next-conflict", "--outcome", "no-progress");
+auto = readJson(jobFile("TASK-AUTO"));
+assert(auto.efficiency_guard.consecutive_no_progress === 1 && auto.efficiency_guard.repeat_detected === false, "new Git action incorrectly inherited previous repeat count");
+
+cmd("cycle", "--task-id", "TASK-AUTO", "--kind", "implementation", "--action-key", "git.rebase:next-conflict", "--outcome", "progress",
+  "--evidence", "next conflict resolved, rebase HEAD advanced", "--tool-calls", "2", "--elapsed-ms", "1500", "--input-tokens", "120", "--output-tokens", "80");
+auto = readJson(jobFile("TASK-AUTO"));
+assert(auto.efficiency_guard.repeat_detected === false && auto.efficiency_guard.action_key === null, "progress did not clear repeated-action state");
+assert(auto.metrics.no_progress_cycles === 3 && auto.metrics.no_progress_work_cycles === 3, "no-progress metrics incorrect");
+assert(auto.metrics.reported_tool_calls === 2 && auto.metrics.reported_elapsed_ms === 1500, "tool/time telemetry aggregation incorrect");
+assert(auto.metrics.reported_input_tokens === 120 && auto.metrics.reported_output_tokens === 80, "token telemetry aggregation incorrect");
+assert(auto.governance.plan_required === false, "efficiency guard changed task governance");
 
 // Discovery evidence also advances a fresh job without requiring a separate manual status update.
 cmd("start", "--task-id", "TASK-DISCOVERY", "--classification", "SMALL", "--title", "Automatic discovery transition");
@@ -164,5 +200,7 @@ assert(status.jobs.some((item) => item.task_id === "TASK-RISK" && item.plan.vali
 
 const efficiency = readJson(path.join(project, ".agent-core", "state", "metrics", "workflow-efficiency.json"));
 assert(efficiency.jobs === 6, `expected six tracked jobs, got ${efficiency.jobs}`);
+assert(efficiency.totals.repeated_action_alerts === 1, "project-level efficiency report did not aggregate repeated action alerts");
+assert(efficiency.totals.reported_input_tokens === 120, "project-level efficiency report did not aggregate reported input tokens");
 
 console.log("Implementation-first work progress smoke: PASS");
