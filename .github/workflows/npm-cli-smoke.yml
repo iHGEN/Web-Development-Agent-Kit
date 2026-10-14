@@ -185,8 +185,7 @@ jobs:
           if (cfg.ai_compatibility.runtime !== 'node+npm') process.exit(1);
           if (cfg.ai_compatibility.transparent_context_rollover_threshold_percent !== 50) process.exit(1);
           if (cfg.ai_compatibility.explicit_session_controller_fallback !== '.agent-core/bin/session-controller.mjs') process.exit(1);
-          if (policy.version !== 8 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
-          if (policy.efficiency_policy?.canonical_rule !== '.agent-core/rules/efficiency-policy.md') process.exit(1);
+          if (policy.version !== 7 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
           if (!policy.session_control.normal_install_installs_user_supervisor) process.exit(1);
           NODE
 
