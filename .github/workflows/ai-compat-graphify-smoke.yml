@@ -184,7 +184,7 @@ jobs:
           grep -q 'node .agent-core/rules/graphify-refresh.mjs' "$RULE"
           grep -q 'Context rollover packet' "$ROUTER"
           grep -q '## Default UX' "$ROLLOVER"
-          grep -q 'Relationship / dependency / impact discovery' "$WORKFLOW"
+          grep -q 'Relationship/dependency/impact question with ready Graphify' "$WORKFLOW"
           node - "$POLICY" <<'NODE'
           const fs = require('fs');
           const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
