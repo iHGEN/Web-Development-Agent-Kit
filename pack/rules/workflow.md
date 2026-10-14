@@ -4,6 +4,7 @@ This file is the **single authoritative lifecycle** for Web Kit. Supporting rule
 
 Repository navigation: `.agent-core/rules/repository-navigation.md`  
 Implementation-first / anti-slop policy: `.agent-core/rules/implementation-first.md`  
+Efficiency policy: `.agent-core/rules/efficiency-policy.md`  
 Context rollover: `.agent-core/rules/context-rollover.md`  
 Security review: `.agent-core/rules/security-review.md`
 
@@ -15,7 +16,7 @@ Web Kit exists to deliver working software, not workflow artifacts.
 evidence -> route the right agent -> implement -> verify -> track real progress -> continue
 ```
 
-Planning, routing, handoffs, summaries, and validation metadata are support mechanisms. Once the next safe repository change is known, implementation begins.
+Planning, routing, handoffs, summaries, and validation metadata are support mechanisms. Once the next safe repository change is known, implementation begins. Apply the Efficiency Policy to minimize redundant actions; it does not replace any mandatory governance or validation gate.
 
 ## Runtime contract
 
@@ -29,7 +30,8 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 2. Assign/reuse a task ID.
 3. Classify `SMALL`, `MEDIUM`, or `LARGE`.
 4. Escalate governance to formal/high-risk when the change materially touches security/trust boundaries, public contracts, schema/migrations, destructive operations, major dependencies, or release/deployment architecture.
-5. Start evidence-based job tracking:
+5. For routine Git maintenance (rebase, cherry-pick, merge conflicts), use the focused Git operation mode in `efficiency-policy.md`; retain the same risk escalation rules and protect pre-existing user changes.
+6. Start evidence-based job tracking:
 
 ```bash
 node .agent-core/bin/work-progress.mjs start \
@@ -70,7 +72,7 @@ Graph Refresh Gate -> narrow Graphify relationship query -> verify exact current
 
 Graphify is a navigation aid, never behavioral authority and never a blocker.
 
-Stop discovery when the next safe implementation action is sufficiently supported. Do not continue repository exploration merely to increase certainty.
+Stop discovery when the next safe implementation action is sufficiently supported. Do not continue repository exploration merely to increase certainty. Reuse prior verified task-local findings instead of rerunning unchanged searches.
 
 ## Phase 2 — Classification-specific execution
 
@@ -89,7 +91,7 @@ Rules:
 - route directly to the responsible implementer once ownership/target is known;
 - one coherent small change may be completed in one implementation unit.
 
-A SMALL task that discovers material architectural/security/schema risk must be escalated.
+A SMALL task that discovers material architectural/security/schema risk must be escalated. Routine, localized Git maintenance uses the focused Git path: inspect current Git state, resolve the active conflict, continue, and verify. Do not restart repository-wide discovery between advancing rebase steps.
 
 ### MEDIUM
 
@@ -141,7 +143,7 @@ Each worker receives the smallest Context Packet containing:
 - required local validation;
 - exact downstream contract when another worker depends on it.
 
-Do not forward the full discovery transcript or every installed skill.
+Do not forward the full discovery transcript or every installed skill. Do not create another agent handoff when the current worker already owns the coherent next change.
 
 ## Phase 4 — Implementation-first execution
 
@@ -155,7 +157,7 @@ The worker:
 - records actual changed files/symbols and validation evidence;
 - continues through a coherent implementation chunk instead of stopping after every tiny file-level action.
 
-When uncertain between another planning pass and a small reversible implementation plus a check, prefer the implementation plus check.
+When uncertain between another planning pass and a small reversible implementation plus a check, prefer the implementation plus check. Do not rerun unchanged commands, tests, or searches without a new reason.
 
 Record meaningful cycles:
 
@@ -210,6 +212,12 @@ planning + routing + summaries: 10-20%
 
 Required safety work is never skipped merely to improve the ratio.
 
+## Phase 5A — Repeated-action / no-progress guard
+
+The existing anti-slop guard detects unproductive planning/routing/prose cycles. For execution loops, use the **optional** action-level signal in `efficiency-policy.md`: tag an attempted logical operation with `cycle --action-key <stable-id> --outcome progress|no-progress` (the `progress` outcome requires verifiable `--evidence`). Two consecutive no-progress attempts with the same key record a repeated-action alert and require a changed strategy or a precise blocker report. Different rebase conflicts or commits with advancing Git state are not repeated no-progress attempts.
+
+Only record telemetry from real sources; `--tool-calls`, `--elapsed-ms`, `--input-tokens`, and `--output-tokens` are optional, never invented. This guard does not override required plans, independent review, or Git data-safety constraints.
+
 ## Phase 6 — Plan validation (only when required)
 
 **Owner:** Independent Plan Validator
@@ -259,7 +267,7 @@ Update test/build evidence with `work-progress.mjs update`.
 
 Only invoke specialist reviewers relevant to the changed surface. Code Simplifier, performance, accessibility, API-contract, DevSecOps, SRE, etc. are targeted capabilities, not mandatory universal stages.
 
-Validation should inspect the actual diff/results; it should not recreate the original task analysis.
+Validation should inspect the actual diff/results; it should not recreate the original task analysis. Start with affected checks and expand only for demonstrated dependency/risk or a required gate; never run the same failing test again unchanged.
 
 ## Phase 10 — Security Review
 
@@ -354,7 +362,7 @@ node .agent-core/bin/work-progress.mjs update \
   --evidence "<final validation evidence>"
 ```
 
-Update relevant project/application areas from concrete completed evidence.
+Update relevant project/application areas from concrete completed evidence. Stop further work once original acceptance criteria, relevant checks, and mandatory gates are satisfied; unrelated polish or documentation is out of scope.
 
 ## Output economy
 
