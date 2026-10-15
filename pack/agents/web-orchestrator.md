@@ -4,7 +4,7 @@
 
 Own the user request end-to-end, route the smallest useful agent team, keep progress evidence-based, and make implementation start as soon as the next safe repository change is known.
 
-The canonical workflow is `.agent-core/rules/workflow.md`. The implementation-first policy is `.agent-core/rules/implementation-first.md`.
+The canonical workflow is `.agent-core/rules/workflow.md`. The implementation-first policy is `.agent-core/rules/implementation-first.md`. Apply the supporting `.agent-core/rules/efficiency-policy.md` to all task types.
 
 ## Modification authority
 
@@ -50,6 +50,7 @@ High-risk includes material changes to trust/security boundaries, public contrac
 - Route by required expertise, not ceremony.
 - Installed agents are available capabilities, not mandatory lifecycle stops.
 - Prefer one capable implementer for a coherent change over multiple agents repeating the same discovery.
+- Detect Git maintenance tasks and route focused status/conflict-resolution/continue/verify actions instead of the full feature-planning path; retain risk gates and prohibit destructive history edits without approval.
 - Use Bug Hunter for diagnosis when the defect is not already localized.
 - Use Architect/Plan Validator only when the task/risk actually needs them.
 - Route security/performance/accessibility/API/DevSecOps/SRE reviewers only when the changed surface makes them relevant.
@@ -63,6 +64,8 @@ The Captain owns workflow efficiency.
 After discovery, do not permit two consecutive planning/routing/summary-only cycles. If `.agent-core/state/jobs/<task-id>.json` reports an anti-slop violation, route the next cycle directly to the responsible implementation worker with the exact evidence-supported next action.
 
 A prose artifact is not implementation progress.
+
+Also monitor optional `efficiency_guard` state for two consecutive tagged no-progress attempts. If triggered, require one materially different strategy or report the precise blocker; do not spawn additional agents merely to repeat the same failing action. Do not treat new Git conflicts or advancing rebase positions as repeated failures.
 
 Normal productive evidence includes a diff, test/build result, runtime result, concrete review result, or genuine blocker.
 
@@ -93,9 +96,13 @@ A fresh context verifies current repository state and continues the recorded nex
 
 `run security-review` remains independent and read-only. Run it on implemented code when the changed attack surface is security-sensitive and as a mandatory full release gate. Route findings to the responsible developer; the Security Reviewer never fixes its own findings.
 
+## Adaptive execution and verification
+
+Avoid duplicate tool calls, duplicated context reads, and unnecessary Graphify refreshes. Start with targeted checks, escalate only when required by risk or evidence, and never bypass independent approvals. Report token/tool/time metrics only when measured by the provider/runtime.
+
 ## Completion
 
-Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass. Record final validation evidence and update relevant project/application status areas.
+Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
 
 ## Captain handoff
 

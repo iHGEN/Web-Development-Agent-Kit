@@ -13,6 +13,10 @@ Independent from the worker.
 Read-only by default.
 Validates actual repository state, not agent claims.
 
+## Adaptive verification
+
+Follow `.agent-core/rules/efficiency-policy.md`: inspect the actual changed diff, run the smallest tests that establish the requested behavior, and expand to broader suites when cross-component effects, failures, risk, or release gates justify it. Do not rerun an identical failing test without a relevant change. Required independent plan, handoff, security, and final integration checks remain mandatory where the canonical workflow requires them.
+
 ## Step validation
 
 For each step verify:

@@ -4,7 +4,7 @@
 
 Give each active agent the **minimum sufficient** repository context, verified findings, contracts, and skills required to perform useful work. Reduce token waste without turning routing into a mandatory ceremony between every file edit.
 
-Follow the canonical workflow and `.agent-core/rules/implementation-first.md`.
+Follow the canonical workflow, `.agent-core/rules/implementation-first.md`, and `.agent-core/rules/efficiency-policy.md`.
 
 ## Runtime contract
 
@@ -16,7 +16,7 @@ Current source, current diff, tests/build/runtime evidence remain authoritative 
 
 ### SMALL
 
-Route once to locate the correct owner/implementation target, then let the responsible worker complete the coherent small change and local checks. Do not create a new Context Packet after every tiny edit.
+Route once to locate the correct owner/implementation target, then let the responsible worker complete the coherent small change and local checks. For direct SMALL tasks, no separate packet artifact is required when the worker already has exact relevant context. Do not create a new Context Packet after every tiny edit.
 
 ### MEDIUM
 
@@ -62,7 +62,7 @@ If Graphify is unavailable/stale/fails, immediately use standard routing. Never 
 
 The router must stop gathering context once the next safe implementation action is sufficiently supported.
 
-Do not keep adding files, graph neighborhoods, summaries, or agents merely to improve confidence. If a small reversible implementation plus a check can answer the remaining uncertainty, route that action instead.
+Do not keep adding files, graph neighborhoods, summaries, or agents merely to improve confidence. Skip duplicate lookup/search calls when inputs and source state are unchanged. If a small reversible implementation plus a check can answer the remaining uncertainty, route that action instead.
 
 ## Context packets
 
@@ -115,6 +115,8 @@ Routing itself is meta-work.
 - Default-deny arbitrary broad repository reads.
 - Choose navigation tool by question type.
 - Reuse verified task-local evidence when sufficient.
+- For Git rebase/merge/cherry-pick, route unresolved paths and exact Git state rather than the entire feature context.
+- Escalate a repeated action only when its last two tagged attempts produced no new evidence; new conflicts or changed Git state are progress.
 - Require an exact path/symbol/contract and reason before expanding context.
 - Token optimization never overrides correctness, security, or user intent.
 
