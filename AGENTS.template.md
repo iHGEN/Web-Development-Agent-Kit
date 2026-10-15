@@ -206,13 +206,13 @@ tests/build/runtime      = Does it actually work?
 
 ## Graph Refresh Gate
 
-Before the first relationship-oriented Graphify query in a task, and once after every completed code-changing step before another agent relies on Graphify, run:
+Run the Graph Refresh Gate before the first relationship-oriented Graphify query in a task. After a coherent code-changing chunk, run it again **only when downstream Graphify-based relationship analysis or validation needs updated graph evidence**. Otherwise skip the refresh.
 
 ```bash
 node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
-Do not manually run `graphify update .` as a replacement for the gate and do not refresh after every file write.
+Do not manually run `graphify update .` as a replacement for the gate. Never refresh merely because a file was edited; when no downstream graph analysis is needed, continue with current source, diff, and relevant tests.
 
 ## Temporary Graphify bootstrap role
 
