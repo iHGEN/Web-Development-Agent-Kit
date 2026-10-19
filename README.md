@@ -1,6 +1,6 @@
 # Web Development Agent Kit
 
-A vendor-neutral multi-agent engineering kit for web projects with implementation-first routing, evidence-based job/project progress, transparent fresh-context rollover, proportional planning/validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
+A vendor-neutral multi-agent engineering kit for web projects with implementation-first routing, **adaptive task efficiency and focused Git operations**, evidence-based job/project progress, transparent fresh-context rollover, proportional planning/validation, security/testing gates, question-aware Graphify-assisted navigation, and routed DevOps agents.
 
 ## Runtime requirement
 
@@ -55,6 +55,25 @@ run security-review
 run security-review deep
 run security-review base main
 ```
+
+## Adaptive agent efficiency
+
+Web Kit includes a **provider-neutral Efficiency Policy** at `.agent-core/rules/efficiency-policy.md`. It is enforced by the existing Captain, Context Router, and workers — **no new always-on agent**.
+
+- Classify tasks once; SMALL runs directly, MEDIUM uses a brief plan, and LARGE/high-risk retains independent required approvals.
+- Reuse verified task-local evidence, invoke only relevant specialists, and run targeted checks before expanding to wider test suites.
+- For rebase, cherry-pick, or merge-conflict resolution, inspect the current Git operation and unresolved hunks; resolve, continue, and verify. Preserve user changes, and never rewrite/discard Git history without approval.
+- If the **same logical action** twice reports no progress, change strategy or report the blocker; advancing to another Git conflict is progress, not a stall.
+- Stop when the original request and required validation gates are satisfied.
+
+The work-progress CLI supports optional action tracking; existing calls without the new flags remain valid:
+
+```bash
+node .agent-core/bin/work-progress.mjs cycle --task-id TASK-042 --kind implementation --action-key git.rebase:active-conflict --outcome no-progress
+node .agent-core/bin/work-progress.mjs cycle --task-id TASK-042 --kind implementation --action-key git.rebase:active-conflict --outcome progress --evidence "Conflict resolved and rebase advanced"
+```
+
+Optional measured telemetry: `--tool-calls N`, `--elapsed-ms N`, `--input-tokens N`, `--output-tokens N`. Never estimate these fields; values are reported only if supplied by the runtime/provider. The existing `npx @ihgen/web-kit status` reports aggregate task efficiency, including repeated-action alerts. This is policy and optional tracking, **not an automatic provider-effort switch or a hard time/token budget**.
 
 ## Implementation-first workflow
 

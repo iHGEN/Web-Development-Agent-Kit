@@ -120,7 +120,7 @@ Preserve all project/user instructions outside this managed block. This block ad
 
 For Web-Kit-managed engineering work:
 
-1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle.
+1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle and \`.agent-core/rules/efficiency-policy.md\` to reduce redundant planning, tool use, and retries without skipping safety gates.
 2. Follow \`.agent-core/rules/repository-navigation.md\` for question-aware repository navigation.
 3. Follow \`.agent-core/rules/context-rollover.md\` for provider-session lifetime and fresh-context handoffs. Automatic rollover is an outer-session concern, not a second engineering workflow.
 4. Read \`.agent-core/index/project-profile.json\` first for lightweight project routing metadata.
@@ -130,7 +130,7 @@ For Web-Kit-managed engineering work:
 8. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
 9. For exact text/symbol/path lookup, use targeted current-source search (\`rg\` or equivalent) directly.
 10. For relationship/dependency/ownership/impact discovery, run \`node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>\` before the first Graphify query. Use Graphify only when the resulting state is fresh, then verify exact source before planning or editing.
-11. After every completed code-changing step, run the same Node Graph Refresh Gate once before Handoff Validator or another agent relies on Graphify.
+11. After a coherent code-changing step, run the same Node Graph Refresh Gate only before downstream Graphify-based relationship validation/analysis needs fresh data; never refresh on every file write.
 12. Never run \`graphify update .\` directly as a replacement for the managed Graph Refresh Gate.
 13. Current source, current diff, tests/build, and runtime evidence override Graphify/index/context-handoff summaries.
 14. When \`WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1\`, use the provider normally and finish the current assistant turn safely. Do not manually run \`/clear\`, \`/new\`, \`/compact\`, or ask the user to restart for context pressure; the outer transparent supervisor owns threshold detection, handoff persistence, and fresh native provider-session creation.
@@ -171,6 +171,7 @@ export function applyAiCompatibility(project, profile = null) {
     canonical_instructions: "AGENTS.md",
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
+    efficiency_policy_rule: ".agent-core/rules/efficiency-policy.md",
     automatic_context_rollover_rule: ".agent-core/rules/context-rollover.md",
     security_review_rule: ".agent-core/rules/security-review.md",
     security_review_engine: ".agent-core/bin/security-review.mjs",

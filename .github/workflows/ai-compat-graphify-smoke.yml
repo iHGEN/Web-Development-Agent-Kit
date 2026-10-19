@@ -182,14 +182,15 @@ jobs:
           grep -q 'Direct source lookup' "$RULE"
           grep -q 'Relationship / dependency / impact discovery' "$RULE"
           grep -q 'node .agent-core/rules/graphify-refresh.mjs' "$RULE"
-          grep -q 'Automatic context rollover' "$ROUTER"
-          grep -q 'normal development remains' "$ROLLOVER"
-          grep -q 'Relationship / dependency / impact discovery' "$WORKFLOW"
+          grep -q 'Context rollover packet' "$ROUTER"
+          grep -q '## Default UX' "$ROLLOVER"
+          grep -q 'Relationship/dependency/impact question with ready Graphify' "$WORKFLOW"
           node - "$POLICY" <<'NODE'
           const fs = require('fs');
           const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (policy.version !== 7 || policy.runtime !== 'node+npm') process.exit(1);
+          if (policy.version !== 8 || policy.runtime !== 'node+npm') process.exit(1);
           if (!policy.principles.web_kit_runtime_requires_node_not_python) process.exit(1);
+          if (policy.efficiency_policy?.repeat_no_progress_threshold !== 2) process.exit(1);
           if (!policy.principles.transparent_context_rollover_enabled_after_normal_install) process.exit(1);
           if (policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
           if (policy.session_control.user_runtime_home !== '~/.web-kit') process.exit(1);

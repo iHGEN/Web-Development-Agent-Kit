@@ -123,8 +123,26 @@ function defaultMetrics() {
     consecutive_prose_only_cycles: 0,
     replans: 0,
     handoffs: 0,
+    no_progress_cycles: 0,
+    no_progress_work_cycles: 0,
+    repeated_action_alerts: 0,
+    reported_tool_calls: 0,
+    reported_elapsed_ms: 0,
+    reported_input_tokens: 0,
+    reported_output_tokens: 0,
     useful_work_ratio: 0,
   };
+}
+function defaultEfficiencyGuard() {
+  return { repeat_detected: false, action_key: null, consecutive_no_progress: 0, reason: null };
+}
+function actionKeyArg(args) {
+  const key = getArg(args, "--action-key");
+  if (key === null) return null;
+  if (!/^[a-zA-Z0-9._:/@-]{1,120}$/.test(key)) {
+    throw new Error("--action-key must be a stable 1-120 character identifier (letters/numbers/._:/@-), not a command, secret, or transcript");
+  }
+  return key;
 }
 function phaseCompletion(job) {
   const discovery = statusAtOrAfter(job.status, "IMPLEMENTING") || job.status === "PLANNING" ? 1 : job.status === "DISCOVERING" ? 0.5 : 0;
@@ -145,7 +163,7 @@ function recalculate(job) {
   job.progress = Math.round(Object.entries(weights).reduce((sum, [name, weight]) => sum + weight * phases[name], 0));
   if (job.status === "DONE" && job.final_validation.status === "PASS") job.progress = 100;
   const m = job.metrics;
-  const useful = m.implementation_cycles + m.testing_cycles + m.review_cycles + m.validation_cycles;
+  const useful = Math.max(0, m.implementation_cycles + m.testing_cycles + m.review_cycles + m.validation_cycles - (m.no_progress_work_cycles || 0));
   m.useful_work_ratio = m.ai_cycles ? Math.round((useful / m.ai_cycles) * 100) : 0;
   job.updated_at = nowIso();
   return job;
@@ -159,6 +177,8 @@ function loadJob(project, taskId) {
   const job = readJson(paths.job, null);
   if (!job) throw new Error(`Job ${taskId} does not exist. Run 'start' first.`);
   if (!job.plan?.validator) job.plan.validator = defaultValidator(job.governance);
+  job.metrics = { ...defaultMetrics(), ...job.metrics };
+  job.efficiency_guard ||= defaultEfficiencyGuard();
   if (job.governance.min_plan_bullets === undefined) job.governance.min_plan_bullets = job.classification === "MEDIUM" && !job.high_risk ? 3 : job.governance.plan_required ? 1 : 0;
   return { job, paths };
 }
@@ -189,6 +209,7 @@ function jobSummary(job) {
     },
     next_action: job.next_action,
     anti_slop: job.anti_slop,
+    efficiency_guard: job.efficiency_guard || defaultEfficiencyGuard(),
     useful_work_ratio: Number(job.metrics?.useful_work_ratio || 0),
     updated_at: job.updated_at,
   };
@@ -214,7 +235,7 @@ function writeEfficiency(project) {
       totals[key] += Number(metrics[key] || 0);
     }
   }
-  const useful = totals.implementation_cycles + totals.testing_cycles + totals.review_cycles + totals.validation_cycles;
+  const useful = Math.max(0, totals.implementation_cycles + totals.testing_cycles + totals.review_cycles + totals.validation_cycles - totals.no_progress_work_cycles);
   totals.useful_work_ratio = totals.ai_cycles ? Math.round((useful / totals.ai_cycles) * 100) : 0;
   atomicWriteJson(paths.efficiency, { schema_version: 1, jobs: jobs.length, totals, updated_at: nowIso() });
 }
@@ -248,6 +269,7 @@ function start(project, args) {
     review: { status: "PENDING" },
     final_validation: { status: "PENDING" },
     anti_slop: { violation: false, reason: null, forced_next_phase: null },
+    efficiency_guard: defaultEfficiencyGuard(),
     metrics: defaultMetrics(),
     next_action: getArg(args, "--next") || "Perform the minimum targeted discovery needed to identify the next safe implementation action.",
     created_at: nowIso(),
@@ -272,6 +294,7 @@ function update(project, args) {
     if (!JOB_STATUSES.has(reopenStatus) || reopenStatus === "DONE") throw new Error("--reopen status must be a valid non-DONE job status.");
     if (!getArg(args, "--final-validation")) job.final_validation.status = "PENDING";
     if (!getArg(args, "--review")) job.review.status = "PENDING";
+    job.efficiency_guard = defaultEfficiencyGuard();
   }
 
   const previousBullets = Number(job.plan.bullets || 0);
@@ -388,6 +411,22 @@ function cycle(project, args) {
   if (job.status === "DONE") throw new Error("DONE jobs are immutable. Reopen the job before recording more cycles.");
   if (kind === "implementation" && job.governance.plan_required) assertPlanReady(job);
 
+  // All new tracking is opt-in: legacy cycles work unchanged. Validate before mutating job state.
+  const actionKey = actionKeyArg(args);
+  const outcome = getArg(args, "--outcome");
+  if ((actionKey === null) !== (outcome === null)) throw new Error("--action-key and --outcome must be supplied together");
+  if (outcome !== null && !["progress", "no-progress"].includes(outcome)) throw new Error("--outcome must be progress or no-progress");
+  const evidence = getAllArgs(args, "--evidence");
+  if (outcome === "progress" && !evidence.length) throw new Error("--outcome progress requires --evidence describing observable progress");
+  const reported = {};
+  for (const [arg, field] of [["--tool-calls", "reported_tool_calls"], ["--elapsed-ms", "reported_elapsed_ms"], ["--input-tokens", "reported_input_tokens"], ["--output-tokens", "reported_output_tokens"]]) {
+    const n = numberArg(args, arg);
+    if (n !== null) {
+      if (!Number.isSafeInteger(n) || n < 0) throw new Error(`${arg} must be a non-negative safe integer from actual telemetry`);
+      reported[field] = n;
+    }
+  }
+
   if (kind === "discovery" && job.status === "QUEUED") {
     job.status = "DISCOVERING";
     job.current_phase = "DISCOVERING";
@@ -399,12 +438,28 @@ function cycle(project, args) {
     job.current_phase = "IMPLEMENTING";
   }
 
-  const evidence = getAllArgs(args, "--evidence");
   const m = job.metrics;
+  for (const [field, value] of Object.entries(reported)) m[field] += value;
   m.ai_cycles += 1;
+  if (outcome === "no-progress") {
+    m.no_progress_cycles += 1;
+    if (["implementation", "testing", "review", "validation"].includes(kind)) m.no_progress_work_cycles += 1;
+    const previous = job.efficiency_guard || defaultEfficiencyGuard();
+    const count = previous.action_key === actionKey ? previous.consecutive_no_progress + 1 : 1;
+    job.efficiency_guard = {
+      repeat_detected: count >= 2,
+      action_key: actionKey,
+      consecutive_no_progress: count,
+      reason: count >= 2 ? "Two consecutive attempts of the same action produced no new progress evidence." : null,
+    };
+    if (count === 2) m.repeated_action_alerts += 1;
+    if (count >= 2) job.next_action = "Stop repeating " + actionKey + ". Change strategy with a meaningful new condition or report the precise blocker; preserve required governance and validation.";
+  } else if (outcome === "progress") {
+    job.efficiency_guard = defaultEfficiencyGuard();
+  }
   const metricName = `${kind}_cycles`;
   if (Object.hasOwn(m, metricName)) m[metricName] += 1;
-  const metaOnly = ["prose", "planning", "routing"].includes(kind) && evidence.length === 0;
+  const metaOnly = ["prose", "planning", "routing"].includes(kind) && (evidence.length === 0 || outcome === "no-progress");
   if (metaOnly && !["QUEUED", "DISCOVERING"].includes(job.status)) {
     m.prose_only_cycles += 1;
     m.consecutive_prose_only_cycles += 1;
@@ -469,7 +524,9 @@ function show(project, args) {
   };
 }
 function printHelp() {
-  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, and two consecutive post-discovery meta-only cycles trigger the anti-slop guard.`);
+  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
+        [--action-key <operation-id> --outcome progress|no-progress] [--tool-calls N] [--elapsed-ms N]
+        [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
 }
 
 const args = process.argv.slice(2);

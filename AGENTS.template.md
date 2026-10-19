@@ -56,6 +56,12 @@ Automatic provider-session rollover is governed by:
 .agent-core/rules/context-rollover.md
 ```
 
+Adaptive execution, focused Git maintenance, no-progress recovery, proportional verification, and stop conditions are governed by the supporting rule:
+
+```text
+.agent-core/rules/efficiency-policy.md
+```
+
 Machine-readable project metadata is:
 
 ```text
@@ -200,13 +206,13 @@ tests/build/runtime      = Does it actually work?
 
 ## Graph Refresh Gate
 
-Before the first relationship-oriented Graphify query in a task, and once after every completed code-changing step before another agent relies on Graphify, run:
+Run the Graph Refresh Gate before the first relationship-oriented Graphify query in a task. After a coherent code-changing chunk, run it again **only when downstream Graphify-based relationship analysis or validation needs updated graph evidence**. Otherwise skip the refresh.
 
 ```bash
 node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
-Do not manually run `graphify update .` as a replacement for the gate and do not refresh after every file write.
+Do not manually run `graphify update .` as a replacement for the gate. Never refresh merely because a file was edited; when no downstream graph analysis is needed, continue with current source, diff, and relevant tests.
 
 ## Temporary Graphify bootstrap role
 
@@ -226,61 +232,34 @@ Completion is refused while the graph is missing. Successful completion removes 
 
 ## Canonical lifecycle
 
+The canonical workflow classifies tasks and applies proportionate execution paths:
+
 ```text
-USER
-  ↓
-CAPTAIN
-  ↓
-Classify task + task ID
-  ↓
-Project Profile + Repository Index
-  ↓
-Context Router / Token Governor
-  ↓
-Intent Contract
-  ↓
-Read-only Discovery
-  ↓
-Impact Map
-  ↓
-Implementation Design
-  ↓
-Execution Registry
-  ↓
-Independent Plan Validator
-  ↓
-APPROVED / LOCKED
-  ↓
-Fresh per-step Context Packet
-  ↓
-Selected Worker implements ONE approved step
-  ↓
-Step-local validation
-  ↓
-Graph Refresh Gate when Graphify is ready
-  ↓
-Independent Handoff Validator
-  ↓
-Repeat approved steps
-  ↓
-Code Simplifier
-  ↓
-Affected tests
-  ↓
-Relevant specialist validation only
-  ↓
-Final Integration Validator
-  ↓
-Captain closure against original request
-  ↓
-DONE
+USER -> CAPTAIN -> classify SMALL / MEDIUM / LARGE (+ high-risk escalation)
+                     |
+                     +-- SMALL: targeted discovery -> implementation
+                     |          -> affected checks -> relevant review -> final validation
+                     |
+                     +-- MEDIUM: targeted discovery -> 3-6 execution bullets
+                     |           -> implementation -> affected checks/review -> validation
+                     |
+                     +-- LARGE / HIGH-RISK: discovery / impact / formal plan
+                                           -> independent Plan Validator
+                                           -> routed implementation / required handoff gates
+                                           -> specialist + final integration validation
+                     |
+                     +-- DONE only after original acceptance criteria and required gates pass
 ```
 
-Transparent context rollover is an outer provider-session overlay around the lifecycle above. It never skips or replaces plan approval, per-step handoff validation, specialist validation, Plan Delta control, or final integration validation.
+Minimum sufficient current repository evidence is authoritative for every path. A Context Packet, Graph Refresh Gate, Code Simplifier, or specialist agent runs only when required by task scope, changed contracts, fresh relationship analysis, or governance. No universal step-by-step ceremony applies to small fixes and routine Git operations.
 
-No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
+Transparent context rollover is an **outer provider-session overlay**, never a second workflow. It cannot reset approval state or skip validations required by the chosen classification and risk. No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
 
-Material new evidence that invalidates the locked plan requires a Plan Delta and independent revalidation before affected work continues.
+Material new evidence that invalidates an approved plan requires a Plan Delta and independent revalidation before affected work continues. Ordinary implementation discoveries do not restart planning.
+
+## Efficiency and backwards compatibility
+
+Apply the Efficiency Policy through the existing Captain and Context Router. Do not activate another efficiency agent, create a separate lifecycle, or restart discovery unnecessarily. In Git conflict resolution, prefer the current Git state and unresolved hunks over broad project planning. Optional `work-progress.mjs cycle --action-key ... --outcome ...` tracking detects repeated identical no-progress attempts; existing cycle commands remain valid. Any telemetry fields must come from measured provider/runtime output. These policies never override required independent approvals, security/validation gates, or permission for destructive Git operations.
 
 ## Context/token policy
 
