@@ -33,7 +33,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Verify manifest, packaged CLI and tag-based source mapping
         shell: bash
@@ -125,7 +124,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install current npm for provenance publishing
         run: npm install --global npm@latest
