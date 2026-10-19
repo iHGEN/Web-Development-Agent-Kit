@@ -1,0 +1,185 @@
+name: Publish @ihgen/web-kit v1.2.1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publish-v1.2.1-npm.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-v1.2.1-npm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-kit-v1.2.1-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      already_published: ${{ steps.registry.outputs.already_published }}
+    steps:
+      - name: Checkout the release candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify manifest, packaged CLI and tag-based source mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < VERSION)" = "1.2.1"
+          test "$(node -p "require('./package.json').version")" = "1.2.1"
+          test "$(node -p "require('./package.json').name")" = "@ihgen/web-kit"
+          node --check bin/web-kit.js
+          node --check bin/web-kit-entry.js
+          node --check bootstrap/remote-install.mjs
+          node --check pack/runtime/work-progress.mjs
+
+          npm pack --dry-run --json > "$RUNNER_TEMP/web-kit-npm-pack.json"
+          node - "$RUNNER_TEMP/web-kit-npm-pack.json" <<'NODE'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))[0];
+          const files = new Set((data.files || []).map(file => file.path));
+          if (data.name !== '@ihgen/web-kit' || data.version !== '1.2.1') throw new Error('Incorrect package identity/version');
+          for (const path of ['package.json', 'bin/web-kit-entry.js', 'bin/web-kit.js', 'bootstrap/remote-install.mjs']) {
+            if (!files.has(path)) throw new Error('Missing publish artifact: ' + path);
+          }
+          console.log('Validated npm package: ' + data.name + '@' + data.version);
+          NODE
+
+      - name: Test the release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/work-progress-smoke.mjs
+
+      - name: Check npm registry and prevent version collisions
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ping >/dev/null
+          LATEST="$(npm view '@ihgen/web-kit' version --json)"
+          export LATEST
+          node <<'NODE'
+          const latest = JSON.parse(process.env.LATEST);
+          function parse(v) {
+            const match = String(v).match(/^(\d+)\.(\d+)\.(\d+)$/);
+            if (!match) throw new Error('Unexpected latest npm version: ' + v);
+            return match.slice(1).map(Number);
+          }
+          const a = parse(latest), b = parse('1.2.1');
+          const cmp = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+          if (cmp > 0) throw new Error('npm already has a newer release (' + latest + '); do not publish an older latest');
+          console.log('Current npm latest: ' + latest);
+          NODE
+
+          set +e
+          LOOKUP="$(npm view '@ihgen/web-kit@1.2.1' version --json 2>&1)"
+          RESULT=$?
+          set -e
+          if [ "$RESULT" -eq 0 ]; then
+            FOUND="$(printf '%s' "$LOOKUP" | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => process.stdout.write(String(JSON.parse(s))))')"
+            test "$FOUND" = "1.2.1"
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              echo "@ihgen/web-kit@1.2.1 is already published; choose a new version." >&2
+              exit 1
+            fi
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Release version already exists; publishing will be skipped after tag verification."
+          elif printf '%s' "$LOOKUP" | grep -Eqi 'E404|404 Not Found|No match found for version|is not in this registry'; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "@ihgen/web-kit@1.2.1 is available for publication."
+          else
+            printf '%s\n' "$LOOKUP" >&2
+            exit "$RESULT"
+          fi
+
+  publish:
+    needs: validate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout the immutable release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install current npm for provenance publishing
+        run: npm install --global npm@latest
+
+      - name: Verify release source and create v1.2.1 tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < VERSION)" = "1.2.1"
+          test "$(node -p "require('./package.json').version")" = "1.2.1"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          if git ls-remote --tags --refs origin refs/tags/v1.2.1 | grep -q 'refs/tags/v1.2.1'; then
+            git fetch --no-tags origin tag v1.2.1
+            test "$(git rev-list -n1 v1.2.1)" = "$GITHUB_SHA" || {
+              echo "Existing v1.2.1 tag points to a different commit; refusing to rewrite it." >&2
+              exit 1
+            }
+            echo "Verified existing immutable tag v1.2.1."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a v1.2.1 -m "Web Kit v1.2.1 - Agent Efficiency Policy"
+            git push origin refs/tags/v1.2.1
+            echo "Created immutable GitHub tag v1.2.1."
+          fi
+
+      - name: Publish @ihgen/web-kit@1.2.1 to npm
+        if: needs.validate.outputs.already_published == 'false'
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NPM_TOKEN" ]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/release-npmrc"
+            chmod 600 "$RUNNER_TEMP/release-npmrc"
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/release-npmrc"
+          fi
+          npm publish --access public --provenance
+
+      - name: Verify npm registry contains v1.2.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if FOUND="$(npm view '@ihgen/web-kit@1.2.1' version --json 2>/dev/null)"; then
+              if [ "$FOUND" = '"1.2.1"' ]; then
+                echo "Verified @ihgen/web-kit@1.2.1 on npm."
+                test "$(git rev-list -n1 v1.2.1)" = "$GITHUB_SHA"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "npm publish finished but registry verification did not observe 1.2.1." >&2
+          exit 1
