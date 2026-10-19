@@ -128,9 +128,9 @@ jobs:
           SAMPLE="$RUNNER_TEMP/web-kit-sample"
           TARBALL="./${{ steps.pack.outputs.tarball }}"
 
-          npx --yes "$TARBALL" scan --ref main --project "$SAMPLE"
+          npx --yes "$TARBALL" scan --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE"
           INSTALL_LOG="$RUNNER_TEMP/install.log"
-          npx --yes "$TARBALL" install --ref main --project "$SAMPLE" | tee "$INSTALL_LOG"
+          npx --yes "$TARBALL" install --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE" | tee "$INSTALL_LOG"
 
           test -f "$SAMPLE/AGENTS.md"
           test -f "$SAMPLE/CLAUDE.md"
@@ -185,7 +185,7 @@ jobs:
           if (cfg.ai_compatibility.runtime !== 'node+npm') process.exit(1);
           if (cfg.ai_compatibility.transparent_context_rollover_threshold_percent !== 50) process.exit(1);
           if (cfg.ai_compatibility.explicit_session_controller_fallback !== '.agent-core/bin/session-controller.mjs') process.exit(1);
-          if (policy.version !== 7 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
+          if (policy.version !== 8 || policy.session_control.default_rollover_threshold_percent !== 50) process.exit(1);
           if (!policy.session_control.normal_install_installs_user_supervisor) process.exit(1);
           NODE
 
@@ -197,7 +197,7 @@ jobs:
           TARBALL="./${{ steps.pack.outputs.tarball }}"
           echo 'PROJECT OWNED CLAUDE RULE' >> "$SAMPLE/CLAUDE.md"
           BEFORE="$(sed '/WEB-AGENT-KIT:AI-ROLES:START/,/WEB-AGENT-KIT:AI-ROLES:END/d' "$SAMPLE/CLAUDE.md")"
-          npx --yes "$TARBALL" update --ref main --project "$SAMPLE"
+          npx --yes "$TARBALL" update --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE"
           AFTER="$(sed '/WEB-AGENT-KIT:AI-ROLES:START/,/WEB-AGENT-KIT:AI-ROLES:END/d' "$SAMPLE/CLAUDE.md")"
           test "$BEFORE" = "$AFTER"
           grep -q 'PROJECT OWNED CLAUDE RULE' "$SAMPLE/CLAUDE.md"
@@ -226,7 +226,7 @@ jobs:
           cat > "$SAMPLE/.mcp.json" <<'JSON'
           {"mcpServers":{"graphify":{"command":"managed-by-uv","args":["graphify-out/graph.json"]}}}
           JSON
-          npx --yes "$TARBALL" update --ref main --project "$SAMPLE"
+          npx --yes "$TARBALL" update --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE"
 
           MOCK="$RUNNER_TEMP/mock-graphify"
           LOG="$RUNNER_TEMP/graphify-calls.log"
