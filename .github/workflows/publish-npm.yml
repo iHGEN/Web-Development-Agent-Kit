@@ -1,0 +1,201 @@
+name: Publish Web Kit to npm
+
+on:
+  pull_request:
+    paths:
+      - "VERSION"
+      - "package.json"
+      - ".github/workflows/publish-npm.yml"
+  push:
+    branches: [main]
+    paths:
+      - "VERSION"
+      - "package.json"
+      - ".github/workflows/publish-npm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-kit-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      already_published: ${{ steps.registry.outputs.already_published }}
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Validate package identity and version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          test "$VERSION" = "$(node -p "require('./package.json').version")"
+          test "$(node -p "require('./package.json').name")" = "@ihgen/web-kit"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION must be a stable semantic version" >&2; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          node --check bin/web-kit-entry.js
+          node --check bin/web-kit.js
+          node --check bootstrap/remote-install.mjs
+          node --check pack/runtime/repository-search.mjs
+          node --check pack/rules/graphify-refresh.mjs
+
+      - name: Validate published package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json > "$RUNNER_TEMP/web-kit-pack.json"
+          node - "$RUNNER_TEMP/web-kit-pack.json" <<'NODE'
+          const fs = require('node:fs');
+          const expected = fs.readFileSync('VERSION', 'utf8').trim();
+          const pkg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))[0];
+          if (pkg.name !== '@ihgen/web-kit' || pkg.version !== expected) throw new Error('npm package name/version mismatch');
+          const files = new Set((pkg.files || []).map(file => file.path));
+          for (const p of ['package.json', 'bin/web-kit.js', 'bin/web-kit-entry.js', 'bootstrap/remote-install.mjs']) {
+            if (!files.has(p)) throw new Error('Missing npm publish file: ' + p);
+          }
+          console.log('Validated @ihgen/web-kit@' + expected);
+          NODE
+
+      - name: Run relevant release tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/repository-search-smoke.mjs
+          node tests/work-progress-smoke.mjs
+
+      - name: Confirm npm release availability
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          npm ping >/dev/null
+          LATEST="$(npm view '@ihgen/web-kit' version --json)"
+          export LATEST VERSION
+          node <<'NODE'
+          function parse(v) {
+            const match = String(v).match(/^(\d+)\.(\d+)\.(\d+)$/);
+            if (!match) throw new Error('Unexpected semantic version: ' + v);
+            return match.slice(1).map(Number);
+          }
+          const current = parse(JSON.parse(process.env.LATEST));
+          const proposed = parse(process.env.VERSION);
+          const comparison = proposed[0]-current[0] || proposed[1]-current[1] || proposed[2]-current[2];
+          if (comparison < 0) throw new Error('npm latest is newer than this release; do not move latest backwards.');
+          console.log('npm latest is ' + JSON.parse(process.env.LATEST) + '; release candidate ' + process.env.VERSION);
+          NODE
+
+          set +e
+          LOOKUP="$(npm view "@ihgen/web-kit@$VERSION" version --json 2>&1)"
+          RESULT=$?
+          set -e
+          if [ "$RESULT" -eq 0 ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              echo "@ihgen/web-kit@$VERSION already exists on npm; bump VERSION to a new version." >&2
+              exit 1
+            fi
+            echo "Release already on npm; only tag verification is needed."
+          elif printf '%s' "$LOOKUP" | grep -Eqi 'E404|404 Not Found|No match found for version|is not in this registry'; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "@ihgen/web-kit@$VERSION is available for publication."
+          else
+            printf '%s\n' "$LOOKUP" >&2
+            exit "$RESULT"
+          fi
+
+  publish:
+    needs: validate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install --global npm@latest
+
+      - name: Create or verify immutable release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          TAG="v$VERSION"
+          test "$VERSION" = "$(node -p "require('./package.json').version")"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          if git ls-remote --exit-code --tags --refs origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            git fetch --no-tags origin tag "$TAG"
+            test "$(git rev-list -n1 "$TAG")" = "$GITHUB_SHA" || {
+              echo "Existing tag $TAG targets a different commit; refusing to rewrite it." >&2
+              exit 1
+            }
+            echo "Verified existing tag $TAG."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Web Kit $TAG — indexed repository search and Graphify improvements"
+            git push origin "refs/tags/$TAG"
+            echo "Created tag $TAG at $GITHUB_SHA."
+          fi
+
+      - name: Publish package to npm
+        if: needs.validate.outputs.already_published == 'false'
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NPM_TOKEN" ]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/release-npmrc"
+            chmod 600 "$RUNNER_TEMP/release-npmrc"
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/release-npmrc"
+          else
+            echo "No NPM_TOKEN: attempting npm OIDC trusted publishing (requires npm package Trusted Publisher configuration for publish-npm.yml)."
+          fi
+          npm publish --access public --provenance
+
+      - name: Verify published package and release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          for attempt in $(seq 1 12); do
+            if FOUND="$(npm view "@ihgen/web-kit@$VERSION" version --json 2>/dev/null)"; then
+              if [ "$FOUND" = "\"$VERSION\"" ]; then
+                test "$(git rev-list -n1 "v$VERSION")" = "$GITHUB_SHA"
+                echo "Verified @ihgen/web-kit@$VERSION on npm and v$VERSION at $GITHUB_SHA."
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "npm registry verification did not observe release $VERSION." >&2
+          exit 1
