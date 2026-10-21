@@ -56,6 +56,7 @@ jobs:
           node --check scripts/ai-compat.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
+          node --check pack/runtime/repository-search.mjs
           node --check pack/runtime/session-controller.mjs
           node --check pack/runtime/context-supervisor.mjs
           node --check pack/runtime/provider-bridge.mjs
@@ -111,6 +112,7 @@ jobs:
           test -f "$SAMPLE/.agent-core/rules/graphify-refresh.mjs"
           test -f "$SAMPLE/.agent-core/rules/repository-navigation.md"
           test -f "$SAMPLE/.agent-core/rules/context-rollover.md"
+          test -f "$SAMPLE/.agent-core/bin/repository-search.mjs"
           test -f "$SAMPLE/.agent-core/bin/session-controller.mjs"
           test -f "$SAMPLE/.agent-core/bin/context-supervisor.mjs"
           test -f "$SAMPLE/.agent-core/bin/provider-bridge.mjs"
