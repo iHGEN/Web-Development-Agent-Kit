@@ -161,7 +161,7 @@ function rank(index, hits, query, words, kind, limit) {
     const pathHits = words.filter((w) => rel.toLowerCase().includes(w));
     const symbolHits = words.filter((w) => symbols.some((x) => tokenize(x.name).includes(w)));
     const line = hits.get(rel);
-    if (kind === "exact" && !line && !symbol?.name.toLowerCase().includes(exact) && !pathHits.length) continue;
+    if (kind === "exact" && !line && !symbols.some((item) => item.name.toLowerCase() === exact)) continue;
     if (!line && !pathHits.length && !symbolHits.length) continue;
     let score = pathHits.length * 6 + symbolHits.length * 8 + (line ? 4 : 0);
     if (fileName.includes(exact)) score += 12;
