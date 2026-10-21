@@ -154,19 +154,6 @@ function nulPaths(project, args) {
   if (!raw) return [];
   return raw.toString("utf8").split("\0").filter(Boolean);
 }
-function fileSignature(file) {
-  if (!fs.existsSync(file)) return "deleted";
-  try {
-    const stat = fs.statSync(file);
-    if (stat.isFile() && stat.size <= MAX_CONTENT_HASH_BYTES) {
-      const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-      return `sha256:${digest}`;
-    }
-    return `stat:${stat.size}:${stat.mtimeMs}`;
-  } catch {
-    return "unreadable";
-  }
-}
 // Hash the *relevant source snapshot*, not HEAD. A docs-only commit should not
 // force Graphify to regenerate a graph that depends on unchanged source files.
 function gitBlobId(buffer, objectFormat) {
