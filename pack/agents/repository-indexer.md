@@ -45,7 +45,7 @@ For ambiguous feature ownership or repeated lookups, use the optional Node-only 
 node .agent-core/bin/repository-search.mjs --project . --query "booking confirmation" --type feature
 ```
 
-This generates a lightweight incremental symbol/path index and a source-validated, source-state-keyed search cache. Its ranked output is navigation evidence only; inspect current source before relying on behavior. For simple exact paths/symbols, direct `rg` remains appropriate.
+This generates a lightweight incremental symbol/path index and a source-state-keyed search cache. Its ranked output is navigation evidence only; inspect current source before relying on behavior. For simple exact paths/symbols, direct `rg` remains appropriate.
 
 ## Rules
 
