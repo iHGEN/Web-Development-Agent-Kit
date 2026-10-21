@@ -36,6 +36,10 @@ Preferred order:
 
 Never begin by reading an entire repository or entire directory tree as source text.
 
+## Incremental indexed navigation (optional)
+
+For uncertain ownership, use `.agent-core/bin/repository-search.mjs` to rank file/symbol candidates and reuse cache results across agents or context rollovers. Use ordinary targeted `rg` for exact known symbols. The index is heuristic and must not be mistaken for current behavioral truth. Revalidate results when source files change, and do not repeatedly invoke search helpers after the implementation target is known.
+
 ## Read breadth control
 
 Do not recursively follow every import.
