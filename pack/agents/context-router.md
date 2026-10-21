@@ -58,6 +58,16 @@ Use Graphify only when `.agent-core/state/graphify.json` reports fresh graphify-
 
 If Graphify is unavailable/stale/fails, immediately use standard routing. Never load the full graph into model context.
 
+## Reusable indexed search (optional)
+
+For ambiguous feature ownership or repeated cross-agent searches, use:
+
+```bash
+node .agent-core/bin/repository-search.mjs --project . --query "booking confirmation" --type feature
+```
+
+The helper produces a small ranked candidate set, an incrementally maintained heuristic symbol index under `.agent-core/index/search-index.json`, a fingerprint-keyed cache under `.agent-core/state/repository-search-cache.json`, and measured counters under `.agent-core/state/metrics/repository-search.json`. It never proves behavior and does not replace source reads. For exact known symbols, `rg` or equivalent remains the fastest first step; avoid requiring an extra helper invocation without a navigation benefit.
+
 ## Stop-discovery rule
 
 The router must stop gathering context once the next safe implementation action is sufficiently supported.

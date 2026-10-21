@@ -407,6 +407,21 @@ Structural index:
 .agent-core/index/project-index.json
 ```
 
+## Incremental repository search (optional)
+
+For ambiguous feature ownership or repeated lookup across agents, Web Kit now includes a Node-only source search helper. It is installed automatically under `.agent-core/bin` and needs no Python or database:
+
+```bash
+node .agent-core/bin/repository-search.mjs --project . --query "booking confirmation" --type feature
+node .agent-core/bin/repository-search.mjs --project . --query "sendBookingConfirmation" --type exact
+node .agent-core/bin/repository-search.mjs --project . --query "what calls sendBookingConfirmation" --type relationship
+node .agent-core/bin/repository-search.mjs --project . --status
+```
+
+The helper incrementally extracts heuristic symbols and ranks paths/source matches, caches candidate results across sessions while the relevant source fingerprint is unchanged, and records observed search calls/cache hits/index updates/elapsed milliseconds. Search state lives in `.agent-core/index/search-index.json` and `.agent-core/state/`; generated results are navigation hints, **not verified behavior**. Exact known symbols can still use direct `rg` without a new mandatory routing stop. A relationship search suggests Graphify's freshness gate when a graph exists; Graphify remains optional and its failure never blocks source search.
+
+The Graph Refresh Gate now fingerprints tracked source blobs and current uncommitted source changes rather than treating every Git HEAD change as graph invalidation. A docs-only commit does not force a Graphify refresh; editing relevant code does.
+
 ## Repository navigation rule
 
 ### Direct source lookup

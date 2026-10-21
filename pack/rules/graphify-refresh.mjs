@@ -33,8 +33,16 @@ function writeJsonAtomic(file, data) {
   fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   fs.renameSync(tmp, file);
 }
+function executableCommand(command, args) {
+  // A JS mock CLI can be executed explicitly with Node on every platform.
+  // Native Graphify executables and ordinary commands retain their direct path.
+  return /\.[cm]?js$/i.test(command) && fs.existsSync(command)
+    ? { bin: process.execPath, args: [command, ...args] }
+    : { bin: command, args };
+}
 function commandWorks(command, args = ["--version"]) {
-  const result = spawnSync(command, args, { stdio: "ignore", windowsHide: true });
+  const invocation = executableCommand(command, args);
+  const result = spawnSync(invocation.bin, invocation.args, { stdio: "ignore", windowsHide: true });
   return !result.error && result.status === 0;
 }
 function findGraphify() {
@@ -128,6 +136,22 @@ function ignored(rel) {
   if (IGNORED_FILES.has(normalized)) return true;
   return normalized.split("/").some((part) => IGNORED_PARTS.has(part));
 }
+const GRAPH_SOURCE_EXTENSIONS = new Set([
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py",
+  ".cs", ".go", ".rs", ".java", ".kt", ".swift", ".php", ".rb", ".sql",
+  ".vue", ".svelte", ".html", ".css", ".scss", ".mdx", ".graphql", ".gql",
+  ".json", ".jsonc", ".yaml", ".yml", ".xml", ".toml", ".sh", ".c", ".cc", ".cpp", ".h", ".hpp",
+]);
+const NON_GRAPH_FILES = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]);
+function graphRelevant(rel) {
+  const normalized = posix(rel);
+  if (ignored(normalized) || normalized.split("/").includes(".github")) return false;
+  const name = path.basename(normalized);
+  return !NON_GRAPH_FILES.has(name) &&
+    (GRAPH_SOURCE_EXTENSIONS.has(path.extname(name).toLowerCase()) ||
+      ["Dockerfile", "Makefile", "Gemfile", "Procfile"].includes(name));
+}
+
 function runGit(project, args) {
   const result = spawnSync("git", ["-C", project, ...args], { encoding: "buffer", windowsHide: true });
   if (result.error || result.status !== 0) return null;
@@ -138,44 +162,57 @@ function nulPaths(project, args) {
   if (!raw) return [];
   return raw.toString("utf8").split("\0").filter(Boolean);
 }
-function fileSignature(file) {
-  if (!fs.existsSync(file)) return "deleted";
-  try {
-    const stat = fs.statSync(file);
-    if (stat.isFile() && stat.size <= MAX_CONTENT_HASH_BYTES) {
-      const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-      return `sha256:${digest}`;
-    }
-    return `stat:${stat.size}:${stat.mtimeMs}`;
-  } catch {
-    return "unreadable";
-  }
+// Hash the *relevant source snapshot*, not HEAD. A docs-only commit should not
+// force Graphify to regenerate a graph that depends on unchanged source files.
+function gitBlobId(buffer, objectFormat) {
+  const hash = crypto.createHash(objectFormat === "sha256" ? "sha256" : "sha1");
+  hash.update(`blob ${buffer.length}\0`);
+  hash.update(buffer);
+  return hash.digest("hex");
 }
 function gitFingerprint(project) {
   if (!fs.existsSync(path.join(project, ".git")) || !commandWorks("git", ["--version"])) return null;
-  const headRaw = runGit(project, ["rev-parse", "HEAD"]);
-  if (!headRaw) return null;
-  const changed = new Set([
-    ...nulPaths(project, ["diff", "--name-only", "-z"]),
-    ...nulPaths(project, ["diff", "--cached", "--name-only", "-z"]),
-    ...nulPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"]),
-  ].filter((rel) => !ignored(rel)));
-  const sorted = [...changed].sort();
-  const head = headRaw.toString("utf8").trim();
+  const raw = runGit(project, ["ls-files", "-s", "-z"]);
+  if (!raw) return null;
+  const objectFormat = runGit(project, ["rev-parse", "--show-object-format"])?.toString("utf8").trim() || "sha1";
+  const current = new Map();
+  for (const entry of raw.toString("utf8").split("\0").filter(Boolean)) {
+    const tab = entry.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, blob, stage] = entry.slice(0, tab).split(" ");
+    const rel = entry.slice(tab + 1);
+    if (graphRelevant(rel)) current.set(rel, `${mode}:${blob}:${stage}`);
+  }
+  const unstaged = nulPaths(project, ["diff", "--name-only", "-z"]);
+  const staged = nulPaths(project, ["diff", "--cached", "--name-only", "-z"]);
+  const untracked = nulPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  const changed = [...new Set([...unstaged, ...staged, ...untracked].filter(graphRelevant))].sort();
+  for (const rel of new Set([...unstaged, ...untracked].filter(graphRelevant))) {
+    const full = path.join(project, rel);
+    try {
+      const stat = fs.lstatSync(full);
+      if (!stat.isFile()) { current.delete(rel); continue; }
+      const mode = current.has(rel) ? current.get(rel).split(":")[0] : ((stat.mode & 0o111) ? "100755" : "100644");
+      if (stat.size <= MAX_CONTENT_HASH_BYTES) {
+        current.set(rel, `${mode}:${gitBlobId(fs.readFileSync(full), objectFormat)}:0`);
+      } else {
+        current.set(rel, `${mode}:large:${stat.size}:${stat.mtimeMs}:0`);
+      }
+    } catch { current.delete(rel); }
+  }
   const hash = crypto.createHash("sha256");
-  hash.update(`HEAD:${head}\n`);
-  for (const rel of sorted) {
-    hash.update(posix(rel));
+  for (const [rel, signature] of [...current].sort(([a], [b]) => a.localeCompare(b))) {
+    hash.update(rel);
     hash.update("\0");
-    hash.update(fileSignature(path.join(project, rel)));
+    hash.update(signature);
     hash.update("\n");
   }
   return {
-    method: "git-working-tree",
+    method: "git-source-snapshot-v3",
     fingerprint: hash.digest("hex"),
-    head,
-    changed_files: sorted.slice(0, 200).map(posix),
-    changed_file_count: sorted.length,
+    head: runGit(project, ["rev-parse", "HEAD"])?.toString("utf8").trim() || null,
+    changed_files: changed.slice(0, 200).map(posix),
+    changed_file_count: changed.length,
   };
 }
 function filesystemFingerprint(project) {
@@ -191,7 +228,7 @@ function filesystemFingerprint(project) {
       const rel = path.relative(project, full);
       if (ignored(rel)) continue;
       if (entry.isDirectory()) walk(full);
-      else if (entry.isFile()) {
+      else if (entry.isFile() && graphRelevant(rel)) {
         try {
           const stat = fs.statSync(full);
           hash.update(`${posix(rel)}:${stat.size}:${stat.mtimeMs}\n`);
@@ -331,7 +368,8 @@ function refresh(project, taskId, retry, timeoutSeconds) {
   if (!graphify) return markFallback(project, state, taskId, fingerprint, "unavailable", "Graphify CLI is not available");
 
   console.log("Graph Refresh Gate: repository changed; running one incremental `graphify update .` refresh...");
-  const result = spawnSync(graphify, ["update", "."], {
+  const invocation = executableCommand(graphify, ["update", "."]);
+  const result = spawnSync(invocation.bin, invocation.args, {
     cwd: project, stdio: "inherit", timeout: timeoutSeconds * 1000, windowsHide: true,
   });
   if (result.error) {
