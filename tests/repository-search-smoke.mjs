@@ -55,6 +55,12 @@ assert.equal(search("sendCustomerNotice", "exact").candidates[0].symbol, "sendCu
 write("src/new-handler.ts", "export function approveReservation() { return true; }\n");
 assert.equal(search("approveReservation", "exact").candidates[0].path, "src/new-handler.ts", "new files must be searchable");
 
+// No shell utilities available: the helper must use its portable Node fallback.
+const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-no-cli-"));
+const portable = search("customer notice", "feature", { env: { ...process.env, PATH: emptyPath } });
+assert.equal(portable.search_engine, "node");
+assert.equal(portable.candidates[0].path, "src/booking.ts");
+
 write("graphify-out/graph.json", JSON.stringify({ nodes: [], edges: [] }));
 const rel = search("what calls approveReservation", "relationship");
 assert.equal(rel.type, "relationship");
