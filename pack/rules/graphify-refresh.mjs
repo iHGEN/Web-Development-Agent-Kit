@@ -33,8 +33,16 @@ function writeJsonAtomic(file, data) {
   fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   fs.renameSync(tmp, file);
 }
+function executableCommand(command, args) {
+  // A JS mock CLI can be executed explicitly with Node on every platform.
+  // Native Graphify executables and ordinary commands retain their direct path.
+  return /\.[cm]?js$/i.test(command) && fs.existsSync(command)
+    ? { bin: process.execPath, args: [command, ...args] }
+    : { bin: command, args };
+}
 function commandWorks(command, args = ["--version"]) {
-  const result = spawnSync(command, args, { stdio: "ignore", windowsHide: true });
+  const invocation = executableCommand(command, args);
+  const result = spawnSync(invocation.bin, invocation.args, { stdio: "ignore", windowsHide: true });
   return !result.error && result.status === 0;
 }
 function findGraphify() {
@@ -360,7 +368,8 @@ function refresh(project, taskId, retry, timeoutSeconds) {
   if (!graphify) return markFallback(project, state, taskId, fingerprint, "unavailable", "Graphify CLI is not available");
 
   console.log("Graph Refresh Gate: repository changed; running one incremental `graphify update .` refresh...");
-  const result = spawnSync(graphify, ["update", "."], {
+  const invocation = executableCommand(graphify, ["update", "."]);
+  const result = spawnSync(invocation.bin, invocation.args, {
     cwd: project, stdio: "inherit", timeout: timeoutSeconds * 1000, windowsHide: true,
   });
   if (result.error) {
