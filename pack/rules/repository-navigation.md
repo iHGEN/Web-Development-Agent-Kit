@@ -90,6 +90,18 @@ source-verified behavior / impact
 
 Do not broadly search the repository before Graphify when the question is primarily about relationships and a fresh graph can first reduce the candidate set.
 
+## Optional ranked source search
+
+When the owning file is unclear or the same repository question recurs across agents/sessions, the Node-only indexed helper can rank filenames, candidate symbols, and current-source text hits:
+
+```bash
+node .agent-core/bin/repository-search.mjs --project . --query "booking confirmation" --type feature
+node .agent-core/bin/repository-search.mjs --project . --query "sendBookingConfirmation" --type exact
+node .agent-core/bin/repository-search.mjs --project . --status
+```
+
+Use this instead of broad file ingestion, not as an extra mandatory step for simple direct lookups. The heuristic index and cached candidates are **navigation evidence only**, keyed by source-file metadata and invalidated when source changes. Verify actual behavior in current source. For relationship questions, the helper suggests the managed Graph Refresh Gate but does not run Graphify on its own.
+
 ## Graphify unavailable or unsuitable
 
 If Graphify is:
