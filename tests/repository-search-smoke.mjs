@@ -61,8 +61,25 @@ const portable = search("customer notice", "feature", { env: { ...process.env, P
 assert.equal(portable.search_engine, "node");
 assert.equal(portable.candidates[0].path, "src/booking.ts");
 
+// Graphify readiness is independent of source and must never be cached.
+const relationshipQuery = "what calls approveReservation";
+const noGraph = search(relationshipQuery, "relationship");
+assert.equal(noGraph.graphify, "not-needed");
+assert.equal(noGraph.cached, false);
+const graphPath = path.join(root, "graphify-out", "graph.json");
 write("graphify-out/graph.json", JSON.stringify({ nodes: [], edges: [] }));
-const rel = search("what calls approveReservation", "relationship");
+const withGraph = search(relationshipQuery, "relationship");
+assert.equal(withGraph.cached, true, "creating the graph must preserve reusable source search results");
+assert.equal(withGraph.graphify, "run-freshness-gate-before-query");
+assert.match(withGraph.next_step, /graphify-refresh\.mjs/);
+fs.rmSync(graphPath);
+const removedGraph = search(relationshipQuery, "relationship");
+assert.equal(removedGraph.cached, true);
+assert.equal(removedGraph.graphify, "not-needed", "removing graph must invalidate Graphify guidance, not source cache");
+assert.doesNotMatch(removedGraph.next_step, /graphify-refresh\.mjs/);
+write("graphify-out/graph.json", JSON.stringify({ nodes: [], edges: [] }));
+const rel = search(relationshipQuery, "relationship");
+assert.equal(rel.cached, true);
 assert.equal(rel.type, "relationship");
 assert.equal(rel.graphify, "run-freshness-gate-before-query", "relationship search must not assume graph freshness");
 const status = JSON.parse(run(process.execPath, [helper, "--project", root, "--status"]));
