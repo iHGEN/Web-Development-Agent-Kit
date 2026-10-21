@@ -17,7 +17,7 @@ When Graphify is not ready, continue with the normal lightweight structural inde
 When `routing_mode` is `graphify-assisted`, run the managed freshness gate before the first graph query for the task:
 
 ```bash
-python .agent-core/rules/graphify-refresh.py --project . --task-id <task-id>
+node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>
 ```
 
 Then read `.agent-core/state/graphify.json`.
@@ -33,9 +33,19 @@ When the graph is fresh and Graphify tools are available:
 - never ingest or forward the complete graph file;
 - verify exact behavior from current repository source before another agent relies on it.
 
-After any completed code-changing step, the Graph Refresh Gate runs once before handoff validation. If relevant repository state changed, it performs one incremental `graphify update .`; if nothing changed, it skips the refresh.
+After a coherent code-changing chunk, run the Graph Refresh Gate **only when a downstream relationship query or validation needs the updated graph**. The gate compares relevant source state, skips unchanged input, and falls back to ordinary search if refresh fails.
 
 If Graphify is unavailable, refresh fails/times out, appears stale/incomplete, or conflicts with current source, record the fallback and immediately continue with the standard index/search path. Graphify must never become a blocker.
+
+## Indexed source search
+
+For ambiguous feature ownership or repeated lookups, use the optional Node-only indexed search helper:
+
+```bash
+node .agent-core/bin/repository-search.mjs --project . --query "booking confirmation" --type feature
+```
+
+This generates a lightweight incremental symbol/path index and a source-validated, source-state-keyed search cache. Its ranked output is navigation evidence only; inspect current source before relying on behavior. For simple exact paths/symbols, direct `rg` remains appropriate.
 
 ## Rules
 
