@@ -8,6 +8,7 @@ on:
       - "bootstrap/remote-install.mjs"
       - "scripts/**"
       - "pack/**"
+      - "tests/repository-search-smoke.mjs"
       - ".github/workflows/cross-platform-node-smoke.yml"
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - "bootstrap/remote-install.mjs"
       - "scripts/**"
       - "pack/**"
+      - "tests/repository-search-smoke.mjs"
       - ".github/workflows/cross-platform-node-smoke.yml"
   workflow_dispatch:
 
@@ -62,10 +64,15 @@ jobs:
           node --check scripts/ai-compat.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
+          node --check pack/runtime/repository-search.mjs
           node --check pack/runtime/session-controller.mjs
           node --check pack/runtime/context-supervisor.mjs
           node --check pack/runtime/provider-bridge.mjs
           node --check pack/runtime/supervisor-setup.mjs
+
+      - name: Test search cache and Graphify readiness on each OS
+        shell: bash
+        run: node tests/repository-search-smoke.mjs
 
       - name: Pack npm CLI
         id: pack
