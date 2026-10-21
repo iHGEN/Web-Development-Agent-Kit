@@ -129,9 +129,10 @@ function scanMatches(project, entries, query, words, kind) {
   const rg = spawnSync("rg", args, { cwd: project, encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
   if (!rg.error && (rg.status === 0 || rg.status === 1)) {
     for (const line of (rg.stdout || "").split(/\r?\n/)) {
-      const match = /^\.\/([^:\r\n]+):(\d+):/.exec(line);
-      if (!match || !entries[match[1]]) continue;
-      if (!fileHits.has(match[1])) fileHits.set(match[1], Number(match[2]));
+      const match = /^(?:\.\/|\.\\)?(.+?):(\d+):/.exec(line);
+      const rel = match?.[1]?.replaceAll("\\", "/");
+      if (!rel || !entries[rel]) continue;
+      if (!fileHits.has(rel)) fileHits.set(rel, Number(match[2]));
     }
     return { hits: fileHits, engine: "rg", incomplete: Object.values(entries).some((item) => BigInt(item.signature.split(":")[0]) > BigInt(MAX_SEARCH_BYTES)) };
   }
