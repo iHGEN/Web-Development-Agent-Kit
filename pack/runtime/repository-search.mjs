@@ -206,28 +206,37 @@ function main() {
   const saved = readJson(cacheFile, { version: 1, fingerprint: "", items: {} });
   const cache = saved.version === 1 && saved.fingerprint === index.fingerprint ? saved.items || {} : {};
   const cached = Boolean(cache[key]);
-  let result;
-  if (cached) result = cache[key];
-  else {
+  let sourceResult = cache[key];
+  if (!cached) {
     const words = tokenize(args.query);
     const match = scanMatches(project, index.entries, args.query, words.length ? words : [args.query.toLowerCase()], type);
-    const graphPath = path.join(project, "graphify-out", "graph.json");
-    const graphReady = fs.existsSync(graphPath);
-    result = {
-      type, search_engine: match.engine,
-      graphify: type === "relationship" && graphReady ? "run-freshness-gate-before-query" : "not-needed",
+    // Only source-derived data may be cached. Graphify readiness is external to
+    // the source fingerprint and must be re-evaluated for every invocation.
+    sourceResult = {
+      search_engine: match.engine,
       candidates: rank(index, match.hits, args.query, words, type, args.limit),
       incomplete: match.incomplete,
-      next_step: type === "relationship" && graphReady
-        ? "Run node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>; use Graphify only if clean, then verify exact source."
-        : "Inspect candidate symbols in current source; expand only with supporting evidence.",
-      source_authority: "current repository files, diff, tests and runtime",
     };
-    cache[key] = result;
+    cache[key] = sourceResult;
     const keys = Object.keys(cache);
     while (keys.length > 80) delete cache[keys.shift()];
     atomicJson(cacheFile, { version: 1, fingerprint: index.fingerprint, items: cache });
   }
+  const graphReady = type === "relationship" &&
+    fs.existsSync(path.join(project, "graphify-out", "graph.json"));
+  // Whitelist source-only properties when reading cached entries as well, so
+  // stale guidance from caches written by older versions cannot leak through.
+  const result = {
+    type,
+    search_engine: sourceResult.search_engine,
+    candidates: sourceResult.candidates,
+    incomplete: sourceResult.incomplete,
+    graphify: graphReady ? "run-freshness-gate-before-query" : "not-needed",
+    next_step: graphReady
+      ? "Run node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>; use Graphify only if clean, then verify exact source."
+      : "Inspect candidate symbols in current source; expand only with supporting evidence.",
+    source_authority: "current repository files, diff, tests and runtime",
+  };
   const elapsed = Number(process.hrtime.bigint() - started) / 1_000_000;
   metrics.searches = (metrics.searches || 0) + 1;
   metrics.cache_hits = (metrics.cache_hits || 0) + Number(cached);
