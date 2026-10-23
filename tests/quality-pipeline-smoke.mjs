@@ -86,8 +86,31 @@ assert(readJob("FORMAL").plan.validator.status === "PENDING", "Spec change faile
 run("spec-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "spec-validator", "--evidence", "Revised criterion reviewed");
 run("plan-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "plan-validator", "--evidence", "Reapproved changed plan");
 run("update", "--task-id", "FORMAL", "--status", "IMPLEMENTING");
-// Benchmark rejects unverified or unmeasured runs.
+// Resolve the failed check and demonstrate a successful formal DONE with current evidence.
+fs.writeFileSync(pkg, JSON.stringify({
+  name: "web-kit-quality-smoke", private: true,
+  scripts: { test: "node sample.mjs", fail: "node sample.mjs" },
+}, null, 2));
+assert(run("check-run", "--task-id", "FORMAL", "--script", "test").status === "PASS", "Test rerun should pass");
+assert(run("check-run", "--task-id", "FORMAL", "--script", "fail").status === "PASS", "Repaired check should pass");
+run("requirement-verify", "--task-id", "FORMAL", "--id", "REQ-101", "--result", "PASS", "--check-script", "test", "--evidence", "Tested current source and acceptance");
+run("quality-review", "--task-id", "FORMAL", "--reviewer", "code-reviewer", "--result", "PASS", "--evidence", "Reviewed post-fix code and test results");
+run("update", "--task-id", "FORMAL", "--final-validation", "PASS", "--status", "DONE", "--evidence", "Requirements and quality evidence approved");
+assert(readJob("FORMAL").status === "DONE", "Current verified formal task should complete");
+assert(run("report", "--task-id", "FORMAL").engineering_quality.gate === "PASS", "Passing formal report missing");
+
+// Benchmark refuses incomplete/unmeasured tasks and different classifications.
 fail("benchmark", "--task-id", "FORMAL", "--against", "SMALL");
+// Fixture telemetry is explicitly supplied here to exercise the comparison; production must only report observed values.
+for (const [id, elapsed] of [["BENCH-A", "1000"], ["BENCH-B", "1500"]]) {
+  run("start", "--task-id", id, "--classification", "SMALL");
+  run("requirement-add", "--task-id", id, "--id", "REQ-001", "--description", "Simple behavior", "--acceptance", "Manual proof");
+  run("cycle", "--task-id", id, "--kind", "implementation", "--elapsed-ms", elapsed, "--evidence", "Fixture cycle timing");
+  run("requirement-verify", "--task-id", id, "--id", "REQ-001", "--result", "PASS", "--manual", "--evidence", "Fixture acceptance verified");
+  run("update", "--task-id", id, "--status", "DONE", "--final-validation", "PASS", "--evidence", "Fixture complete");
+}
+const benchmark = run("benchmark", "--task-id", "BENCH-A", "--against", "BENCH-B");
+assert(benchmark.elapsed_difference_ms === -500, "Benchmark should compare observed elapsed milliseconds");
 // Policy audit must distinguish real provider telemetry from missing metrics.
 const audit = run("audit", "--task-id", "FORMAL");
 assert(audit.telemetry_available === false, "Unreported elapsed time should never be fabricated");
