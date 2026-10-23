@@ -53,6 +53,7 @@ jobs:
           node --check bin/web-kit.js
           node --check bootstrap/remote-install.mjs
           node --check pack/runtime/repository-search.mjs
+          node --check pack/runtime/quality-pipeline.mjs
           node --check pack/rules/graphify-refresh.mjs
 
       - name: Validate published package contents
@@ -78,6 +79,7 @@ jobs:
           set -euo pipefail
           node tests/repository-search-smoke.mjs
           node tests/work-progress-smoke.mjs
+          node tests/quality-pipeline-smoke.mjs
 
       - name: Confirm npm release availability
         id: registry
