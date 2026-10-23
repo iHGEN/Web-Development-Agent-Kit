@@ -32,7 +32,9 @@
     "controller_never_silently_escalates_provider_permissions": true,
     "refresh_graphify_only_before_downstream_graph_use": true,
     "adaptive_efficiency_policy": true,
-    "repeat_no_progress_guard_opt_in": true
+    "repeat_no_progress_guard_opt_in": true,
+    "formal_specification_gate": true,
+    "evidence_gated_quality_reporting": true
   },
   "repository_navigation": {
     "capability_source": ".agent-core/index/project-profile.json",
@@ -249,6 +251,8 @@
       "--output-tokens"
     ],
     "no_new_agents_or_mandatory_gates": true,
+    "spec_writer_only_for_formal_tasks": true,
+    "quality_gate_required_for_new_formal_tasks": true,
     "preserves_project_ai_instructions": true
   }
 }

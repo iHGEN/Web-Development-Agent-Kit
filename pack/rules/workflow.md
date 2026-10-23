@@ -113,10 +113,10 @@ Rules:
 Default lifecycle:
 
 ```text
-discovery -> impact/design -> formal plan -> independent Plan Validator -> implementation routing -> handoff/specialist gates -> final validation
+discovery -> Spec Writer -> independent Spec Validator -> impact/design -> formal plan -> independent Plan Validator -> implementation routing -> handoff/specialist gates -> final validation
 ```
 
-Formal planning remains appropriate here, but even LARGE tasks should plan only to the level required to safely implement. Planning is not rewarded for detail beyond executable necessity.
+Formal planning remains appropriate here, but even LARGE tasks should plan only to the level required to safely implement. Planning is not rewarded for detail beyond executable necessity. New formal jobs must register the spec and acceptance criteria with work-progress.mjs and obtain independent spec approval before plan approval. See .agent-core/rules/requirements-quality.md.
 
 ## Phase 3 — Agent routing
 
@@ -265,7 +265,7 @@ IMPLEMENTING -> TESTING -> REVIEWING -> FIXING (only when needed) -> VALIDATING
 
 Update test/build evidence with `work-progress.mjs update`.
 
-Only invoke specialist reviewers relevant to the changed surface. Code Simplifier, performance, accessibility, API-contract, DevSecOps, SRE, etc. are targeted capabilities, not mandatory universal stages.
+Only invoke specialist reviewers relevant to the changed surface. Code Simplifier, performance, accessibility, API-contract, DevSecOps, SRE, etc. are targeted capabilities, not mandatory universal stages. For formal tasks, execute declared npm checks when available, verify individual requirements, and record an independent quality-review with current source evidence.
 
 Validation should inspect the actual diff/results; it should not recreate the original task analysis. Start with affected checks and expand only for demonstrated dependency/risk or a required gate; never run the same failing test again unchanged.
 
@@ -350,6 +350,7 @@ A job may be `DONE` only when:
 - relevant tests/build/checks pass or limitations are explicitly accepted by the user;
 - required specialist/security reviews pass;
 - final integrated state satisfies the original request;
+- for new LARGE/high-risk jobs, the independent specification, acceptance checks, real executed checks where available, and independent code review remain current and pass;
 - final validation is recorded as `PASS`.
 
 Then:

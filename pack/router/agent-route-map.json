@@ -87,6 +87,8 @@
     "context-router",
     "context-rollover-manager",
     "intent-discovery",
+    "spec-writer",
+    "spec-validator",
     "plan-validator",
     "code-simplifier",
     "test-engineer",

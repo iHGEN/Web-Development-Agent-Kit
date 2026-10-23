@@ -58,6 +58,8 @@ jobs:
           node --check scripts/ai-compat.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
+          node --check pack/runtime/quality-pipeline.mjs
+          node --check tests/quality-pipeline-smoke.mjs
           node --check pack/runtime/session-controller.mjs
           node --check pack/runtime/context-supervisor.mjs
           node --check pack/runtime/provider-bridge.mjs
@@ -305,6 +307,13 @@ jobs:
           fs.writeFileSync(p, JSON.stringify(data, null, 2));
           NODE
           npx --yes "$TARBALL" doctor --project "$SAMPLE"
+
+      - name: Test formal requirements and quality evidence gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/work-progress-smoke.mjs
+          node tests/quality-pipeline-smoke.mjs
 
       - name: Assert Python was never invoked
         shell: bash
