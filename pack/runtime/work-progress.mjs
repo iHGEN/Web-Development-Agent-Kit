@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { createQuality, ensureQuality, assertSpecificationReady, assertQualityComplete, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
 
 const CLASSIFICATIONS = new Set(["SMALL", "MEDIUM", "LARGE"]);
 const JOB_STATUSES = new Set([
@@ -179,6 +180,7 @@ function loadJob(project, taskId) {
   if (!job.plan?.validator) job.plan.validator = defaultValidator(job.governance);
   job.metrics = { ...defaultMetrics(), ...job.metrics };
   job.efficiency_guard ||= defaultEfficiencyGuard();
+  ensureQuality(job);
   if (job.governance.min_plan_bullets === undefined) job.governance.min_plan_bullets = job.classification === "MEDIUM" && !job.high_risk ? 3 : job.governance.plan_required ? 1 : 0;
   return { job, paths };
 }
@@ -216,6 +218,8 @@ function jobSummary(job) {
 }
 function writeJob(project, job) {
   if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
+  if (IMPLEMENTATION_OR_LATER.has(job.status) && job.quality?.required) assertSpecificationReady(job, project);
+  if (job.status === "DONE") assertQualityComplete(job, project);
   if (IMPLEMENTATION_OR_LATER.has(job.status) && job.governance.plan_required) assertPlanReady(job);
   const paths = statePaths(project, job.task_id);
   recalculate(job);
@@ -248,7 +252,7 @@ function start(project, args) {
   if (fs.existsSync(paths.job) && !hasArg(args, "--force")) throw new Error(`Job ${taskId} already exists; use --force to replace it.`);
   const governance = governanceFor(classification, highRisk);
   const job = {
-    schema_version: 2,
+    schema_version: 3,
     task_id: taskId,
     title: getArg(args, "--title") || taskId,
     classification,
@@ -270,6 +274,7 @@ function start(project, args) {
     final_validation: { status: "PENDING" },
     anti_slop: { violation: false, reason: null, forced_next_phase: null },
     efficiency_guard: defaultEfficiencyGuard(),
+    quality: createQuality(governance),
     metrics: defaultMetrics(),
     next_action: getArg(args, "--next") || "Perform the minimum targeted discovery needed to identify the next safe implementation action.",
     created_at: nowIso(),
@@ -382,6 +387,7 @@ function planValidate(project, args) {
   if (job.current_agent && validator === job.current_agent) throw new Error("Independent Plan Validator cannot be the current implementation/planning agent.");
   const evidence = getAllArgs(args, "--evidence");
   if (!evidence.length) throw new Error("plan-validate requires at least one --evidence value");
+  if (result === "APPROVED") assertSpecificationReady(job, project);
   if (result === "APPROVED" && Number(job.plan.bullets || 0) < Number(job.governance.min_plan_bullets || 0)) {
     throw new Error(`${job.governance.plan_mode} plan requires at least ${job.governance.min_plan_bullets} bullets before approval.`);
   }
@@ -391,6 +397,7 @@ function planValidate(project, args) {
     source: validator,
     evidence: evidence.slice(-20),
     plan_version: Number(job.plan.version || 0),
+    spec_digest: job.quality?.spec?.validator?.digest || null,
     validated_at: nowIso(),
   };
   job.plan.status = result;
@@ -526,7 +533,14 @@ function show(project, args) {
 function printHelp() {
   console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
         [--action-key <operation-id> --outcome progress|no-progress] [--tool-calls N] [--elapsed-ms N]
-        [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
+        [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]
+  spec-set --task-id <id> --file <project-relative-spec.md>
+  requirement-add --task-id <id> --id REQ-001 --description <text> --acceptance <testable-criteria>
+  spec-validate --task-id <id> --validator <independent-role> --result APPROVED|REVISE|REJECTED --evidence <text>
+  check-run --task-id <id> --script <npm-script-name>
+  requirement-verify --task-id <id> --id REQ-001 --result PASS|FAIL --check-script <script>|--manual --evidence <text>
+  quality-review --task-id <id> --reviewer <independent-role> --result PASS|FAIL --evidence <text>
+  report|audit --task-id <id>; benchmark --task-id <id> --against <other-id>\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
 }
 
 const args = process.argv.slice(2);
@@ -542,6 +556,7 @@ try {
     else if (command === "cycle") result = cycle(project, args.slice(1));
     else if (command === "project-update") result = projectUpdate(project, args.slice(1));
     else if (command === "show") result = show(project, args.slice(1));
+    else if (QUALITY_COMMANDS.has(command)) result = runQualityCommand(project, command, args.slice(1), loadJob, writeJob);
     else throw new Error(`Unknown command: ${command}`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   }
