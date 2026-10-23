@@ -237,12 +237,17 @@ function report(job, project) {
   };
   const checks = lastChecks(quality);
   const failureCount = Number(m.repeated_action_alerts || 0) + (job.anti_slop?.violation ? 1 : 0);
+  const totalCycles = Number(m.ai_cycles || 0);
+  const metaCycles = Number(m.planning_cycles || 0) + Number(m.routing_cycles || 0) + Number(m.prose_only_cycles || 0);
+  const metaWorkPercent = totalCycles ? Math.min(100, Math.round(metaCycles / totalCycles * 100)) : null;
   const observations = [
+    { name: "proportional_meta_work", pass: metaWorkPercent === null ? null : metaWorkPercent <= (job.classification === "LARGE" || job.high_risk ? 40 : 25) },
     { name: "proportional_planning", pass: job.classification !== "SMALL" || job.governance.plan_required === Boolean(job.high_risk) },
     { name: "no_active_planning_loop", pass: !job.anti_slop?.violation },
     { name: "no_repeat_alert", pass: !job.efficiency_guard?.repeat_detected },
     { name: "quality_gate", pass: evaluation.ok },
   ];
+  const assessed = observations.filter((item) => item.pass !== null);
   return {
     task_id: job.task_id, classification: job.classification, status: job.status,
     requirements_fidelity: {
@@ -260,7 +265,14 @@ function report(job, project) {
     },
     execution_efficiency: {
       policy_checks: observations,
-      policy_conformance_percent: Math.round(100 * observations.filter((x) => x.pass).length / observations.length),
+      policy_conformance_percent: assessed.length ? Math.round(100 * assessed.filter((x) => x.pass).length / assessed.length) : null,
+      meta_work_percent: metaWorkPercent,
+      cycle_breakdown: {
+        total: totalCycles, discovery: Number(m.discovery_cycles || 0), planning: Number(m.planning_cycles || 0),
+        routing: Number(m.routing_cycles || 0), implementation: Number(m.implementation_cycles || 0),
+        testing: Number(m.testing_cycles || 0), review: Number(m.review_cycles || 0),
+        validation: Number(m.validation_cycles || 0), prose_only: Number(m.prose_only_cycles || 0),
+      },
       repeated_action_alerts: Number(m.repeated_action_alerts || 0),
       anti_slop_violations: job.anti_slop?.violation ? 1 : 0,
       useful_work_ratio_percent: Number(m.useful_work_ratio || 0),
