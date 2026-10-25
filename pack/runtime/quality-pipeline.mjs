@@ -6,10 +6,19 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
+// Runtime and deployment inputs, not just conventional JS/TS suffixes.
 const SOURCE_EXTENSIONS = new Set([
-  ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json", ".css", ".scss",
-  ".html", ".vue", ".svelte", ".php", ".py", ".go", ".rs", ".java", ".kt",
-  ".swift", ".cs", ".sql", ".yml", ".yaml", ".toml", ".sh",
+  ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json", ".jsonc", ".css", ".scss",
+  ".html", ".mdx", ".astro", ".vue", ".svelte", ".php", ".py", ".go", ".rs",
+  ".java", ".kt", ".swift", ".cs", ".sql", ".yml", ".yaml", ".toml", ".sh",
+  ".graphql", ".gql", ".proto", ".svg", ".xml", ".ejs", ".hbs", ".pug",
+  ".tf", ".tfvars", ".gradle", ".properties", ".config", ".rb", ".h", ".hpp", ".c", ".cpp",
+]);
+const SOURCE_BASENAMES = new Set([
+  "Dockerfile", "Containerfile", "Makefile", "Justfile", "Procfile",
+  "Gemfile", "Rakefile", "Brewfile", "Podfile", "Jenkinsfile",
+  "CMakeLists.txt", ".dockerignore", ".npmrc", ".nvmrc", ".babelrc",
+  ".eslintrc", ".prettierrc", ".env.example",
 ]);
 const SKIP_DIRS = new Set([
   ".git", ".agent-core", ".agents", "node_modules", "vendor", "dist",
@@ -119,27 +128,64 @@ export function assertSpecificationReady(job, project) {
     throw new Error("Formal/high-risk work requires a current independently approved specification with testable requirements.");
   }
 }
-export function sourceDigest(project) {
-  const root = fs.realpathSync(project);
-  const digester = crypto.createHash("sha256");
-  const stack = [root];
-  const files = [];
-  while (stack.length) {
-    const dir = stack.pop();
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) continue;
-      const absolute = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) stack.push(absolute);
-      } else if (entry.isFile() && SOURCE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-        files.push(absolute);
-        if (files.length > 5000) throw new Error("Source snapshot exceeds 5000 files; cannot safely claim fresh verification.");
+function isRelevantSource(relative) {
+  const normalized = relative.replace(/\\/g, "/");
+  const segments = normalized.split("/");
+  if (segments.some((segment) => SKIP_DIRS.has(segment))) return false;
+  const base = segments.at(-1);
+  return SOURCE_EXTENSIONS.has(path.extname(base).toLowerCase())
+    || SOURCE_BASENAMES.has(base)
+    || /^(?:Dockerfile|Containerfile)(?:\.[\w.-]+)?$/.test(base)
+    || /^\.env\.[\w.-]+$/.test(base);
+}
+
+function sourceFiles(root) {
+  // Include tracked and non-ignored untracked project inputs, including files edited before git add.
+  const git = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000, maxBuffer: 8 * 1024 * 1024,
+  });
+  let candidates;
+  if (!git.error && git.status === 0) {
+    candidates = [...new Set(git.stdout.split("\0").filter(Boolean))];
+  } else {
+    // A standalone project or a machine without Git still gets the same input filter.
+    if (git.error?.code === "ETIMEDOUT" || git.error?.code === "ENOBUFS") {
+      throw new Error("Git source listing exceeded verification limits.");
+    }
+    candidates = [];
+    const dirs = [root];
+    while (dirs.length) {
+      const dir = dirs.pop();
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isSymbolicLink() || SKIP_DIRS.has(entry.name)) continue;
+        const absolute = path.join(dir, entry.name);
+        if (entry.isDirectory()) dirs.push(absolute);
+        else if (entry.isFile()) candidates.push(path.relative(root, absolute));
+        if (candidates.length > 20000) throw new Error("Source listing exceeds 20000 files.");
       }
     }
   }
-  files.sort();
+  const files = [];
+  for (const relative of candidates) {
+    if (!isRelevantSource(relative)) continue;
+    const absolute = path.resolve(root, relative);
+    if (!absolute.startsWith(root + path.sep)) continue;
+    try {
+      if (fs.lstatSync(absolute).isFile()) files.push(absolute);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      // A deleted tracked file vanishes from the digest, invalidating old evidence.
+    }
+    if (files.length > 5000) throw new Error("Source snapshot exceeds 5000 files; cannot safely claim fresh verification.");
+  }
+  return files.sort();
+}
+
+export function sourceDigest(project) {
+  const root = fs.realpathSync(project);
+  const digester = crypto.createHash("sha256");
   let total = 0;
-  for (const file of files) {
+  for (const file of sourceFiles(root)) {
     const stat = fs.statSync(file);
     total += stat.size;
     if (stat.size > 8 * 1024 * 1024 || total > 128 * 1024 * 1024) {
