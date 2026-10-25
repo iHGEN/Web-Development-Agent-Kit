@@ -345,10 +345,14 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
       const content = relativeSafeFile(project, quality.spec.file).content;
       if (quality.requirements.some((r) => !content.includes(r.id))) throw new Error("Spec must contain every registered requirement ID.");
     }
+    const approvedDigest = result === "APPROVED" ? specDigest(job, project) : null;
+    // Editing spec bytes directly, followed by reapproval, must invalidate the older plan too.
+    if (result !== "APPROVED" || approvedDigest !== job.plan?.validator?.spec_digest) {
+      invalidatePlan(job);
+    }
     quality.spec.validator = {
-      status: result, source: validator, evidence, digest: result === "APPROVED" ? specDigest(job, project) : null, validated_at: now(),
+      status: result, source: validator, evidence, digest: approvedDigest, validated_at: now(),
     };
-    if (result !== "APPROVED") invalidatePlan(job);
   } else if (command === "check-run") {
     if (quality.required && !["IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING"].includes(job.status)) {
       throw new Error("Approve the formal specification and plan before executing checks.");
