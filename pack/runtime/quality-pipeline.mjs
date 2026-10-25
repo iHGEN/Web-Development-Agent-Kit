@@ -363,7 +363,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     }
     const started = Date.now();
     const commandName = process.platform === "win32" ? "npm.cmd" : "npm";
-    const child = spawnSync(commandName, ["run", script], {
+    const child = spawnSync(commandName, ["run", "--", script], {
       cwd: project, windowsHide: true, shell: process.platform === "win32",
       encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024,
     });
