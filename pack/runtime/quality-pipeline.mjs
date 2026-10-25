@@ -295,7 +295,7 @@ function report(job, project) {
     { name: "proportional_planning", pass: job.classification !== "SMALL" || job.governance.plan_required === Boolean(job.high_risk) },
     { name: "no_active_planning_loop", pass: !job.anti_slop?.violation },
     { name: "no_repeat_alert", pass: !job.efficiency_guard?.repeat_detected },
-    { name: "quality_gate", pass: evaluation.ok },
+    { name: "quality_gate", pass: completion?.gate === "PASS" || evaluation.ok },
   ];
   const assessed = observations.filter((item) => item.pass !== null);
   return {
@@ -374,6 +374,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     quality.spec.file = spec.relative;
     quality.spec.validator = { status: "PENDING", source: null, digest: null, evidence: [] };
     for (const req of quality.requirements) req.verification = { status: "PENDING", method: null, source_digest: null, evidence: [] };
+    quality.code_review = { status: "PENDING", source: null, evidence: [], source_digest: null };
     invalidatePlan(job);
   } else if (command === "requirement-add") {
     assertPlanning(job);
@@ -389,6 +390,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     }
     quality.requirements.push({ id, description, acceptance, verification: { status: "PENDING", method: null, evidence: [], source_digest: null } });
     quality.spec.validator = { status: "PENDING", source: null, digest: null, evidence: [] };
+    quality.code_review = { status: "PENDING", source: null, evidence: [], source_digest: null };
     invalidatePlan(job);
   } else if (command === "spec-validate") {
     assertPlanning(job);
@@ -402,9 +404,16 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
       if (quality.requirements.some((r) => !content.includes(r.id))) throw new Error("Spec must contain every registered requirement ID.");
     }
     const approvedDigest = result === "APPROVED" ? specDigest(job, project) : null;
-    // Editing spec bytes directly, followed by reapproval, must invalidate the older plan too.
+    // A materially changed spec invalidates its previous plan, acceptance evidence and code review.
+    const specificationChanged = approvedDigest !== quality.spec.validator?.digest;
     if (result !== "APPROVED" || approvedDigest !== job.plan?.validator?.spec_digest) {
       invalidatePlan(job);
+    }
+    if (specificationChanged) {
+      for (const requirement of quality.requirements) {
+        requirement.verification = { status: "PENDING", method: null, source_digest: null, evidence: [] };
+      }
+      quality.code_review = { status: "PENDING", source: null, evidence: [], source_digest: null };
     }
     quality.spec.validator = {
       status: result, source: validator, evidence, digest: approvedDigest, validated_at: now(),
