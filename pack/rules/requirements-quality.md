@@ -16,7 +16,9 @@ Follow .agent-core/rules/workflow.md and .agent-core/rules/efficiency-policy.md 
 - Store a project-local spec with REQ-### identifiers and testable acceptance criteria.
 - Use spec-set, requirement-add, and spec-validate on work-progress.mjs before plan-validate and implementation.
 - New formal jobs require independent spec approval. Pre-existing jobs remain readable without retroactively inventing approval.
-- Changed spec bytes or requirement definitions invalidate spec and plan approval. Revalidate only affected material scope.
+- Changed spec bytes or requirement definitions invalidate spec/plan approval and prior acceptance and review evidence. Revalidate only affected material scope.
+- Job state uses revisioned per-job locks; a long npm check reloads the current job after execution instead of overwriting progress recorded by other processes.
+- Freshness checks include Git-tracked and non-ignored untracked application/config inputs (MDX, GraphQL, proto, SVG and Dockerfile) with bounded standalone-directory fallback.
 
 ## Engineering quality
 - Implement and run relevant project checks through check-run --script <actual-npm-script> where scripts exist.
