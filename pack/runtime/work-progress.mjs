@@ -101,7 +101,12 @@ function planReady(job) {
   if (!job.governance.plan_validator_required) return true;
   return job.plan?.validator?.status === "APPROVED"
     && Boolean(job.plan?.validator?.source)
-    && Number(job.plan?.validator?.plan_version) === Number(job.plan?.version || 0);
+    && Number(job.plan?.validator?.plan_version) === Number(job.plan?.version || 0)
+    // An approved plan is valid only for the specification reviewed by that plan validator.
+    && (!job.quality?.required || (
+      Boolean(job.plan.validator.spec_digest)
+      && job.plan.validator.spec_digest === job.quality.spec?.validator?.digest
+    ));
 }
 function assertPlanReady(job) {
   if (planReady(job)) return;
