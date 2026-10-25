@@ -33,7 +33,7 @@ Follow .agent-core/rules/workflow.md and .agent-core/rules/efficiency-policy.md 
 - node .agent-core/bin/work-progress.mjs audit --task-id TASK-042 — efficiency policy indicators and measured telemetry (null where unavailable).
 - node .agent-core/bin/work-progress.mjs benchmark --task-id TASK-042 --against TASK-041 — only quality-verified completed tasks of the same classification with reported elapsed time.
 
-A percentage is a policy indicator, not a claim that implementation correctness can be reduced to one number. Comparisons are observational and meaningful only for comparable workloads.
+A percentage is a policy indicator, not a claim that implementation correctness can be reduced to one number. Comparisons are observational and meaningful only for comparable workloads. Completed jobs retain their verification verdict and source digest as of completion; later code changes appear as separate current-source freshness warnings without rewriting historical benchmark eligibility.
 
 ## Limits
 The quality guard fingerprints bounded source files. If it cannot verify current source, fail closed rather than approving stale evidence. Runtime reviewer identity is recorded provenance, not cryptographic proof of independent human review; CI/branch protection can enforce stronger external review gates. Do not force telemetry collection from providers that do not expose it.
