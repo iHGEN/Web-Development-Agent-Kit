@@ -139,6 +139,8 @@ function assertPlanReady(job) {
 function defaultMetrics() {
   return {
     ai_cycles: 0,
+    // Counts each planning/routing/prose cycle once. prose_only_cycles overlaps those kinds.
+    meta_work_cycles: 0,
     discovery_cycles: 0,
     planning_cycles: 0,
     routing_cycles: 0,
@@ -204,7 +206,10 @@ function loadJob(project, taskId) {
   const job = readJson(paths.job, null);
   if (!job) throw new Error(`Job ${taskId} does not exist. Run 'start' first.`);
   if (!job.plan?.validator) job.plan.validator = defaultValidator(job.governance);
+  // Old job metrics cannot reconstruct distinct meta cycles from overlapping counters.
+  const hasMetaWorkHistory = Object.hasOwn(job.metrics || {}, "meta_work_cycles");
   job.metrics = { ...defaultMetrics(), ...job.metrics };
+  if (!hasMetaWorkHistory) job.metrics.meta_work_cycles = null;
   job.efficiency_guard ||= defaultEfficiencyGuard();
   ensureQuality(job);
   loadedRevisions.set(job, Number(job.revision || 0));
@@ -506,6 +511,9 @@ function cycle(project, args) {
   const m = job.metrics;
   for (const [field, value] of Object.entries(reported)) m[field] += value;
   m.ai_cycles += 1;
+  if (["planning", "routing", "prose"].includes(kind) && Number.isInteger(m.meta_work_cycles)) {
+    m.meta_work_cycles += 1;
+  }
   if (outcome === "no-progress") {
     m.no_progress_cycles += 1;
     if (["implementation", "testing", "review", "validation"].includes(kind)) m.no_progress_work_cycles += 1;
