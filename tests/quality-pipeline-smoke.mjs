@@ -23,7 +23,7 @@ const pkg = path.join(project, "package.json");
 fs.writeFileSync(sample, 'console.log("working");\n');
 fs.writeFileSync(pkg, JSON.stringify({
   name: "web-kit-quality-smoke", private: true,
-  scripts: { test: "node sample.mjs", fail: "node -e \"process.exit(4)\"" },
+  scripts: { test: "node sample.mjs", fail: "node -e \"process.exit(4)\"", "--version": "node -e \"process.exit(41)\"" },
 }, null, 2));
 call(process.execPath, [path.join(repo, "scripts", "agent-kit.mjs"), "install", project], false, repo);
 const bin = path.join(project, ".agent-core", "bin", "work-progress.mjs");
@@ -41,6 +41,11 @@ run("requirement-add", "--task-id", "SMALL", "--id", "REQ-001", "--description",
 run("requirement-verify", "--task-id", "SMALL", "--id", "REQ-001", "--result", "PASS", "--manual", "--evidence", "Manual UI screenshot confirmed");
 run("update", "--task-id", "SMALL", "--final-validation", "PASS", "--status", "DONE", "--evidence", "Validated trivial request");
 assert(readJob("SMALL").status === "DONE", "SMALL was unnecessarily blocked by a formal spec gate");
+
+// An npm option-like script name must run the configured script, not npm's CLI option.
+run("start", "--task-id", "SCRIPT-OPTIONS", "--classification", "SMALL");
+const optionScript = run("check-run", "--task-id", "SCRIPT-OPTIONS", "--script", "--version");
+assert(optionScript.status === "FAIL" && optionScript.exit_code === 41, "npm --version printed npm's version instead of executing the failing script");
 
 // Formal task rejects missing spec, self-validation, and unverified requirements.
 run("start", "--task-id", "FORMAL", "--classification", "LARGE", "--title", "Complex feature");
