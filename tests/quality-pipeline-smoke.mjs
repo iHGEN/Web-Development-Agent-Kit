@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -75,6 +76,14 @@ const failedCheck = run("check-run", "--task-id", "FORMAL", "--script", "fail");
 assert(failedCheck.status === "FAIL" && failedCheck.exit_code === 4, "Nonzero npm exit status incorrectly passed");
 fail("check-run", "--task-id", "FORMAL", "--script", "unlisted");
 run("requirement-verify", "--task-id", "FORMAL", "--id", "REQ-101", "--result", "PASS", "--check-script", "test", "--evidence", "Real npm test executed");
+const fidelityBeforeReview = run("report", "--task-id", "FORMAL");
+assert(fidelityBeforeReview.requirements_fidelity.passed === true,
+  "Passing requirements must not depend on the independent code-review gate");
+assert(fidelityBeforeReview.requirements_fidelity.requirements_verified === 1,
+  "Requirements evidence should show the verified criterion");
+assert(fidelityBeforeReview.engineering_quality.gate === "BLOCKED"
+  && fidelityBeforeReview.engineering_quality.independent_review === "PENDING",
+  "Engineering quality should independently show an incomplete review");
 fail("quality-review", "--task-id", "FORMAL", "--reviewer", "backend-developer", "--result", "PASS", "--evidence", "Self approval");
 run("quality-review", "--task-id", "FORMAL", "--reviewer", "code-reviewer", "--result", "PASS", "--evidence", "Diff and behavior independently reviewed");
 fail("update", "--task-id", "FORMAL", "--status", "DONE", "--final-validation", "PASS", "--evidence", "Failed check unresolved");
@@ -211,5 +220,61 @@ if (spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0) {
   fs.writeFileSync(path.join(gitProject, "Dockerfile"), "FROM node:22");
   assert(sourceDigest(gitProject) !== afterEdit, "Git-aware listing missed untracked Dockerfile");
 }
+
+// A planning cycle is already represented by planning_cycles AND prose_only_cycles.
+run("start", "--task-id", "META-COUNT", "--classification", "SMALL");
+run("update", "--task-id", "META-COUNT", "--status", "IMPLEMENTING");
+run("cycle", "--task-id", "META-COUNT", "--kind", "planning");
+for (let i = 0; i < 3; i += 1) {
+  run("cycle", "--task-id", "META-COUNT", "--kind", "implementation", "--evidence", "Real work step " + i);
+}
+const metaReport = run("report", "--task-id", "META-COUNT");
+assert(readJob("META-COUNT").metrics.prose_only_cycles === 1, "Expected overlap fixture was not recorded");
+assert(metaReport.execution_efficiency.meta_work_percent === 25,
+  "One meta cycle and three implementation cycles must equal 25%, not 50%");
+assert(metaReport.execution_efficiency.policy_checks.find(x => x.name === "proportional_meta_work").pass === true,
+  "A 25% meta-work ratio must pass the SMALL task threshold");
+run("start", "--task-id", "META-MIX", "--classification", "SMALL");
+run("update", "--task-id", "META-MIX", "--status", "IMPLEMENTING");
+for (const kind of ["planning", "implementation", "routing", "implementation", "prose", "implementation"]) {
+  run("cycle", "--task-id", "META-MIX", "--kind", kind, "--evidence", kind === "implementation" ? "Changed code" : "");
+}
+const mixedReport = run("report", "--task-id", "META-MIX");
+assert(mixedReport.execution_efficiency.meta_work_percent === 50
+  && mixedReport.execution_efficiency.cycle_breakdown.meta_work === 3,
+  "Mixed planning/routing/prose must count three distinct meta cycles");
+
+// Recover only an owner that is demonstrably dead; never delete an active lock.
+function lockPath(id) { return path.join(project, ".agent-core", "state", "jobs", id + ".json.lock"); }
+function seedLock(id, pid) {
+  const dir = lockPath(id);
+  const token = randomUUID();
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "owner.json"),
+    JSON.stringify({ pid, host: os.hostname(), token, created_at: new Date().toISOString() }));
+  return { dir, token };
+}
+run("start", "--task-id", "RECOVER", "--classification", "SMALL");
+const exited = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"],
+  { encoding: "utf8", windowsHide: true });
+assert(exited.status === 0, "Could not create exited lock-owner fixture");
+const abandoned = seedLock("RECOVER", Number(exited.stdout.trim()));
+run("cycle", "--task-id", "RECOVER", "--kind", "implementation", "--evidence", "Recovered abandoned lock");
+assert(readJob("RECOVER").metrics.implementation_cycles === 1, "Orphaned lock did not recover task progress");
+assert(!fs.existsSync(abandoned.dir), "Recovered lock directory was not released");
+assert(fs.existsSync(abandoned.dir + ".abandoned." + abandoned.token),
+  "Recovery should preserve a deterministic tombstone against competing reapers");
+
+run("start", "--task-id", "LIVE-LOCK", "--classification", "SMALL");
+const live = seedLock("LIVE-LOCK", process.pid);
+const liveOwner = fs.readFileSync(path.join(live.dir, "owner.json"), "utf8");
+fail("cycle", "--task-id", "LIVE-LOCK", "--kind", "implementation", "--evidence", "Must not steal live lock");
+assert(fs.readFileSync(path.join(live.dir, "owner.json"), "utf8") === liveOwner,
+  "Active owner lock was removed or replaced");
+assert(!fs.existsSync(live.dir + ".abandoned." + live.token),
+  "Active lock must never be classified as abandoned");
+fs.unlinkSync(path.join(live.dir, "owner.json"));
+fs.rmdirSync(live.dir);
+run("cycle", "--task-id", "LIVE-LOCK", "--kind", "implementation", "--evidence", "Live owner released lock");
 
 console.log("Evidence-backed quality pipeline smoke: PASS");
