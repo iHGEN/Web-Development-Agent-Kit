@@ -18,6 +18,8 @@ Follow .agent-core/rules/workflow.md and .agent-core/rules/efficiency-policy.md 
 - New formal jobs require independent spec approval. Pre-existing jobs remain readable without retroactively inventing approval.
 - Changed spec bytes or requirement definitions invalidate spec/plan approval and prior acceptance and review evidence. Revalidate only affected material scope.
 - Job state uses revisioned per-job locks; a long npm check reloads the current job after execution instead of overwriting progress recorded by other processes.
+- Lock ownership is published atomically in a directory containing PID, hostname and unique token. Only an owner positively confirmed dead on the local host can be recovered. Recovery atomically renames the abandoned lock into a deterministic nonempty tombstone, preventing competing recoverers from removing a new live lock. Live, foreign-host, old-format, corrupt, or PID-reused locks fail closed. Abandoned tombstones are retained as recovery evidence and must not be deleted automatically while other processes may be contending.
+- An abnormal termination while constructing a candidate leaves an unused candidate directory, not a blocking primary lock. If a lock cannot be proven abandoned, manually verify no process is writing the job before cleanup; the kit never steals it on age alone.
 - Freshness checks include Git-tracked and non-ignored untracked application/config inputs (MDX, GraphQL, proto, SVG and Dockerfile) with bounded standalone-directory fallback.
 
 ## Engineering quality
