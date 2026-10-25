@@ -211,30 +211,35 @@ function lastChecks(quality) {
 }
 export function evaluateQuality(job, project) {
   const quality = ensureQuality(job);
-  const reasons = [];
+  const acceptanceReasons = [];
   const formal = quality.required;
   const contract = quality.requirements.length > 0;
-  if (formal && !specificationReady(job, project)) reasons.push("Specification approval missing or stale.");
-  if (formal && !contract) reasons.push("No acceptance criteria registered.");
+  if (formal && !specificationReady(job, project)) acceptanceReasons.push("Specification approval missing or stale.");
+  if (formal && !contract) acceptanceReasons.push("No acceptance criteria registered.");
   for (const req of quality.requirements) {
     if (req.verification?.status !== "PASS" || !req.verification.evidence?.length) {
-      reasons.push(req.id + " lacks passing verification evidence.");
+      acceptanceReasons.push(req.id + " lacks passing verification evidence.");
     }
   }
-  if (!formal && !contract) return { ok: true, reasons, required: false, verified: 0, total: 0 };
+  if (!formal && !contract) return {
+    ok: true, reasons: [], requirements_ok: null, requirements_reasons: [],
+    required: false, verified: 0, total: 0,
+  };
   let digest;
   try { digest = sourceDigest(project); }
-  catch (error) { reasons.push("Unable to fingerprint current source: " + error.message); }
+  catch (error) { acceptanceReasons.push("Unable to fingerprint current source: " + error.message); }
   for (const req of quality.requirements) {
     if (req.verification?.status !== "PASS") continue;
-    if (req.verification.source_digest !== digest) reasons.push(req.id + " evidence is stale after source changes.");
+    if (req.verification.source_digest !== digest) acceptanceReasons.push(req.id + " evidence is stale after source changes.");
     if (req.verification.method === "check") {
       const check = lastChecks(quality).find((c) => c.script === req.verification.check_script);
-      if (!check || check.status !== "PASS" || check.source_digest !== digest) reasons.push(req.id + " lacks a fresh passing executed check.");
+      if (!check || check.status !== "PASS" || check.source_digest !== digest) acceptanceReasons.push(req.id + " lacks a fresh passing executed check.");
     } else if (req.verification.method !== "manual") {
-      reasons.push(req.id + " has no documented verification method.");
+      acceptanceReasons.push(req.id + " has no documented verification method.");
     }
   }
+  // Requirements fidelity and the engineering quality gate must be independently observable.
+  const reasons = [...acceptanceReasons];
   const scripts = packageScripts(project);
   if (formal) {
     const relevant = Object.keys(scripts).filter((s) => /^(test([:_-].*)?|build|lint|typecheck|type-check)$/.test(s));
@@ -256,6 +261,8 @@ export function evaluateQuality(job, project) {
   return {
     ok: reasons.length === 0,
     reasons,
+    requirements_ok: acceptanceReasons.length === 0,
+    requirements_reasons: acceptanceReasons,
     required: formal || contract,
     verified: quality.requirements.filter((r) => r.verification?.status === "PASS" && r.verification?.source_digest === digest).length,
     total: quality.requirements.length,
@@ -306,7 +313,8 @@ function report(job, project) {
       requirements_total: completion?.requirements_total ?? evaluation.total,
       requirements_verified: completion?.requirements_verified ?? evaluation.verified,
       criteria: quality.requirements.map((r) => ({ id: r.id, description: r.description, status: r.verification.status, method: r.verification.method })),
-      passed: formalOrRequirements(job) ? (completion ? completion.acceptance_verified : evaluation.ok) : null,
+      passed: formalOrRequirements(job) ? (completion ? completion.acceptance_verified : evaluation.requirements_ok) : null,
+      blockers: evaluation.requirements_reasons,
     },
     engineering_quality: {
       gate: completion?.gate || (evaluation.ok ? "PASS" : "BLOCKED"),
