@@ -53,6 +53,15 @@ run("requirement-add", "--task-id", "FORMAL", "--id", "REQ-101", "--description"
 fail("spec-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "spec-writer", "--evidence", "Self approval");
 run("spec-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "spec-validator", "--evidence", "Requirement is testable");
 run("plan-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "plan-validator", "--evidence", "Architecture approved");
+// Regression: editing the spec file without spec-set, then reapproving it, must not reuse the old plan.
+const priorPlanSpec = readJob("FORMAL").plan.validator.spec_digest;
+fs.appendFileSync(specFile, "\nAcceptance conditions clarified after review.\n");
+fail("update", "--task-id", "FORMAL", "--status", "IMPLEMENTING");
+run("spec-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "spec-validator", "--evidence", "Changed spec re-reviewed");
+assert(readJob("FORMAL").plan.validator.status === "PENDING", "Direct spec edit/reapproval retained stale plan approval");
+assert(readJob("FORMAL").quality.spec.validator.digest !== priorPlanSpec, "Spec digest failed to change");
+fail("update", "--task-id", "FORMAL", "--status", "IMPLEMENTING");
+run("plan-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "plan-validator", "--evidence", "Updated spec separately approved by Plan Validator");
 run("update", "--task-id", "FORMAL", "--status", "IMPLEMENTING", "--agent", "backend-developer", "--files-changed", "2");
 fail("update", "--task-id", "FORMAL", "--status", "DONE", "--final-validation", "PASS", "--evidence", "No tests");
 const passedCheck = run("check-run", "--task-id", "FORMAL", "--script", "test");
