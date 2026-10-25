@@ -35,6 +35,8 @@ Follow .agent-core/rules/workflow.md and .agent-core/rules/efficiency-policy.md 
 - node .agent-core/bin/work-progress.mjs audit --task-id TASK-042 — efficiency policy indicators and measured telemetry (null where unavailable).
 - node .agent-core/bin/work-progress.mjs benchmark --task-id TASK-042 --against TASK-041 — only quality-verified completed tasks of the same classification with reported elapsed time.
 
+Meta-work is counted once per planning, routing or prose cycle. Historical jobs without this dedicated counter report an unavailable meta-work ratio instead of inventing a percentage. Requirements-fidelity PASS depends on approved specs and current acceptance evidence, not on an unrelated code-review status.
+
 A percentage is a policy indicator, not a claim that implementation correctness can be reduced to one number. Comparisons are observational and meaningful only for comparable workloads. Completed jobs retain their verification verdict and source digest as of completion; later code changes appear as separate current-source freshness warnings without rewriting historical benchmark eligibility.
 
 ## Limits
