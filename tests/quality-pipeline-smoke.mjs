@@ -105,10 +105,33 @@ fs.writeFileSync(pkg, JSON.stringify({
   name: "web-kit-quality-smoke", private: true,
   scripts: { test: "node sample.mjs", fail: "node sample.mjs" },
 }, null, 2));
+// These inputs affect the application/deployment even though their extensions are nonstandard.
+const sourceInputs = [
+  ["app/page.mdx", "# UI v1"],
+  ["schema.graphql", "type Query { value: String }"],
+  ["api/service.proto", "syntax = \"proto3\";"],
+  ["assets/logo.svg", "<svg></svg>"],
+  ["Dockerfile", "FROM node:22"],
+];
+for (const [relative, content] of sourceInputs) {
+  const file = path.join(project, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
 assert(run("check-run", "--task-id", "FORMAL", "--script", "test").status === "PASS", "Test rerun should pass");
 assert(run("check-run", "--task-id", "FORMAL", "--script", "fail").status === "PASS", "Repaired check should pass");
 run("requirement-verify", "--task-id", "FORMAL", "--id", "REQ-101", "--result", "PASS", "--check-script", "test", "--evidence", "Tested current source and acceptance");
 run("quality-review", "--task-id", "FORMAL", "--reviewer", "code-reviewer", "--result", "PASS", "--evidence", "Reviewed post-fix code and test results");
+// Every MDX/schema/proto/SVG/Dockerfile edit must invalidate the passing check and reviewer snapshot.
+for (const [relative, original] of sourceInputs) {
+  const file = path.join(project, relative);
+  fs.writeFileSync(file, original + "\nchanged");
+  const stale = run("report", "--task-id", "FORMAL");
+  assert(stale.engineering_quality.gate === "BLOCKED", relative + " edit failed to invalidate quality evidence");
+  fs.writeFileSync(file, original);
+  assert(run("report", "--task-id", "FORMAL").engineering_quality.gate === "PASS",
+    relative + " restoration did not restore matching snapshot");
+}
 run("update", "--task-id", "FORMAL", "--final-validation", "PASS", "--status", "DONE", "--evidence", "Requirements and quality evidence approved");
 assert(readJob("FORMAL").status === "DONE", "Current verified formal task should complete");
 assert(run("report", "--task-id", "FORMAL").engineering_quality.gate === "PASS", "Passing formal report missing");
