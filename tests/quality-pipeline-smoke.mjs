@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-quality-pipeline-"));
@@ -189,5 +189,26 @@ assert(raced.metrics.implementation_cycles === 1 && raced.metrics.reported_elaps
 assert(raced.quality.checks.some(c => c.script === "slow" && c.status === "PASS"),
   "Long check failed to persist its own result after merging newer state");
 assert(raced.implementation.completed === 1, "Long check lost a concurrent progress update");
+
+// Exercise the Git-aware fingerprint path separately from the standalone-project fallback.
+if (spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0) {
+  const gitProject = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-source-git-"));
+  const gitInit = spawnSync("git", ["init", "-q"], { cwd: gitProject, encoding: "utf8" });
+  assert(gitInit.status === 0, "Could not create disposable Git test repository");
+  const { sourceDigest } = await import(pathToFileURL(path.join(project, ".agent-core", "bin", "quality-pipeline.mjs")).href);
+  fs.writeFileSync(path.join(gitProject, "package.json"), '{"name":"digest-smoke"}');
+  const original = sourceDigest(gitProject);
+  fs.mkdirSync(path.join(gitProject, "app"), { recursive: true });
+  fs.writeFileSync(path.join(gitProject, "app", "page.mdx"), "# Runtime MDX");
+  assert(sourceDigest(gitProject) !== original, "Git-aware listing missed untracked MDX");
+  const gitAdd = spawnSync("git", ["add", "."], { cwd: gitProject, encoding: "utf8" });
+  assert(gitAdd.status === 0, "Could not stage disposable MDX fixture");
+  const staged = sourceDigest(gitProject);
+  fs.appendFileSync(path.join(gitProject, "app", "page.mdx"), "\nchanged after staging");
+  assert(sourceDigest(gitProject) !== staged, "Git-aware listing ignored dirty tracked MDX");
+  const afterEdit = sourceDigest(gitProject);
+  fs.writeFileSync(path.join(gitProject, "Dockerfile"), "FROM node:22");
+  assert(sourceDigest(gitProject) !== afterEdit, "Git-aware listing missed untracked Dockerfile");
+}
 
 console.log("Evidence-backed quality pipeline smoke: PASS");
