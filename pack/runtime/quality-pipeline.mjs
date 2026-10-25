@@ -282,6 +282,10 @@ function report(job, project) {
     output_tokens: Number(m.reported_output_tokens || 0) || null,
   };
   const checks = lastChecks(quality);
+  const completion = job.status === "DONE" ? job.completion : null;
+  const currentFreshness = completion?.source_digest && evaluation.source_digest
+    ? (completion.source_digest === evaluation.source_digest ? "CURRENT" : "STALE")
+    : "UNKNOWN";
   const failureCount = Number(m.repeated_action_alerts || 0) + (job.anti_slop?.violation ? 1 : 0);
   const totalCycles = Number(m.ai_cycles || 0);
   const metaCycles = Number(m.planning_cycles || 0) + Number(m.routing_cycles || 0) + Number(m.prose_only_cycles || 0);
@@ -299,13 +303,17 @@ function report(job, project) {
     requirements_fidelity: {
       spec_file: quality.spec.file,
       spec_validator: quality.spec.validator.status,
-      requirements_total: evaluation.total,
-      requirements_verified: evaluation.verified,
+      requirements_total: completion?.requirements_total ?? evaluation.total,
+      requirements_verified: completion?.requirements_verified ?? evaluation.verified,
       criteria: quality.requirements.map((r) => ({ id: r.id, description: r.description, status: r.verification.status, method: r.verification.method })),
-      passed: formalOrRequirements(job) ? evaluation.ok : null,
+      passed: formalOrRequirements(job) ? (completion ? completion.acceptance_verified : evaluation.ok) : null,
     },
     engineering_quality: {
-      gate: evaluation.ok ? "PASS" : "BLOCKED", blockers: evaluation.reasons,
+      gate: completion?.gate || (evaluation.ok ? "PASS" : "BLOCKED"),
+      blockers: completion?.gate === "PASS" ? [] : evaluation.reasons,
+      as_of_completion: completion || null,
+      current_source_freshness: currentFreshness,
+      current_source_findings: evaluation.reasons,
       executed_checks: checks.map((c) => ({ script: c.script, status: c.status, exit_code: c.exit_code, elapsed_ms: c.elapsed_ms, source_current: c.source_digest === evaluation.source_digest })),
       independent_review: quality.code_review.status,
     },
@@ -340,17 +348,19 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     if (!against) throw new Error("--against <task-id> is required.");
     const second = getJob(project, ["--task-id", against], loadJob);
     for (const job of [first, second]) {
-      const elapsed = Number(job.metrics?.reported_elapsed_ms || 0);
-      if (job.status !== "DONE" || !elapsed || !formalOrRequirements(job) || !evaluateQuality(job, project).ok) {
-        throw new Error("Benchmark requires two completed quality-verified jobs with measured elapsed time.");
+      const snapshot = job.completion;
+      const elapsed = Number(snapshot?.measured_elapsed_ms || 0);
+      if (job.status !== "DONE" || snapshot?.gate !== "PASS" || !snapshot.acceptance_verified || !elapsed) {
+        throw new Error("Benchmark requires completed jobs with stored passing acceptance evidence and measured elapsed time.");
       }
     }
     if (first.classification !== second.classification) throw new Error("Benchmark jobs must have the same task classification.");
     return {
       compared: [first.task_id, second.task_id],
-      elapsed_ms: [first.metrics.reported_elapsed_ms, second.metrics.reported_elapsed_ms],
-      elapsed_difference_ms: first.metrics.reported_elapsed_ms - second.metrics.reported_elapsed_ms,
-      note: "Comparison is observational, not a causal speedup claim. Compare similar workloads only.",
+      elapsed_ms: [first.completion.measured_elapsed_ms, second.completion.measured_elapsed_ms],
+      elapsed_difference_ms: first.completion.measured_elapsed_ms - second.completion.measured_elapsed_ms,
+      source_digest_at_completion: [first.completion.source_digest, second.completion.source_digest],
+      note: "Historical quality is verified as of each completion; current repository changes do not rewrite those results. Compare similar workloads only.",
     };
   }
   const job = getJob(project, args, loadJob);
