@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
 import { createQuality, ensureQuality, assertSpecificationReady, evaluateQuality, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
 
 const CLASSIFICATIONS = new Set(["SMALL", "MEDIUM", "LARGE"]);
@@ -18,25 +20,96 @@ const WEIGHTS = {
   LARGE: { discovery: 10, planning: 15, implementation: 45, testing: 15, review: 10, validation: 5 },
 };
 const STATUS_ORDER = ["QUEUED", "DISCOVERING", "PLANNING", "IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING", "DONE"];
-// Job-file writes are serialized; stale process copies cannot silently replace newer evidence.
+// A directory lock carries owner identity before it becomes visible via atomic rename.
+// Crash recovery renames a proven-dead owner's directory to a deterministic tombstone.
+// The tombstone is intentionally retained: another contender with the same stale view
+// cannot rename a newly acquired LIVE lock into an already existing nonempty directory.
 const loadedRevisions = new WeakMap();
 const lockWait = new Int32Array(new SharedArrayBuffer(4));
-function withJobLock(file, write) {
-  const lock = file + ".lock";
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  let fd = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try { fd = fs.openSync(lock, "wx"); break; }
-    catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      Atomics.wait(lockWait, 0, 0, 50);
-    }
+function lockOwner(lockDir) {
+  try {
+    if (!fs.lstatSync(lockDir).isDirectory()) return null;
+    const meta = fs.readFileSync(path.join(lockDir, "owner.json"), "utf8");
+    if (meta.length > 4096) return null;
+    const owner = JSON.parse(meta);
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0
+      || !/^[a-f0-9-]{36}$/.test(owner.token || "") || typeof owner.host !== "string") return null;
+    return owner;
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "EISDIR"].includes(error.code) || error instanceof SyntaxError) return null;
+    throw error;
   }
-  if (fd === null) throw new Error("Job is busy (lock timeout); retry without replacing the current task state.");
-  try { return write(); }
-  finally {
-    fs.closeSync(fd);
-    fs.unlinkSync(lock);
+}
+function ownerProvablyDead(owner) {
+  if (!owner || owner.host !== os.hostname()) return false;
+  try {
+    process.kill(owner.pid, 0);
+    // Live, inaccessible (EPERM), or a reused PID: never remove a lock.
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+function recoverAbandonedLock(lockDir) {
+  const owner = lockOwner(lockDir);
+  if (!ownerProvablyDead(owner)) return false;
+  // Recheck ownership before the atomic rename. No age-based expiration is used.
+  const current = lockOwner(lockDir);
+  if (!current || current.token !== owner.token || !ownerProvablyDead(current)) return false;
+  const tombstone = lockDir + ".abandoned." + owner.token;
+  try {
+    // A deterministic nonempty tombstone ensures two recovering processes cannot
+    // move a newly acquired lock after the first process has moved the stale one.
+    fs.renameSync(lockDir, tombstone);
+    return true;
+  } catch (error) {
+    if (["EEXIST", "ENOTEMPTY", "ENOENT", "EPERM", "EACCES"].includes(error.code)) return false;
+    throw error;
+  }
+}
+function withJobLock(file, write) {
+  const lockDir = file + ".lock";
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const token = randomUUID();
+  const candidate = lockDir + ".candidate." + token;
+  const owner = { pid: process.pid, host: os.hostname(), token, created_at: new Date().toISOString() };
+  fs.mkdirSync(candidate);
+  try {
+    // Construct the complete candidate before publication; a crash here leaves
+    // an unused candidate, not an unreadable primary lock.
+    fs.writeFileSync(path.join(candidate, "owner.json"), JSON.stringify(owner) + "\n", { flag: "wx", mode: 0o600 });
+    let acquired = false;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        fs.renameSync(candidate, lockDir);
+        acquired = true;
+        break;
+      } catch (error) {
+        // Windows may return EPERM when the destination is an existing directory.
+        if (!["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].includes(error.code) || !fs.existsSync(lockDir)) {
+          throw error;
+        }
+        if (recoverAbandonedLock(lockDir)) continue;
+        Atomics.wait(lockWait, 0, 0, 50);
+      }
+    }
+    if (!acquired) {
+      throw new Error("Job is busy: lock owner is active, on another host, or cannot be proven dead. Check the lock owner before manual cleanup.");
+    }
+    try {
+      return write();
+    } finally {
+      const current = lockOwner(lockDir);
+      if (!current || current.token !== token) throw new Error("Lock ownership changed unexpectedly; refusing to remove another process's lock.");
+      fs.unlinkSync(path.join(lockDir, "owner.json"));
+      fs.rmdirSync(lockDir);
+    }
+  } finally {
+    // A candidate that never acquired the lock is harmless and can be cleaned up.
+    if (fs.existsSync(candidate)) {
+      fs.unlinkSync(path.join(candidate, "owner.json"));
+      fs.rmdirSync(candidate);
+    }
   }
 }
 
