@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -140,6 +140,7 @@ assert(run("report", "--task-id", "FORMAL").engineering_quality.gate === "PASS",
 fail("benchmark", "--task-id", "FORMAL", "--against", "SMALL");
 // Fixture telemetry is explicitly supplied here to exercise the comparison; production must only report observed values.
 for (const [id, elapsed] of [["BENCH-A", "1000"], ["BENCH-B", "1500"]]) {
+  if (id === "BENCH-B") fs.appendFileSync(sample, "\nconsole.log('subsequent legitimate feature');\n");
   run("start", "--task-id", id, "--classification", "SMALL");
   run("requirement-add", "--task-id", id, "--id", "REQ-001", "--description", "Simple behavior", "--acceptance", "Manual proof");
   run("cycle", "--task-id", id, "--kind", "implementation", "--elapsed-ms", elapsed, "--evidence", "Fixture cycle timing");
@@ -148,9 +149,45 @@ for (const [id, elapsed] of [["BENCH-A", "1000"], ["BENCH-B", "1500"]]) {
 }
 const benchmark = run("benchmark", "--task-id", "BENCH-A", "--against", "BENCH-B");
 assert(benchmark.elapsed_difference_ms === -500, "Benchmark should compare observed elapsed milliseconds");
+assert(readJob("BENCH-A").completion.source_digest !== readJob("BENCH-B").completion.source_digest,
+  "Benchmark fixtures must represent different completion-time source states");
+const historical = run("report", "--task-id", "BENCH-A");
+assert(historical.engineering_quality.gate === "PASS", "Historical completion was wrongly downgraded");
+assert(historical.engineering_quality.current_source_freshness === "STALE", "Report did not distinguish historical success from new source state");
 // Policy audit must distinguish real provider telemetry from missing metrics.
 const audit = run("audit", "--task-id", "FORMAL");
 assert(audit.telemetry_available === false, "Unreported elapsed time should never be fabricated");
 assert(Number.isInteger(audit.policy_conformance_percent), "Efficiency conformance percentage missing");
+
+// A slow npm check must not discard the progress/next-action written while it was running.
+fs.writeFileSync(path.join(project, "slow-check.mjs"),
+  'import fs from "node:fs";\nfs.writeFileSync("slow-started.txt", "ready");\nawait new Promise(resolve => setTimeout(resolve, 1700));\n');
+const racePkg = JSON.parse(fs.readFileSync(pkg, "utf8"));
+racePkg.scripts.slow = "node slow-check.mjs";
+fs.writeFileSync(pkg, JSON.stringify(racePkg, null, 2));
+run("start", "--task-id", "RACE", "--classification", "SMALL");
+const runner = spawn(process.execPath, [bin, "check-run", "--task-id", "RACE", "--script", "slow", "--project", project], {
+  cwd: project, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+});
+let runnerStdout = "";
+let runnerStderr = "";
+runner.stdout.on("data", chunk => { runnerStdout += chunk.toString(); });
+runner.stderr.on("data", chunk => { runnerStderr += chunk.toString(); });
+for (let tries = 0; tries < 160 && !fs.existsSync(path.join(project, "slow-started.txt")); tries += 1) {
+  await new Promise(resolve => setTimeout(resolve, 50));
+}
+assert(fs.existsSync(path.join(project, "slow-started.txt")), "Timed out waiting for background npm check");
+run("cycle", "--task-id", "RACE", "--kind", "implementation", "--evidence", "Separate process advanced implementation", "--elapsed-ms", "275");
+run("update", "--task-id", "RACE", "--status", "IMPLEMENTING", "--next", "Preserve newer task action",
+  "--implementation-total", "2", "--implementation-completed", "1", "--evidence", "Concurrent state updated");
+const runnerExit = await new Promise(resolve => runner.once("close", resolve));
+assert(runnerExit === 0, "Long-running check failed: " + runnerStderr + runnerStdout);
+const raced = readJob("RACE");
+assert(raced.next_action === "Preserve newer task action", "Long check overwrote a newer next action");
+assert(raced.metrics.implementation_cycles === 1 && raced.metrics.reported_elapsed_ms === 275,
+  "Long check discarded concurrent telemetry and implementation cycle");
+assert(raced.quality.checks.some(c => c.script === "slow" && c.status === "PASS"),
+  "Long check failed to persist its own result after merging newer state");
+assert(raced.implementation.completed === 1, "Long check lost a concurrent progress update");
 
 console.log("Evidence-backed quality pipeline smoke: PASS");
