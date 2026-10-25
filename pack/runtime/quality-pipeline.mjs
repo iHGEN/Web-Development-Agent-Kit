@@ -288,8 +288,8 @@ function report(job, project) {
     : "UNKNOWN";
   const failureCount = Number(m.repeated_action_alerts || 0) + (job.anti_slop?.violation ? 1 : 0);
   const totalCycles = Number(m.ai_cycles || 0);
-  const metaCycles = Number(m.planning_cycles || 0) + Number(m.routing_cycles || 0) + Number(m.prose_only_cycles || 0);
-  const metaWorkPercent = totalCycles ? Math.min(100, Math.round(metaCycles / totalCycles * 100)) : null;
+  const metaCycles = Number.isSafeInteger(m.meta_work_cycles) ? m.meta_work_cycles : null;
+  const metaWorkPercent = totalCycles && metaCycles !== null ? Math.round(metaCycles / totalCycles * 100) : null;
   const observations = [
     { name: "proportional_meta_work", pass: metaWorkPercent === null ? null : metaWorkPercent <= (job.classification === "LARGE" || job.high_risk ? 40 : 25) },
     { name: "proportional_planning", pass: job.classification !== "SMALL" || job.governance.plan_required === Boolean(job.high_risk) },
@@ -322,7 +322,7 @@ function report(job, project) {
       policy_conformance_percent: assessed.length ? Math.round(100 * assessed.filter((x) => x.pass).length / assessed.length) : null,
       meta_work_percent: metaWorkPercent,
       cycle_breakdown: {
-        total: totalCycles, discovery: Number(m.discovery_cycles || 0), planning: Number(m.planning_cycles || 0),
+        total: totalCycles, meta_work: metaCycles, discovery: Number(m.discovery_cycles || 0), planning: Number(m.planning_cycles || 0),
         routing: Number(m.routing_cycles || 0), implementation: Number(m.implementation_cycles || 0),
         testing: Number(m.testing_cycles || 0), review: Number(m.review_cycles || 0),
         validation: Number(m.validation_cycles || 0), prose_only: Number(m.prose_only_cycles || 0),
