@@ -97,6 +97,7 @@ fs.writeFileSync(specFile, "# Revised feature spec\nREQ-101: Reliable behavior w
 fail("update", "--task-id", "FORMAL", "--status", "IMPLEMENTING");
 run("spec-set", "--task-id", "FORMAL", "--file", "feature-spec.md");
 assert(readJob("FORMAL").plan.validator.status === "PENDING", "Spec change failed to invalidate plan approval");
+assert(readJob("FORMAL").quality.code_review.status === "PENDING", "Spec change reused an obsolete code review");
 run("spec-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "spec-validator", "--evidence", "Revised criterion reviewed");
 run("plan-validate", "--task-id", "FORMAL", "--result", "APPROVED", "--validator", "plan-validator", "--evidence", "Reapproved changed plan");
 run("update", "--task-id", "FORMAL", "--status", "IMPLEMENTING");
