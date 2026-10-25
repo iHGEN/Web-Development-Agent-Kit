@@ -400,30 +400,55 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
       status: result, source: validator, evidence, digest: approvedDigest, validated_at: now(),
     };
   } else if (command === "check-run") {
-    if (quality.required && !["IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING"].includes(job.status)) {
+    const executableStatuses = ["IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING"];
+    if (quality.required && !executableStatuses.includes(job.status)) {
       throw new Error("Approve the formal specification and plan before executing checks.");
     }
     const script = String(arg(args, "--script") || "");
     if (!/^[a-zA-Z0-9_:-]{1,80}$/.test(script) || !Object.hasOwn(packageScripts(project), script)) {
       throw new Error("--script must name an existing npm package.json script.");
     }
+    // Capture source both before and after the script: a passing exit against moving code is not fresh evidence.
+    const fingerprintBefore = sourceDigest(project);
     const started = Date.now();
     const commandName = process.platform === "win32" ? "npm.cmd" : "npm";
     const child = spawnSync(commandName, ["run", "--", script], {
       cwd: project, windowsHide: true, shell: process.platform === "win32",
       encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024,
     });
-    const status = !child.error && child.status === 0 ? "PASS" : "FAIL";
     const fingerprint = sourceDigest(project);
-    quality.checks.push({
+    const status = fingerprintBefore !== fingerprint ? "STALE"
+      : !child.error && child.status === 0 ? "PASS" : "FAIL";
+    const record = {
       script, status, exit_code: child.status ?? null,
       elapsed_ms: Date.now() - started, source_digest: fingerprint, at: now(),
       error: child.error?.message || null,
-    });
-    quality.checks = quality.checks.slice(-50);
-    job.evidence.items.push({ kind: "executed-check", value: "npm run " + script + ": " + status, at: now() });
-    writeJob(project, job);
-    return { task_id: job.task_id, script, status, exit_code: child.status ?? null, elapsed_ms: Date.now() - started, error: child.error?.message || null, output_tail: String(child.stdout || child.stderr || "").slice(-2000) };
+    };
+    // Do not write the job object loaded before running a potentially long subprocess.
+    // A different process may have updated its state while npm ran. Re-read, merge only
+    // this check, and let writeJob's revisioned lock reject any intervening write.
+    let written = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const latest = getJob(project, args, loadJob);
+      assertMutable(latest);
+      if (latest.quality.required && !executableStatuses.includes(latest.status)) {
+        throw new Error("Task changed phase while npm ran; refusing to attach a stale check.");
+      }
+      const latestQuality = ensureQuality(latest);
+      latestQuality.checks.push(record);
+      latestQuality.checks = latestQuality.checks.slice(-50);
+      latest.evidence.items.push({ kind: "executed-check", value: "npm run " + script + ": " + status, at: now() });
+      latest.evidence.items = latest.evidence.items.slice(-200);
+      try {
+        writeJob(project, latest);
+        written = true;
+        break;
+      } catch (error) {
+        if (!error.message.includes("Concurrent job update detected") || attempt === 3) throw error;
+      }
+    }
+    if (!written) throw new Error("Could not reconcile concurrent check results.");
+    return { task_id: job.task_id, script, status, exit_code: child.status ?? null, elapsed_ms: record.elapsed_ms, error: record.error, output_tail: String(child.stdout || child.stderr || "").slice(-2000) };
   } else if (command === "requirement-verify") {
     const id = String(arg(args, "--id") || "");
     const req = quality.requirements.find((r) => r.id === id);
