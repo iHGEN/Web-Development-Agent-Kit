@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { createQuality, ensureQuality, assertSpecificationReady, assertQualityComplete, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
+import { createQuality, ensureQuality, assertSpecificationReady, evaluateQuality, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
 
 const CLASSIFICATIONS = new Set(["SMALL", "MEDIUM", "LARGE"]);
 const JOB_STATUSES = new Set([
@@ -18,6 +18,27 @@ const WEIGHTS = {
   LARGE: { discovery: 10, planning: 15, implementation: 45, testing: 15, review: 10, validation: 5 },
 };
 const STATUS_ORDER = ["QUEUED", "DISCOVERING", "PLANNING", "IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING", "DONE"];
+// Job-file writes are serialized; stale process copies cannot silently replace newer evidence.
+const loadedRevisions = new WeakMap();
+const lockWait = new Int32Array(new SharedArrayBuffer(4));
+function withJobLock(file, write) {
+  const lock = file + ".lock";
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let fd = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try { fd = fs.openSync(lock, "wx"); break; }
+    catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      Atomics.wait(lockWait, 0, 0, 50);
+    }
+  }
+  if (fd === null) throw new Error("Job is busy (lock timeout); retry without replacing the current task state.");
+  try { return write(); }
+  finally {
+    fs.closeSync(fd);
+    fs.unlinkSync(lock);
+  }
+}
 
 function nowIso() { return new Date().toISOString(); }
 function readJson(file, fallback = null) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
@@ -186,6 +207,7 @@ function loadJob(project, taskId) {
   job.metrics = { ...defaultMetrics(), ...job.metrics };
   job.efficiency_guard ||= defaultEfficiencyGuard();
   ensureQuality(job);
+  loadedRevisions.set(job, Number(job.revision || 0));
   if (job.governance.min_plan_bullets === undefined) job.governance.min_plan_bullets = job.classification === "MEDIUM" && !job.high_risk ? 3 : job.governance.plan_required ? 1 : 0;
   return { job, paths };
 }
@@ -222,13 +244,42 @@ function jobSummary(job) {
   };
 }
 function writeJob(project, job) {
-  if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
-  if (IMPLEMENTATION_OR_LATER.has(job.status) && job.quality?.required) assertSpecificationReady(job, project);
-  if (job.status === "DONE") assertQualityComplete(job, project);
-  if (IMPLEMENTATION_OR_LATER.has(job.status) && job.governance.plan_required) assertPlanReady(job);
   const paths = statePaths(project, job.task_id);
-  recalculate(job);
-  atomicWriteJson(paths.job, job);
+  withJobLock(paths.job, () => {
+    const previous = readJson(paths.job, null);
+    const revision = Number(previous?.revision || 0);
+    const loaded = loadedRevisions.get(job);
+    if (fs.existsSync(paths.job) && !previous) throw new Error("Job state could not be read; refusing to replace it.");
+    if (loaded === undefined || loaded !== revision) {
+      throw new Error("Concurrent job update detected: reload the latest task state before retrying.");
+    }
+    if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
+    if (IMPLEMENTATION_OR_LATER.has(job.status) && job.quality?.required) assertSpecificationReady(job, project);
+    if (IMPLEMENTATION_OR_LATER.has(job.status) && job.governance.plan_required) assertPlanReady(job);
+    if (job.status === "DONE") {
+      const verdict = evaluateQuality(job, project);
+      if (!verdict.ok) throw new Error("Quality gate blocked DONE: " + verdict.reasons.join(" "));
+      // Capture an immutable as-of-completion verdict; later code edits must not erase history.
+      if (previous?.status !== "DONE") {
+        const snapshot = {
+          completed_at: nowIso(),
+          source_digest: verdict.source_digest,
+          gate: "PASS",
+          acceptance_verified: verdict.total > 0 && verdict.total === verdict.verified,
+          requirements_verified: verdict.verified,
+          requirements_total: verdict.total,
+          measured_elapsed_ms: Number(job.metrics?.reported_elapsed_ms || 0) || null,
+        };
+        job.completion_history ||= [];
+        job.completion_history.push(snapshot);
+        job.completion = snapshot;
+      }
+    }
+    recalculate(job);
+    job.revision = revision + 1;
+    atomicWriteJson(paths.job, job);
+    loadedRevisions.set(job, job.revision);
+  });
   writeEfficiency(project);
   return job;
 }
@@ -286,6 +337,8 @@ function start(project, args) {
     updated_at: nowIso(),
   };
   appendEvidence(job, getAllArgs(args, "--evidence"), "start");
+  // Explicit --force may replace a prior job; retain its current revision for the write lease.
+  loadedRevisions.set(job, Number(readJson(paths.job, null)?.revision || 0));
   writeJob(project, job);
   return job;
 }
