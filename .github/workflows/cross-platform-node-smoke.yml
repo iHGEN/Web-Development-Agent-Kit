@@ -9,6 +9,7 @@ on:
       - "scripts/**"
       - "pack/**"
       - "tests/repository-search-smoke.mjs"
+      - "tests/quality-pipeline-smoke.mjs"
       - ".github/workflows/cross-platform-node-smoke.yml"
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - "scripts/**"
       - "pack/**"
       - "tests/repository-search-smoke.mjs"
+      - "tests/quality-pipeline-smoke.mjs"
       - ".github/workflows/cross-platform-node-smoke.yml"
   workflow_dispatch:
 
@@ -65,6 +67,9 @@ jobs:
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
           node --check pack/runtime/repository-search.mjs
+          node --check pack/runtime/work-progress.mjs
+          node --check pack/runtime/quality-pipeline.mjs
+          node --check tests/quality-pipeline-smoke.mjs
           node --check pack/runtime/session-controller.mjs
           node --check pack/runtime/context-supervisor.mjs
           node --check pack/runtime/provider-bridge.mjs
@@ -73,6 +78,10 @@ jobs:
       - name: Test search cache and Graphify readiness on each OS
         shell: bash
         run: node tests/repository-search-smoke.mjs
+
+      - name: Test requirements, metrics, and crash-safe locks on each OS
+        shell: bash
+        run: node tests/quality-pipeline-smoke.mjs
 
       - name: Pack npm CLI
         id: pack
