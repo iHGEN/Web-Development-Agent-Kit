@@ -118,6 +118,31 @@ planning + routing + summaries: 10-20%
 
 This is a diagnostic target; required safety work is never skipped just to improve the ratio.
 
+## Requirements, engineering quality and efficiency reports
+
+For new LARGE/high-risk jobs, Web Kit now adds a Spec Writer and independent Spec Validator ahead of the existing Plan Validator. SMALL keeps its direct-implementation path; MEDIUM normally stays at one short plan.
+
+A formal task can use these Node-only commands from inside an installed project:
+
+```bash
+node .agent-core/bin/work-progress.mjs spec-set --task-id TASK-042 --file .agent-core/plans/TASK-042/spec.md
+node .agent-core/bin/work-progress.mjs requirement-add --task-id TASK-042 --id REQ-001 --description "Booking approval" --acceptance "Owner decision is persisted and customer is notified"
+node .agent-core/bin/work-progress.mjs spec-validate --task-id TASK-042 --result APPROVED --validator spec-validator --evidence "REQ-001 matches original intent"
+node .agent-core/bin/work-progress.mjs plan-validate --task-id TASK-042 --result APPROVED --validator plan-validator --evidence "Dependencies and checks verified"
+# After implementation: execute the real project script, then link passing evidence
+node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --script test
+node .agent-core/bin/work-progress.mjs requirement-verify --task-id TASK-042 --id REQ-001 --result PASS --check-script test --evidence "Targeted acceptance test passed"
+node .agent-core/bin/work-progress.mjs quality-review --task-id TASK-042 --result PASS --reviewer code-reviewer --evidence "Independent diff review passed"
+node .agent-core/bin/work-progress.mjs report --task-id TASK-042
+node .agent-core/bin/work-progress.mjs audit --task-id TASK-042
+```
+
+Formal DONE requires a current independently approved spec, verified requirements, successful executed checks when the project supplies test/build/lint scripts, current source evidence, independent code review and final validation. Stale code or spec changes block completion until reverified. Manual acceptance evidence is allowed for behavior not automatable by npm scripts; it must be recorded explicitly.
+
+The report exposes three independent dimensions: requirements fidelity, engineering quality and execution efficiency. Actual check exit status and elapsed time are captured by the runtime; token/tool/time measurements reported from AI providers are optional and never fabricated. Benchmark comparisons reject incomplete or unmeasured jobs.
+
+See `.agent-core/rules/requirements-quality.md` for the formal contract, capabilities and limitations.
+
 ## Job progress and project/application status
 
 Web Kit tracks the current AI task separately from the whole application/project.

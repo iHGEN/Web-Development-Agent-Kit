@@ -41,7 +41,7 @@ targeted discovery -> 3-6 execution bullets -> implementation -> tests/relevant 
 
 ### LARGE / HIGH-RISK
 
-Use formal discovery/design/plan validation and the required specialist/final gates.
+Route Spec Writer -> independent Spec Validator -> Architect/Plan Validator -> implementation and the required specialist/final gates. Register testable REQ criteria before implementation.
 
 High-risk includes material changes to trust/security boundaries, public contracts, schema/migrations, destructive operations, major dependencies, and release/deployment architecture.
 
@@ -102,7 +102,7 @@ Avoid duplicate tool calls, duplicated context reads, and unnecessary Graphify r
 
 ## Completion
 
-Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
+Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
 
 ## Captain handoff
 

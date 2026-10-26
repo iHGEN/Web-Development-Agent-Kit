@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
+import { createQuality, ensureQuality, assertSpecificationReady, evaluateQuality, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
 
 const CLASSIFICATIONS = new Set(["SMALL", "MEDIUM", "LARGE"]);
 const JOB_STATUSES = new Set([
@@ -17,6 +20,105 @@ const WEIGHTS = {
   LARGE: { discovery: 10, planning: 15, implementation: 45, testing: 15, review: 10, validation: 5 },
 };
 const STATUS_ORDER = ["QUEUED", "DISCOVERING", "PLANNING", "IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING", "DONE"];
+// A directory lock carries owner identity before it becomes visible via atomic rename.
+// Crash recovery renames a proven-dead owner's directory to a deterministic tombstone.
+// The tombstone is intentionally retained: another contender with the same stale view
+// cannot rename a newly acquired LIVE lock into an already existing nonempty directory.
+const loadedRevisions = new WeakMap();
+const lockWait = new Int32Array(new SharedArrayBuffer(4));
+function lockOwner(lockDir) {
+  try {
+    if (!fs.lstatSync(lockDir).isDirectory()) return null;
+    const meta = fs.readFileSync(path.join(lockDir, "owner.json"), "utf8");
+    if (meta.length > 4096) return null;
+    const owner = JSON.parse(meta);
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0
+      || !/^[a-f0-9-]{36}$/.test(owner.token || "") || typeof owner.host !== "string") return null;
+    return owner;
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "EISDIR"].includes(error.code) || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+function ownerProvablyDead(owner) {
+  if (!owner || owner.host !== os.hostname()) return false;
+  try {
+    process.kill(owner.pid, 0);
+    // Live, inaccessible (EPERM), or a reused PID: never remove a lock.
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+function recoverAbandonedLock(lockDir) {
+  const owner = lockOwner(lockDir);
+  if (!ownerProvablyDead(owner)) return false;
+  // Recheck ownership before the atomic rename. No age-based expiration is used.
+  const current = lockOwner(lockDir);
+  if (!current || current.token !== owner.token || !ownerProvablyDead(current)) return false;
+  const tombstone = lockDir + ".abandoned." + owner.token;
+  try {
+    // A deterministic nonempty tombstone ensures two recovering processes cannot
+    // move a newly acquired lock after the first process has moved the stale one.
+    fs.renameSync(lockDir, tombstone);
+    return true;
+  } catch (error) {
+    if (["EEXIST", "ENOTEMPTY", "ENOENT", "EPERM", "EACCES"].includes(error.code)) return false;
+    throw error;
+  }
+}
+function withJobLock(file, write) {
+  const lockDir = file + ".lock";
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const token = randomUUID();
+  const candidate = lockDir + ".candidate." + token;
+  const owner = { pid: process.pid, host: os.hostname(), token, created_at: new Date().toISOString() };
+  fs.mkdirSync(candidate);
+  try {
+    // Construct the complete candidate before publication; a crash here leaves
+    // an unused candidate, not an unreadable primary lock.
+    fs.writeFileSync(path.join(candidate, "owner.json"), JSON.stringify(owner) + "\n", { flag: "wx", mode: 0o600 });
+    let acquired = false;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        fs.renameSync(candidate, lockDir);
+        acquired = true;
+        break;
+      } catch (error) {
+        // Windows may return EPERM when the destination is an existing directory.
+        if (!["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].includes(error.code) || !fs.existsSync(lockDir)) {
+          throw error;
+        }
+        if (recoverAbandonedLock(lockDir)) continue;
+        Atomics.wait(lockWait, 0, 0, 50);
+      }
+    }
+    if (!acquired) {
+      throw new Error("Job is busy: lock owner is active, on another host, or cannot be proven dead. Check the lock owner before manual cleanup.");
+    }
+    try {
+      return write();
+    } finally {
+      const current = lockOwner(lockDir);
+      if (!current || current.token !== token) throw new Error("Lock ownership changed unexpectedly; refusing to remove another process's lock.");
+      // Release atomically while owner.json still exists. A crash after the
+      // rename cannot strand an empty, ownerless primary lock directory.
+      const released = lockDir + ".released." + token;
+      fs.renameSync(lockDir, released);
+      try {
+        fs.unlinkSync(path.join(released, "owner.json"));
+        fs.rmdirSync(released);
+      } catch (error) {
+        // The primary lock is already released. Retain only this owner-specific
+        // cleanup artifact rather than report the persisted operation as failed.
+        console.error("Web Kit lock cleanup warning: " + error.message);
+      }
+    }
+  } finally {
+    // The unique unpublished candidate is private to this writer, safe to remove.
+    if (fs.existsSync(candidate)) fs.rmSync(candidate, { recursive: true, force: true });
+  }
+}
 
 function nowIso() { return new Date().toISOString(); }
 function readJson(file, fallback = null) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
@@ -100,7 +202,12 @@ function planReady(job) {
   if (!job.governance.plan_validator_required) return true;
   return job.plan?.validator?.status === "APPROVED"
     && Boolean(job.plan?.validator?.source)
-    && Number(job.plan?.validator?.plan_version) === Number(job.plan?.version || 0);
+    && Number(job.plan?.validator?.plan_version) === Number(job.plan?.version || 0)
+    // An approved plan is valid only for the specification reviewed by that plan validator.
+    && (!job.quality?.required || (
+      Boolean(job.plan.validator.spec_digest)
+      && job.plan.validator.spec_digest === job.quality.spec?.validator?.digest
+    ));
 }
 function assertPlanReady(job) {
   if (planReady(job)) return;
@@ -112,6 +219,8 @@ function assertPlanReady(job) {
 function defaultMetrics() {
   return {
     ai_cycles: 0,
+    // Counts each planning/routing/prose cycle once. prose_only_cycles overlaps those kinds.
+    meta_work_cycles: 0,
     discovery_cycles: 0,
     planning_cycles: 0,
     routing_cycles: 0,
@@ -177,8 +286,13 @@ function loadJob(project, taskId) {
   const job = readJson(paths.job, null);
   if (!job) throw new Error(`Job ${taskId} does not exist. Run 'start' first.`);
   if (!job.plan?.validator) job.plan.validator = defaultValidator(job.governance);
+  // Old job metrics cannot reconstruct distinct meta cycles from overlapping counters.
+  const hasMetaWorkHistory = Object.hasOwn(job.metrics || {}, "meta_work_cycles");
   job.metrics = { ...defaultMetrics(), ...job.metrics };
+  if (!hasMetaWorkHistory) job.metrics.meta_work_cycles = null;
   job.efficiency_guard ||= defaultEfficiencyGuard();
+  ensureQuality(job);
+  loadedRevisions.set(job, Number(job.revision || 0));
   if (job.governance.min_plan_bullets === undefined) job.governance.min_plan_bullets = job.classification === "MEDIUM" && !job.high_risk ? 3 : job.governance.plan_required ? 1 : 0;
   return { job, paths };
 }
@@ -215,11 +329,42 @@ function jobSummary(job) {
   };
 }
 function writeJob(project, job) {
-  if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
-  if (IMPLEMENTATION_OR_LATER.has(job.status) && job.governance.plan_required) assertPlanReady(job);
   const paths = statePaths(project, job.task_id);
-  recalculate(job);
-  atomicWriteJson(paths.job, job);
+  withJobLock(paths.job, () => {
+    const previous = readJson(paths.job, null);
+    const revision = Number(previous?.revision || 0);
+    const loaded = loadedRevisions.get(job);
+    if (fs.existsSync(paths.job) && !previous) throw new Error("Job state could not be read; refusing to replace it.");
+    if (loaded === undefined || loaded !== revision) {
+      throw new Error("Concurrent job update detected: reload the latest task state before retrying.");
+    }
+    if (job.status === "DONE" && job.final_validation.status !== "PASS") throw new Error("Invariant violation: DONE requires final validation PASS.");
+    if (IMPLEMENTATION_OR_LATER.has(job.status) && job.quality?.required) assertSpecificationReady(job, project);
+    if (IMPLEMENTATION_OR_LATER.has(job.status) && job.governance.plan_required) assertPlanReady(job);
+    if (job.status === "DONE") {
+      const verdict = evaluateQuality(job, project);
+      if (!verdict.ok) throw new Error("Quality gate blocked DONE: " + verdict.reasons.join(" "));
+      // Capture an immutable as-of-completion verdict; later code edits must not erase history.
+      if (previous?.status !== "DONE") {
+        const snapshot = {
+          completed_at: nowIso(),
+          source_digest: verdict.source_digest,
+          gate: "PASS",
+          acceptance_verified: verdict.total > 0 && verdict.total === verdict.verified,
+          requirements_verified: verdict.verified,
+          requirements_total: verdict.total,
+          measured_elapsed_ms: Number(job.metrics?.reported_elapsed_ms || 0) || null,
+        };
+        job.completion_history ||= [];
+        job.completion_history.push(snapshot);
+        job.completion = snapshot;
+      }
+    }
+    recalculate(job);
+    job.revision = revision + 1;
+    atomicWriteJson(paths.job, job);
+    loadedRevisions.set(job, job.revision);
+  });
   writeEfficiency(project);
   return job;
 }
@@ -248,7 +393,7 @@ function start(project, args) {
   if (fs.existsSync(paths.job) && !hasArg(args, "--force")) throw new Error(`Job ${taskId} already exists; use --force to replace it.`);
   const governance = governanceFor(classification, highRisk);
   const job = {
-    schema_version: 2,
+    schema_version: 3,
     task_id: taskId,
     title: getArg(args, "--title") || taskId,
     classification,
@@ -270,12 +415,15 @@ function start(project, args) {
     final_validation: { status: "PENDING" },
     anti_slop: { violation: false, reason: null, forced_next_phase: null },
     efficiency_guard: defaultEfficiencyGuard(),
+    quality: createQuality(governance),
     metrics: defaultMetrics(),
     next_action: getArg(args, "--next") || "Perform the minimum targeted discovery needed to identify the next safe implementation action.",
     created_at: nowIso(),
     updated_at: nowIso(),
   };
   appendEvidence(job, getAllArgs(args, "--evidence"), "start");
+  // Explicit --force may replace a prior job; retain its current revision for the write lease.
+  loadedRevisions.set(job, Number(readJson(paths.job, null)?.revision || 0));
   writeJob(project, job);
   return job;
 }
@@ -382,6 +530,7 @@ function planValidate(project, args) {
   if (job.current_agent && validator === job.current_agent) throw new Error("Independent Plan Validator cannot be the current implementation/planning agent.");
   const evidence = getAllArgs(args, "--evidence");
   if (!evidence.length) throw new Error("plan-validate requires at least one --evidence value");
+  if (result === "APPROVED") assertSpecificationReady(job, project);
   if (result === "APPROVED" && Number(job.plan.bullets || 0) < Number(job.governance.min_plan_bullets || 0)) {
     throw new Error(`${job.governance.plan_mode} plan requires at least ${job.governance.min_plan_bullets} bullets before approval.`);
   }
@@ -391,6 +540,7 @@ function planValidate(project, args) {
     source: validator,
     evidence: evidence.slice(-20),
     plan_version: Number(job.plan.version || 0),
+    spec_digest: job.quality?.spec?.validator?.digest || null,
     validated_at: nowIso(),
   };
   job.plan.status = result;
@@ -441,6 +591,9 @@ function cycle(project, args) {
   const m = job.metrics;
   for (const [field, value] of Object.entries(reported)) m[field] += value;
   m.ai_cycles += 1;
+  if (["planning", "routing", "prose"].includes(kind) && Number.isInteger(m.meta_work_cycles)) {
+    m.meta_work_cycles += 1;
+  }
   if (outcome === "no-progress") {
     m.no_progress_cycles += 1;
     if (["implementation", "testing", "review", "validation"].includes(kind)) m.no_progress_work_cycles += 1;
@@ -526,7 +679,14 @@ function show(project, args) {
 function printHelp() {
   console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
         [--action-key <operation-id> --outcome progress|no-progress] [--tool-calls N] [--elapsed-ms N]
-        [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
+        [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]
+  spec-set --task-id <id> --file <project-relative-spec.md>
+  requirement-add --task-id <id> --id REQ-001 --description <text> --acceptance <testable-criteria>
+  spec-validate --task-id <id> --validator <independent-role> --result APPROVED|REVISE|REJECTED --evidence <text>
+  check-run --task-id <id> --script <npm-script-name>
+  requirement-verify --task-id <id> --id REQ-001 --result PASS|FAIL --check-script <script>|--manual --evidence <text>
+  quality-review --task-id <id> --reviewer <independent-role> --result PASS|FAIL --evidence <text>
+  report|audit --task-id <id>; benchmark --task-id <id> --against <other-id>\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
 }
 
 const args = process.argv.slice(2);
@@ -542,6 +702,7 @@ try {
     else if (command === "cycle") result = cycle(project, args.slice(1));
     else if (command === "project-update") result = projectUpdate(project, args.slice(1));
     else if (command === "show") result = show(project, args.slice(1));
+    else if (QUALITY_COMMANDS.has(command)) result = runQualityCommand(project, command, args.slice(1), loadJob, writeJob);
     else throw new Error(`Unknown command: ${command}`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   }

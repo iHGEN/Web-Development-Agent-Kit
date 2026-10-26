@@ -120,14 +120,14 @@ Preserve all project/user instructions outside this managed block. This block ad
 
 For Web-Kit-managed engineering work:
 
-1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle and \`.agent-core/rules/efficiency-policy.md\` to reduce redundant planning, tool use, and retries without skipping safety gates.
+1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle, \`.agent-core/rules/efficiency-policy.md\` for proportional execution, and \`.agent-core/rules/requirements-quality.md\` for acceptance evidence, real tests, and quality reports.
 2. Follow \`.agent-core/rules/repository-navigation.md\` for question-aware repository navigation.
 3. Follow \`.agent-core/rules/context-rollover.md\` for provider-session lifetime and fresh-context handoffs. Automatic rollover is an outer-session concern, not a second engineering workflow.
 4. Read \`.agent-core/index/project-profile.json\` first for lightweight project routing metadata.
 5. Use \`.agent-core/routing/context-policy.json\` to keep context bounded and activate only the roles/skills needed for the current step.
 6. If \`.agent-core/state/graphify-bootstrap-role.md\` exists, treat it as a **temporary current-AI role** and execute it before normal Graphify-assisted repository work. After the graph is built, follow that role's completion command; successful completion deletes the temporary role.
-7. Act only in the role routed for the current phase: Captain, discovery/indexing/router, architect/planner, implementation worker, specialist reviewer, Context Rollover Manager, Handoff Validator, or Final Integration Validator.
-8. Never self-approve a plan, implementation handoff, or final integration result when the workflow requires an independent validator.
+7. Act only in the role routed for the current phase: Captain, discovery/indexing/router, Spec Writer/Spec Validator for formal work, architect/planner, implementation worker, specialist reviewer, Context Rollover Manager, Handoff Validator, or Final Integration Validator.
+8. Never self-approve a specification, plan, code review, implementation handoff, or final integration result when the workflow requires an independent validator. For formal work, register REQ criteria and independent spec approval before plan validation.
 9. For exact text/symbol/path lookup, use targeted current-source search (\`rg\` or equivalent) directly.
 10. For relationship/dependency/ownership/impact discovery, run \`node .agent-core/rules/graphify-refresh.mjs --project . --task-id <task-id>\` before the first Graphify query. Use Graphify only when the resulting state is fresh, then verify exact source before planning or editing.
 11. After a coherent code-changing step, run the same Node Graph Refresh Gate only before downstream Graphify-based relationship validation/analysis needs fresh data; never refresh on every file write.
