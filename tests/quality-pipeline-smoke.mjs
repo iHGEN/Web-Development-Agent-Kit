@@ -277,4 +277,20 @@ fs.unlinkSync(path.join(live.dir, "owner.json"));
 fs.rmdirSync(live.dir);
 run("cycle", "--task-id", "LIVE-LOCK", "--kind", "implementation", "--evidence", "Live owner released lock");
 
+// Release is atomic: even if cleanup crashes after rename, the primary path
+// is available and a later writer must not interact with the old release copy.
+run("start", "--task-id", "ATOMIC-RELEASE", "--classification", "SMALL");
+assert(!fs.existsSync(lockPath("ATOMIC-RELEASE")), "Completed write left an active lock");
+const abandonedReleaseToken = randomUUID();
+const orphanedRelease = lockPath("ATOMIC-RELEASE") + ".released." + abandonedReleaseToken;
+fs.mkdirSync(orphanedRelease);
+fs.writeFileSync(path.join(orphanedRelease, "owner.json"),
+  JSON.stringify({pid: process.pid, host: os.hostname(), token: abandonedReleaseToken}));
+run("cycle", "--task-id", "ATOMIC-RELEASE", "--kind", "implementation", "--evidence", "Operation after interrupted cleanup");
+assert(readJob("ATOMIC-RELEASE").metrics.implementation_cycles === 1,
+  "Abandoned post-release cleanup artifact blocked the next writer");
+assert(fs.existsSync(orphanedRelease) && !fs.existsSync(lockPath("ATOMIC-RELEASE")),
+  "New writer altered previous release artifact or left its primary lock");
+fs.rmSync(orphanedRelease, { recursive: true, force: true });
+
 console.log("Evidence-backed quality pipeline smoke: PASS");
