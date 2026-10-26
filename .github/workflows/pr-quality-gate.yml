@@ -1,0 +1,68 @@
+name: PR Quality Gate
+
+# This check must run on every PR so it can be selected as a required status.
+# The existing platform and specialist smoke workflows remain selectively routed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-quality-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate source syntax and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < VERSION)" = "$(node -p "require('./package.json').version")"
+          node --check scripts/agent-kit.mjs
+          node --check scripts/ai-compat.mjs
+          node --check pack/runtime/work-progress.mjs
+          node --check pack/runtime/quality-pipeline.mjs
+          node --check tests/work-progress-smoke.mjs
+          node --check tests/quality-pipeline-smoke.mjs
+
+      - name: Run requirements and quality regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/work-progress-smoke.mjs
+          node tests/quality-pipeline-smoke.mjs
+
+      - name: Verify repository search
+        shell: bash
+        run: node tests/repository-search-smoke.mjs
+
+      - name: Verify release package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json > "$RUNNER_TEMP/web-kit-package.json"
+          node - "$RUNNER_TEMP/web-kit-package.json" <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))[0];
+          const required = ['package.json', 'bin/web-kit-entry.js', 'bin/web-kit.js', 'bootstrap/remote-install.mjs'];
+          const included = new Set((pkg.files || []).map(f => f.path));
+          for (const file of required) {
+            if (!included.has(file)) throw new Error('Missing packaged file: ' + file);
+          }
+          NODE
