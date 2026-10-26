@@ -101,15 +101,22 @@ function withJobLock(file, write) {
     } finally {
       const current = lockOwner(lockDir);
       if (!current || current.token !== token) throw new Error("Lock ownership changed unexpectedly; refusing to remove another process's lock.");
-      fs.unlinkSync(path.join(lockDir, "owner.json"));
-      fs.rmdirSync(lockDir);
+      // Release atomically while owner.json still exists. A crash after the
+      // rename cannot strand an empty, ownerless primary lock directory.
+      const released = lockDir + ".released." + token;
+      fs.renameSync(lockDir, released);
+      try {
+        fs.unlinkSync(path.join(released, "owner.json"));
+        fs.rmdirSync(released);
+      } catch (error) {
+        // The primary lock is already released. Retain only this owner-specific
+        // cleanup artifact rather than report the persisted operation as failed.
+        console.error("Web Kit lock cleanup warning: " + error.message);
+      }
     }
   } finally {
-    // A candidate that never acquired the lock is harmless and can be cleaned up.
-    if (fs.existsSync(candidate)) {
-      fs.unlinkSync(path.join(candidate, "owner.json"));
-      fs.rmdirSync(candidate);
-    }
+    // The unique unpublished candidate is private to this writer, safe to remove.
+    if (fs.existsSync(candidate)) fs.rmSync(candidate, { recursive: true, force: true });
   }
 }
 
