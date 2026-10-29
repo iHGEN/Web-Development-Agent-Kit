@@ -43,13 +43,23 @@ try {
   write("src/feature.js", "export const feature = true;\n");
   const clean = run("node", [script, "check", ...args]);
   assert.equal(clean.verdict, "PASS");
+  assert.match(clean.change_digest, /^[a-f0-9]{64}$/, "Review evidence must be bound to the exact Git change set");
   assert.equal(clean.untouched_preexisting_count, 1);
 
   write("src/unrelated.js", "export const other = true;\n");
   const drift = run("node", [script, "check", ...args], 1);
   assert.deepEqual(drift.unexpected_paths, ["src/unrelated.js"]);
+  assert.notEqual(drift.change_digest, clean.change_digest);
   run("node", [script, "extend", ...args, "--allow", "src/unrelated.js", "--reason", "Too late", "--evidence", "none"], 2);
   write("src/unrelated.js", "export const other = false;\n");
+
+  // An unrelated change staged in the index cannot be hidden by restoring the worktree.
+  write("src/unrelated.js", "export const other = 'staged only';\n");
+  assert.equal(git("add", "src/unrelated.js").status, 0);
+  write("src/unrelated.js", "export const other = false;\n");
+  const stagedOnly = run("node", [script, "check", ...args], 1);
+  assert.deepEqual(stagedOnly.unexpected_paths, ["src/unrelated.js"]);
+  assert.equal(git("restore", "--staged", "src/unrelated.js").status, 0);
 
   write("private-notes.txt", "Altered by mistake\n");
   const contaminated = run("node", [script, "check", ...args], 1);
@@ -78,6 +88,17 @@ try {
   assert.equal(git("switch", "main").status, 0);
   run("node", [script, "check", ...args], 2);
   run("node", [script, "start", "--task-id", "TASK-002", "--project", project, "--base", "main", "--intent", "Wrong branch", "--allow", "src/feature.js"], 2);
+
+  // Generated untracked bookkeeping is exempt; tracked bookkeeping is not.
+  assert.equal(git("switch", "-c", "feat/state-protection").status, 0);
+  const stateArgs = ["--task-id", "TASK.STATE", "--project", project];
+  run("node", [script, "start", ...stateArgs, "--base", "main", "--intent", "Scoped change", "--allow", "src/feature.js"]);
+  write("src/feature.js", "export const feature = 'scoped';\n");
+  write(".agent-core/state/jobs/progress.json", "{\"progress\":1}\n");
+  assert.equal(run("node", [script, "check", ...stateArgs]).verdict, "PASS");
+  write(".agent-core/state/jobs/accidental.json", "{\"tracked\":true}\n");
+  assert.equal(git("add", ".agent-core/state/jobs/accidental.json").status, 0);
+  assert.deepEqual(run("node", [script, "check", ...stateArgs], 1).unexpected_paths, [".agent-core/state/jobs/accidental.json"]);
   console.log("Scope guard smoke: PASS");
 } finally {
   // The fixture is entirely created by this test and contains no user files.

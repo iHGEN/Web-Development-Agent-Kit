@@ -33,14 +33,24 @@ function git(project, args) {
 function gitText(project, args) { return git(project, args).toString("utf8").trim(); }
 function gitPaths(project, args) { return git(project, args).toString("utf8").split("\0").filter(Boolean); }
 function digest(data) { return crypto.createHash("sha256").update(data).digest("hex"); }
-function isGeneratedState(file) { return file.startsWith(".agent-core/state/"); }
+function trackedStateFiles(project) {
+  // Generated state is exempt only while untracked. A tracked state file is real
+  // repository content and must not be hidden from the scope fence.
+  return new Set([
+    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ".agent-core/state"]),
+    ...gitPaths(project, ["ls-files", "--cached", "-z", "--", ".agent-core/state"]),
+  ]);
+}
+function isGeneratedState(file, tracked = new Set()) {
+  return file.startsWith(".agent-core/state/") && !tracked.has(file);
+}
 
 function validPath(file) {
   if (typeof file !== "string" || !file || file.startsWith("/") || file.includes("\\") || /[*?\[\]]/.test(file)) {
     throw new Error(`Scope requires an exact relative file path, not a glob: ${file}`);
   }
   const parts = file.split("/");
-  if (parts.some(p => !p || p === "." || p === "..") || file === ".git" || file.startsWith(".git/") || isGeneratedState(file)) {
+  if (parts.some(p => !p || p === "." || p === "..") || file === ".git" || file.startsWith(".git/") || file.startsWith(".agent-core/state/")) {
     throw new Error(`Unsafe or generated-state path in task scope: ${file}`);
   }
   return file;
@@ -52,10 +62,11 @@ function currentBranch(project) {
 
 function statusEntries(project) {
   const entries = new Map();
+  const tracked = trackedStateFiles(project);
   for (const record of gitPaths(project, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])) {
     if (record.length < 4 || record[2] !== " ") throw new Error("Could not parse git status safely");
     const file = record.slice(3);
-    if (!isGeneratedState(file)) entries.set(file, record.slice(0, 2));
+    if (!isGeneratedState(file, tracked)) entries.set(file, record.slice(0, 2));
   }
   return entries;
 }
@@ -81,14 +92,46 @@ function snapshotExisting(project) {
 function changePaths(project, base) {
   const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
   const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, "HEAD"]);
-  const local = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", "HEAD"]);
+  const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]);
+  const unstaged = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]);
+  const tracked = trackedStateFiles(project);
   const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
-    .filter(file => !isGeneratedState(file));
-  return [...new Set([...committed, ...local, ...untracked])].sort();
+    .filter(file => !isGeneratedState(file, tracked));
+  return [...new Set([...committed, ...staged, ...unstaged, ...untracked])]
+    .filter(file => !isGeneratedState(file, tracked)).sort();
+}
+
+function changeDigest(project, base) {
+  const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
+  const hash = crypto.createHash("sha256");
+  hash.update("web-kit-pr-diff-v1\0");
+  hash.update(mergeBase);
+  for (const args of [
+    ["diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames", mergeBase, "HEAD"],
+    ["diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-renames", "HEAD"],
+    ["diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames"],
+  ]) {
+    const part = git(project, args);
+    hash.update(String(part.length));
+    hash.update("\0");
+    hash.update(part);
+  }
+  const tracked = trackedStateFiles(project);
+  const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
+    .filter(file => !isGeneratedState(file, tracked)).sort();
+  for (const file of untracked) {
+    hash.update(file);
+    hash.update("\0");
+    hash.update(fingerprint(project, file, "??"));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 function manifestPath(project, taskId) {
-  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(taskId || "")) throw new Error("--task-id must contain only letters, numbers, _ or -");
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(taskId || "") || taskId === "." || taskId === "..") {
+    throw new Error("--task-id must be a safe Work Progress task ID");
+  }
   let directory = project;
   for (const part of [".agent-core", "state", "scope"]) {
     directory = path.join(directory, part);
@@ -145,6 +188,7 @@ function check(project, manifest) {
     task_id: manifest.task_id,
     branch: manifest.branch,
     base: manifest.base,
+    change_digest: changeDigest(project, manifest.base),
     intended_changes: taskChanges.filter(file => allowed.has(file)),
     unexpected_paths: unexpected,
     preexisting_changed: preexistingChanged,

@@ -349,6 +349,7 @@ function writeJob(project, job) {
         const snapshot = {
           completed_at: nowIso(),
           source_digest: verdict.source_digest,
+          change_digest: verdict.change_digest || null,
           gate: "PASS",
           acceptance_verified: verdict.total > 0 && verdict.total === verdict.verified,
           requirements_verified: verdict.verified,
@@ -398,6 +399,7 @@ function start(project, args) {
     title: getArg(args, "--title") || taskId,
     classification,
     high_risk: highRisk,
+    pr_bound: hasArg(args, "--pr-bound"),
     status: "QUEUED",
     progress: 0,
     current_agent: null,
@@ -436,6 +438,9 @@ function update(project, args) {
   }
 
   const requestedStatus = getArg(args, "--status");
+  // A local task can become PR-bound later, but cannot downgrade a PR-bound
+  // task to bypass its scope/review completion gate.
+  if (hasArg(args, "--pr-bound")) job.pr_bound = true;
   if (reopening) {
     if (!requestedStatus) throw new Error("--reopen requires an explicit non-DONE --status.");
     const reopenStatus = String(requestedStatus).toUpperCase();
@@ -491,7 +496,12 @@ function update(project, args) {
   }
 
   const agent = getArg(args, "--agent");
-  if (agent) job.current_agent = agent;
+  if (agent) {
+    job.current_agent = agent;
+    if (["IMPLEMENTING", "FIXING"].includes(job.status)) {
+      job.implementation.last_author = agent;
+    }
+  }
   const next = getArg(args, "--next");
   if (next) job.next_action = next;
 
@@ -677,7 +687,7 @@ function show(project, args) {
   };
 }
 function printHelp() {
-  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
+  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk] [--pr-bound]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen] [--pr-bound]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
         [--action-key <operation-id> --outcome progress|no-progress] [--tool-calls N] [--elapsed-ms N]
         [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]
   spec-set --task-id <id> --file <project-relative-spec.md>

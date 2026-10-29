@@ -15,7 +15,7 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 Read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
-Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`.
+Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review.
 
 For code changes on a Git feature branch, capture the current dirty/untracked baseline and declare exact permitted files before implementation using `scope-guard.mjs start`. Do not quietly adopt or alter existing user changes. The short scope note is not a formal plan.
 
@@ -103,7 +103,7 @@ A fresh context verifies current repository state and continues the recorded nex
 
 ## Pre-PR readiness
 
-For **every feature intended for a PR**, regardless of size, after implementation and final integration validation route an independent professional Code Reviewer. Require the current complete diff, passing scope guard, evidence-based six-category review and applicable checks. Route verified P0/P1/material P2 issues to the worker, re-test and independently re-review. Do not open or mark a PR ready unless the verdict is `READY TO OPEN PR` and publication is authorized. A high numerical score never excuses a blocker. Respect the project's configured CI/CD owner and never manually dispatch GitHub Actions to satisfy this review.
+For **every feature intended for a PR**, regardless of size, use the **existing independent Code Reviewer** to inspect the complete eventual diff, passing scope guard, requirements, test evidence and six applicable quality categories. Record that one review through `work-progress.mjs quality-review`; for formal tasks it also satisfies the existing formal quality gate. Do **not** add another full review when evidence already covers the unchanged final diff. Route verified P0/P1/material P2 issues to the worker; re-test and independently re-review changed/dependent areas, then update the same review record. `--pr-bound` makes completion fail if scope or diff-bound review is absent/stale. Do not open or mark a PR ready unless the verdict is `READY TO OPEN PR` and publication is authorized. A high numerical score never excuses a blocker. Respect the project's configured CI/CD owner and never manually dispatch GitHub Actions to satisfy this review.
 
 ## Adaptive execution and verification
 
@@ -111,7 +111,7 @@ Avoid duplicate tool calls, duplicated context reads, and unnecessary Graphify r
 
 ## Completion
 
-Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires the fresh `READY TO OPEN PR` verdict and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
+Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires a current `READY TO OPEN PR` verdict supported by the existing Code Review record and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
 
 ## Captain handoff
 

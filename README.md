@@ -107,7 +107,7 @@ LARGE / HIGH-RISK
   -> implementation -> specialist/final gates
 ```
 
-For any feature that will become a pull request, append **independent pre-PR Code Review → fix verified findings → re-test/re-review → READY TO OPEN PR**. No PR should be created to discover preventable defects. This gate applies to SMALL, MEDIUM and LARGE tasks and is separate from later PR reviews or CI/CD.
+For any feature that will become a pull request, the **existing independent Code Review** must cover the complete final diff, requirements, affected integration points and test evidence. Fix verified findings and re-review affected changes before `READY TO OPEN PR`. An unchanged approved diff reuses the existing review; there is no extra duplicate review stage. This applies to SMALL, MEDIUM and LARGE tasks and remains separate from later external PR reviews or CI/CD.
 
 After initial discovery, two consecutive planning/routing/prose-only cycles without concrete implementation/verification evidence trigger the anti-slop guard. Plan-required work keeps its required approval gate; plan-free/approved work is pushed back to implementation.
 
@@ -121,6 +121,13 @@ planning + routing + summaries: 10-20%
 This is a diagnostic target; required safety work is never skipped just to improve the ratio.
 
 ## Pre-PR professional review and unrelated-change protection
+
+At the beginning of PR-bound work, mark the existing job once so completion requires a current scope check and independently reviewed diff:
+
+```bash
+node .agent-core/bin/work-progress.mjs start \
+  --task-id TASK-042 --classification SMALL --title "Implement REQ-001" --pr-bound
+```
 
 Before editing on a Git feature branch, the Captain names the exact permitted files and captures existing user changes:
 
@@ -139,9 +146,11 @@ node .agent-core/rules/scope-guard.mjs extend \
 node .agent-core/rules/scope-guard.mjs check --task-id TASK-042
 ```
 
-Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work.
+Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work. A scope snapshot additionally makes the existing `DONE` command fail on scope violations.
 
-Before opening a PR, the Code Reviewer audits the complete intended diff and affected dependencies, scores **Security 25%, Architecture 20%, Correctness 20%, Testing 15%, Performance 10%, Maintainability 10%**, records evidence-based P0–P3 findings, and returns `READY TO OPEN PR`, `NOT READY` or `VERIFICATION BLOCKED`. Verified blockers go back to the implementer, then receive fresh checks and independent re-review. A score cannot override an unresolved blocker.
+PR-bound completion also requires a current executed npm test (or an available build/lint/typecheck when there is no test script). The reviewer documents verification of behavior not represented by npm scripts.
+
+The existing Code Reviewer audits the complete intended diff and affected dependencies, scores **Security 25%, Architecture 20%, Correctness 20%, Testing 15%, Performance 10%, Maintainability 10%**, records evidence-based P0–P3 findings, and returns `READY TO OPEN PR`, `NOT READY` or `VERIFICATION BLOCKED`. Record this same review using `work-progress.mjs quality-review`. For `--pr-bound` jobs the review is fingerprinted against the full Git diff; a later code, doc, staged or untracked change invalidates approval until focused re-review. A score cannot override an unresolved blocker.
 
 See `.agent-core/rules/pre-pr-review.md` and `.agent-core/agents/code-reviewer.md`. The review is not a claim that later reviewers will find no issues. CI/CD remains with the project's authorized owner; this feature does not dispatch GitHub Actions.
 

@@ -32,17 +32,18 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 3. Classify `SMALL`, `MEDIUM`, or `LARGE`.
 4. Escalate governance to formal/high-risk when the change materially touches security/trust boundaries, public contracts, schema/migrations, destructive operations, major dependencies, or release/deployment architecture.
 5. For routine Git maintenance (rebase, cherry-pick, merge conflicts), use the focused Git operation mode in `efficiency-policy.md`; retain the same risk escalation rules and protect pre-existing user changes.
-6. Before editing on a Git feature branch, define exact permitted paths and explicit non-goals; capture existing dirty/untracked work using `scope-guard.mjs start` as specified in `pre-pr-review.md`. The scope fence is not a formal plan, including for SMALL tasks.
-7. Start evidence-based job tracking:
+6. Start evidence-based job tracking, using `--pr-bound` for code work intended to become a PR (the feature-branch default):
 
 ```bash
 node .agent-core/bin/work-progress.mjs start \
   --task-id <task-id> \
   --classification <SMALL|MEDIUM|LARGE> \
-  --title "<short task title>"
+  --title "<short task title>" --pr-bound
 ```
 
-Use `--high-risk` when formal governance is required regardless of size.
+Omit `--pr-bound` for explicitly local-only or review-only tasks; use `--high-risk` when formal governance is required regardless of size.
+
+7. Before the first **code write** on a Git feature branch, define exact permitted paths and explicit non-goals; capture existing dirty/untracked work using `scope-guard.mjs start` as specified in `pre-pr-review.md`. The scope fence is not a formal plan, including for SMALL tasks. A PR-bound job cannot reach `DONE` without this snapshot and a current independent review.
 
 Managed state:
 
@@ -272,7 +273,7 @@ Update test/build evidence with `work-progress.mjs update`.
 
 Only invoke specialist reviewers relevant to the changed surface. Code Simplifier, performance, accessibility, API-contract, DevSecOps, SRE, etc. are targeted capabilities, not mandatory universal stages. For formal tasks, execute declared npm checks when available, verify individual requirements, and record an independent quality-review with current source evidence.
 
-**Exception for PR-bound work:** a full independent Code Reviewer readiness gate is mandatory before creating a PR, regardless of SMALL/MEDIUM/LARGE classification. Treat feature-branch work as PR-bound by default unless explicitly local-only/review-only. It is one final review/fix/re-review loop, not a new planning lifecycle; see `pre-pr-review.md`.
+**For PR-bound work:** expand the **existing** independent Code Reviewer assessment to cover the complete eventual PR diff regardless of SMALL/MEDIUM/LARGE classification. Record the review using the existing `quality-review` command and reuse current evidence; do not run a duplicate final review just because a PR will be opened. Treat feature-branch code work as PR-bound by default unless explicitly local-only/review-only. A changed diff invalidates approval, requiring focused re-review of affected changes. See `pre-pr-review.md`.
 
 Validation should inspect the actual diff/results; it should not recreate the original task analysis. Start with affected checks and expand only for demonstrated dependency/risk or a required gate; never run the same failing test again unchanged.
 
@@ -352,11 +353,11 @@ The explicit controller's one-unit boundary limits session batching; it does not
 
 ## Phase 13 — Final validation and completion
 
-For work intended to become a PR, after integration validation and **before** marking the task done/opening a PR:
+For work intended to become a PR, **before** marking the task done/opening a PR:
 
 1. Review the full intended PR diff, including uncommitted and relevant untracked files, against the original request and allowed scope.
-2. Require a passing `scope-guard.mjs check` result and independent professional Code Reviewer assessment across security, architecture, correctness, testing, performance and maintainability.
-3. Route verified findings to the implementation owner, fix/test, and re-review fresh code; refuse PR publication on `NOT READY` or `VERIFICATION BLOCKED`.
+2. Require a passing `scope-guard.mjs check` and **current evidence from the existing independent Code Reviewer**, covering security, architecture, correctness, testing, performance and maintainability. When previous quality-review evidence covers the same final diff and requirements, reuse it.
+3. Route verified findings to the implementation owner, fix/test, and re-review only changed and dependent areas. The `--pr-bound` job flag makes work-progress reject `DONE` if the snapshot, review or recorded diff fingerprint is missing/stale. Refuse PR publication on `NOT READY` or `VERIFICATION BLOCKED`.
 
 This applies to all PR-bound task sizes and does not authorize a PR, push, or merge by itself. Follow the project's CI/CD ownership policy; do not manually dispatch GitHub Actions merely because a local readiness gate exists.
 

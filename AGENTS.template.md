@@ -62,7 +62,7 @@ Adaptive execution, focused Git maintenance, no-progress recovery, proportional 
 .agent-core/rules/efficiency-policy.md
 ```
 
-Every code-changing Git feature branch must protect its intended change surface and pre-existing user edits. Work destined for a PR must receive an independent professional review **before** PR creation:
+Every code-changing Git feature branch must protect its intended change surface and pre-existing user edits. Start PR-bound jobs with `work-progress.mjs start ... --pr-bound`: the existing independent Code Review doubles as professional PR readiness evidence, and the runtime blocks `DONE` when the scope or full-diff review becomes stale. Do not add a duplicate Code Reviewer stage:
 
 ```text
 .agent-core/rules/pre-pr-review.md
