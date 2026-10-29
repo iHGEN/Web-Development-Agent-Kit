@@ -97,15 +97,17 @@ Classification changes the workflow:
 
 ```text
 SMALL
-  targeted discovery -> implement -> local check -> review -> validate -> done
+  targeted discovery -> scoped implementation -> local check -> review -> validate -> done
 
 MEDIUM
-  targeted discovery -> 3-6 execution bullets -> implement -> test/review -> validate -> done
+  targeted discovery -> 3-6 execution bullets -> scoped implementation -> test/review -> validate -> done
 
 LARGE / HIGH-RISK
   discovery/design -> formal plan -> independent plan validation
   -> implementation -> specialist/final gates
 ```
+
+For any feature that will become a pull request, append **independent pre-PR Code Review → fix verified findings → re-test/re-review → READY TO OPEN PR**. No PR should be created to discover preventable defects. This gate applies to SMALL, MEDIUM and LARGE tasks and is separate from later PR reviews or CI/CD.
 
 After initial discovery, two consecutive planning/routing/prose-only cycles without concrete implementation/verification evidence trigger the anti-slop guard. Plan-required work keeps its required approval gate; plan-free/approved work is pushed back to implementation.
 
@@ -117,6 +119,31 @@ planning + routing + summaries: 10-20%
 ```
 
 This is a diagnostic target; required safety work is never skipped just to improve the ratio.
+
+## Pre-PR professional review and unrelated-change protection
+
+Before editing on a Git feature branch, the Captain names the exact permitted files and captures existing user changes:
+
+```bash
+node .agent-core/rules/scope-guard.mjs start \
+  --task-id TASK-042 --base main --intent "Implement REQ-001" \
+  --allow src/feature.js --allow tests/feature.test.js
+```
+
+Use the actual target branch (`main` is only an example). The guard accepts exact paths, not broad globs; it does not stash, stage, reset, revert or modify code. If a real dependency requires another file, add it **before** editing and record evidence:
+
+```bash
+node .agent-core/rules/scope-guard.mjs extend \
+  --task-id TASK-042 --allow src/shared/contract.js \
+  --reason "Required by REQ-001" --evidence "Affected consumer and test"
+node .agent-core/rules/scope-guard.mjs check --task-id TASK-042
+```
+
+Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work.
+
+Before opening a PR, the Code Reviewer audits the complete intended diff and affected dependencies, scores **Security 25%, Architecture 20%, Correctness 20%, Testing 15%, Performance 10%, Maintainability 10%**, records evidence-based P0–P3 findings, and returns `READY TO OPEN PR`, `NOT READY` or `VERIFICATION BLOCKED`. Verified blockers go back to the implementer, then receive fresh checks and independent re-review. A score cannot override an unresolved blocker.
+
+See `.agent-core/rules/pre-pr-review.md` and `.agent-core/agents/code-reviewer.md`. The review is not a claim that later reviewers will find no issues. CI/CD remains with the project's authorized owner; this feature does not dispatch GitHub Actions.
 
 ## Requirements, engineering quality and efficiency reports
 

@@ -120,7 +120,7 @@ Preserve all project/user instructions outside this managed block. This block ad
 
 For Web-Kit-managed engineering work:
 
-1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle, \`.agent-core/rules/efficiency-policy.md\` for proportional execution, and \`.agent-core/rules/requirements-quality.md\` for acceptance evidence, real tests, and quality reports.
+1. Follow \`.agent-core/rules/workflow.md\` as the single engineering lifecycle, \`.agent-core/rules/efficiency-policy.md\` for proportional execution, \`.agent-core/rules/pre-pr-review.md\` for scope protection and PR readiness, and \`.agent-core/rules/requirements-quality.md\` for acceptance evidence, real tests, and quality reports.
 2. Follow \`.agent-core/rules/repository-navigation.md\` for question-aware repository navigation.
 3. Follow \`.agent-core/rules/context-rollover.md\` for provider-session lifetime and fresh-context handoffs. Automatic rollover is an outer-session concern, not a second engineering workflow.
 4. Read \`.agent-core/index/project-profile.json\` first for lightweight project routing metadata.
@@ -141,6 +141,8 @@ For Web-Kit-managed engineering work:
 19. Map simple suffixes consistently: \`run security-review deep\` adds \`--deep\`; \`run security-review base <branch>\` adds \`--base <branch>\`; \`run security-review provider <codex|claude|gemini>\` adds \`--provider <name>\`. The same engine owns first review and re-review automatically.
 20. The Security PR Reviewer is independent and read-only. Do not fix findings during the review. After findings are returned, wait for a separate implementation/fix request; a later \`run security-review\` performs the independent re-review.
 21. If this AI client cannot execute local commands/tools, do not pretend the security review ran. Tell the user to run \`npx @ihgen/web-kit security-review\` in the project terminal.
+22. For code-changing tasks on a Git feature branch, lock exact task paths and pre-existing edits using \`node .agent-core/rules/scope-guard.mjs start ...\` before writing; run \`scope-guard.mjs check --task-id <task-id>\` after coherent chunks and before handoff/commit/push. Do not touch unrelated files. Extend only for an evidence-backed necessary dependency **before** editing; material scope changes still require approval.
+23. For every PR-bound feature, regardless of task size, require an independent Code Reviewer to inspect the full eventual PR diff and score security, architecture, correctness, testing, performance and maintainability. Fix verified blockers through the implementation owner, re-test and independently re-review; create or mark a PR ready only on \`READY TO OPEN PR\` with a passing scope guard and publication authorization. Respect the configured CI/CD owner; never manually dispatch GitHub Actions merely for this gate.
 
 If project-owned instructions outside this block conflict with Web-Kit workflow mechanics, preserve them but report the conflict with \`doctor\`; do not silently delete user content.
 ${ROLE_END}`;
@@ -172,6 +174,8 @@ export function applyAiCompatibility(project, profile = null) {
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
     efficiency_policy_rule: ".agent-core/rules/efficiency-policy.md",
+    pre_pr_review_rule: ".agent-core/rules/pre-pr-review.md",
+    scope_guard: ".agent-core/rules/scope-guard.mjs",
     automatic_context_rollover_rule: ".agent-core/rules/context-rollover.md",
     security_review_rule: ".agent-core/rules/security-review.md",
     security_review_engine: ".agent-core/bin/security-review.mjs",
