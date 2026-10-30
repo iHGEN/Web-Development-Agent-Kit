@@ -411,7 +411,7 @@ function start(project, args) {
       version: 0,
       validator: defaultValidator(governance),
     },
-    implementation: { total: 0, completed: 0, active: null },
+    implementation: { total: 0, completed: 0, active: null, authors: [] },
     evidence: { files_changed: 0, tests_added: 0, tests_total: 0, tests_passing: 0, build: "UNKNOWN", items: [] },
     review: { status: "PENDING" },
     final_validation: { status: "PENDING" },
@@ -428,6 +428,14 @@ function start(project, args) {
   loadedRevisions.set(job, Number(readJson(paths.job, null)?.revision || 0));
   writeJob(project, job);
   return job;
+}
+function recordImplementationAuthor(job, agent) {
+  if (!agent) return;
+  // A later fix must not erase earlier implementers, including legacy jobs
+  // that predate the authors array.
+  const authors = Array.isArray(job.implementation.authors) ? job.implementation.authors : [];
+  job.implementation.authors = [...new Set([...authors, job.implementation.last_author, agent].filter(Boolean))];
+  job.implementation.last_author = agent;
 }
 function update(project, args) {
   const taskId = safeTaskId(getArg(args, "--task-id"));
@@ -499,7 +507,7 @@ function update(project, args) {
   if (agent) {
     job.current_agent = agent;
     if (["IMPLEMENTING", "FIXING"].includes(job.status)) {
-      job.implementation.last_author = agent;
+      recordImplementationAuthor(job, agent);
     }
   }
   const next = getArg(args, "--next");
@@ -597,6 +605,7 @@ function cycle(project, args) {
     job.status = "IMPLEMENTING";
     job.current_phase = "IMPLEMENTING";
   }
+  if (kind === "implementation") recordImplementationAuthor(job, job.current_agent);
 
   const m = job.metrics;
   for (const [field, value] of Object.entries(reported)) m[field] += value;

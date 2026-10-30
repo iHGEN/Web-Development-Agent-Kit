@@ -539,6 +539,10 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     const result = String(arg(args, "--result") || "").toUpperCase();
     if (!REVIEW_RESULTS.has(result)) throw new Error("--result must be PASS or FAIL.");
     const reviewer = requireRole(args, "--reviewer", job, job.implementation?.last_author);
+    const implementationAuthors = Array.isArray(job.implementation?.authors) ? job.implementation.authors : [];
+    if (implementationAuthors.includes(reviewer)) {
+      throw new Error("Independent Code Reviewer cannot be a previous implementation or fixing author.");
+    }
     const scope = scopeState(project, job.task_id, job.pr_bound === true);
     if (job.pr_bound && result === "PASS" && (scope.status !== "PASS" || !scope.change_digest)) {
       throw new Error("Cannot approve PR-bound code without a passing current scope guard: " + (scope.reason || scope.status));
