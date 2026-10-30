@@ -33,6 +33,20 @@ function git(project, args) {
 function gitText(project, args) { return git(project, args).toString("utf8").trim(); }
 function gitPaths(project, args) { return git(project, args).toString("utf8").split("\0").filter(Boolean); }
 function digest(data) { return crypto.createHash("sha256").update(data).digest("hex"); }
+function fileDigest(file) {
+  // Fingerprint large user assets without loading them into memory. A size cap
+  // would prevent scope locking when an unrelated untracked asset is >32 MiB.
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = fs.openSync(file, "r");
+  try {
+    let count;
+    while ((count = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, count));
+    }
+  } finally { fs.closeSync(fd); }
+  return hash.digest("hex");
+}
 function trackedStateFiles(project) {
   // Generated state is exempt only while untracked. A tracked state file is real
   // repository content and must not be hidden from the scope fence.
@@ -76,10 +90,51 @@ function fingerprint(project, file, status) {
     const fullPath = path.join(project, file);
     const info = fs.lstatSync(fullPath);
     if (info.isSymbolicLink()) return digest(`link:${fs.readlinkSync(fullPath)}`);
-    if (!info.isFile() || info.size > 32 * 1024 * 1024) throw new Error(`Cannot safely fingerprint untracked file: ${file}`);
-    return digest(fs.readFileSync(fullPath));
+    if (!info.isFile()) throw new Error(`Cannot safely fingerprint untracked file: ${file}`);
+    return fileDigest(fullPath);
   }
   return digest(git(project, ["diff", "--binary", "--no-ext-diff", "HEAD", "--", file]));
+}
+
+function indexSnapshot(project) {
+  const entries = new Map();
+  for (const entry of gitPaths(project, ["ls-files", "--stage", "-z"])) {
+    const split = entry.indexOf("\t");
+    if (split < 0) throw new Error("Cannot parse Git index safely");
+    const metadata = entry.slice(0, split);
+    const name = entry.slice(split + 1);
+    if (!/^\d{6} [a-f0-9]{40,64} [0-3]$/.test(metadata)) throw new Error(`Invalid Git index metadata for ${name}`);
+    if (!metadata.endsWith(" 0")) throw new Error(`Unresolved Git conflict must be resolved before review: ${name}`);
+    entries.set(name, metadata);
+  }
+  return entries;
+}
+
+function workingFingerprint(project, file, indexEntries) {
+  const fullPath = path.join(project, file);
+  const index = indexEntries.get(file);
+  let info;
+  try { info = fs.lstatSync(fullPath); }
+  catch (error) {
+    if (error.code === "ENOENT") {
+      // An uninitialized submodule may be absent from the worktree while its
+      // gitlink is still present in the proposed PR tree.
+      return index?.startsWith("160000 ") ? `gitlink:${index}` : "deleted";
+    }
+    throw error;
+  }
+  if (info.isSymbolicLink()) return `link:${digest(fs.readlinkSync(fullPath))}`;
+  if (info.isFile()) {
+    const mode = process.platform === "win32" && index
+      ? index.slice(0, 6) : info.mode & 0o111 ? "100755" : "100644";
+    return `file:${mode}:${fileDigest(fullPath)}`;
+  }
+  if (info.isDirectory() && index?.startsWith("160000 ")) {
+    const actualRoot = gitText(fullPath, ["rev-parse", "--show-toplevel"]);
+    if (path.resolve(actualRoot) !== fullPath) throw new Error(`Submodule is not checked out: ${file}`);
+    return `gitlink:160000 ${gitText(fullPath, ["rev-parse", "--verify", "HEAD"])}`;
+  }
+  throw new Error(`Cannot safely fingerprint changed non-file path: ${file}`);
 }
 
 function snapshotExisting(project) {
@@ -104,26 +159,33 @@ function changePaths(project, base) {
 function changeDigest(project, base) {
   const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
   const hash = crypto.createHash("sha256");
-  hash.update("web-kit-pr-diff-v1\0");
+  hash.update("web-kit-pr-diff-v2\0");
   hash.update(mergeBase);
-  for (const args of [
-    ["diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames", mergeBase, "HEAD"],
-    ["diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-renames", "HEAD"],
-    ["diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames"],
-  ]) {
-    const part = git(project, args);
-    hash.update(String(part.length));
-    hash.update("\0");
-    hash.update(part);
-  }
-  const tracked = trackedStateFiles(project);
-  const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
-    .filter(file => !isGeneratedState(file, tracked)).sort();
-  for (const file of untracked) {
+  // A content-equivalent `git add` or `git commit` must NOT invalidate a prior
+  // review. Hash the effective working tree once, irrespective of whether a
+  // changed file is committed, staged, or untracked.
+  const paths = changePaths(project, base);
+  const indexEntries = indexSnapshot(project);
+  for (const file of paths) {
     hash.update(file);
     hash.update("\0");
-    hash.update(fingerprint(project, file, "??"));
+    hash.update(workingFingerprint(project, file, indexEntries));
     hash.update("\0");
+  }
+  // Keep staged-only code visible when the index and working tree disagree.
+  // Do not include the index when it matches the worktree: that would cause a
+  // redundant review for a normal add/commit with no content change.
+  const staged = new Set(gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]));
+  const unstaged = new Set(gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]));
+  const divergent = [...staged].filter(file => unstaged.has(file)).sort();
+  if (divergent.length) {
+    for (const file of divergent) {
+      hash.update("staged-version\0");
+      hash.update(file);
+      hash.update("\0");
+      hash.update(indexEntries.get(file) || "deleted-in-index");
+      hash.update("\0");
+    }
   }
   return hash.digest("hex");
 }

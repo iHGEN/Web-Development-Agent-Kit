@@ -98,6 +98,13 @@ try {
   work("quality-review", "--task-id", task, "--reviewer", "code-reviewer",
     "--result", "PASS", "--evidence", "Final current PR diff checked");
   assert.notEqual(job(task).quality.code_review.change_digest, reviewed);
+  const finalReviewDigest = job(task).quality.code_review.change_digest;
+  git("add", "src/feature.js", "docs/feature.md");
+  assert.equal(scope("check", "--task-id", task).change_digest, finalReviewDigest,
+    "Staging an unchanged review must not invalidate PR readiness");
+  git("commit", "-m", "final reviewed feature");
+  assert.equal(scope("check", "--task-id", task).change_digest, finalReviewDigest,
+    "Committing unchanged reviewed content must preserve PR readiness");
   work("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
   assert.equal(job(task).status, "DONE");
   const report = work("report", "--task-id", task);
