@@ -130,6 +130,46 @@ try {
   write(".agent-core/state/jobs/accidental.json", "{\"tracked\":true}\n");
   assert.equal(git("add", ".agent-core/state/jobs/accidental.json").status, 0);
   assert.deepEqual(run("node", [script, "check", ...stateArgs], 1).unexpected_paths, [".agent-core/state/jobs/accidental.json"]);
+
+  // A pre-existing tracked file can have two distinct user versions: the
+  // staged index blob and the unstaged working-tree content. Changing only
+  // the staged blob must never pass merely because `MM` and `diff HEAD` stay
+  // identical after the worktree is restored.
+  const userFile = "src/unrelated.js";
+  const stagedA = "export const other = 'original staged user work';\n";
+  const stagedC = "export const other = 'replaced staged user work';\n";
+  const workingB = "export const other = 'unstaged user work';\n";
+  write(userFile, stagedA);
+  assert.equal(git("add", userFile).status, 0);
+  write(userFile, workingB);
+  const mixedArgs = ["--task-id", "TASK.MIXED", "--project", project];
+  const beforeStatus = git("status", "--porcelain=v1", "--", userFile).stdout.trim();
+  const beforeIndex = git("rev-parse", `:${userFile}`).stdout.trim();
+  const beforeDiff = git("diff", "--binary", "HEAD", "--", userFile).stdout;
+  assert.match(beforeStatus, /^MM src\/unrelated\.js$/);
+  run("node", [script, "start", ...mixedArgs, "--base", "main", "--intent", "Protect mixed user edits", "--allow", "tests/feature.test.js"]);
+  write("tests/feature.test.js", "// Scoped change with existing mixed user edits\n");
+  assert.equal(run("node", [script, "check", ...mixedArgs]).verdict, "PASS", "Original staged and unstaged user versions are preserved");
+
+  write(userFile, stagedC);
+  assert.equal(git("add", userFile).status, 0);
+  write(userFile, workingB);
+  assert.equal(git("status", "--porcelain=v1", "--", userFile).stdout.trim(), beforeStatus);
+  assert.equal(git("diff", "--binary", "HEAD", "--", userFile).stdout, beforeDiff);
+  assert.notEqual(git("rev-parse", `:${userFile}`).stdout.trim(), beforeIndex);
+  const mixedDrift = run("node", [script, "check", ...mixedArgs], 1);
+  assert.deepEqual(mixedDrift.preexisting_changed, [userFile]);
+
+  // Old locks cannot certify staged-data preservation because they never
+  // recorded the original index entry; require a new reviewed baseline.
+  const legacyId = "TASK.LEGACY";
+  const scopeDir = path.join(project, ".agent-core/state/scope");
+  const legacyManifest = JSON.parse(fs.readFileSync(path.join(scopeDir, "TASK.MIXED.json"), "utf8"));
+  legacyManifest.task_id = legacyId;
+  delete legacyManifest.preexisting[userFile].index_entry;
+  fs.writeFileSync(path.join(scopeDir, `${legacyId}.json`), `${JSON.stringify(legacyManifest)}\n`);
+  const legacyResult = run("node", [script, "check", "--task-id", legacyId, "--project", project], 2);
+  assert.match(legacyResult.error, /lacks the staged baseline/);
   console.log("Scope guard smoke: PASS");
 } finally {
   // The fixture is entirely created by this test and contains no user files.

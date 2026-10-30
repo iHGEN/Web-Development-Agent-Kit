@@ -139,9 +139,14 @@ function workingFingerprint(project, file, indexEntries) {
 
 function snapshotExisting(project) {
   const entries = statusEntries(project);
-  return Object.fromEntries([...entries].map(([file, status]) => [file, {
-    status, fingerprint: fingerprint(project, file, status),
-  }]));
+  const indexEntries = indexSnapshot(project);
+  return Object.fromEntries([...entries].map(([file, status]) => {
+    const snapshot = { status, fingerprint: fingerprint(project, file, status) };
+    // A tracked dirty file can have distinct staged and working-tree versions.
+    // `git diff HEAD` alone cannot detect staged-only drift when `MM` stays MM.
+    if (status !== "??") snapshot.index_entry = indexEntries.get(file) ?? null;
+    return [file, snapshot];
+  }));
 }
 
 function changePaths(project, base) {
@@ -231,10 +236,17 @@ function check(project, manifest) {
   if (currentBranch(project) !== manifest.branch) throw new Error(`Task is locked to branch ${manifest.branch}`);
   const changed = changePaths(project, manifest.base);
   const status = statusEntries(project);
+  const indexEntries = indexSnapshot(project);
   const preexistingChanged = [];
   for (const [file, before] of Object.entries(manifest.preexisting)) {
+    if (before.status !== "??" && !Object.hasOwn(before, "index_entry")) {
+      // Older locks did not record staged data. Do not silently certify that
+      // user work was preserved when the original index state is unknowable.
+      throw new Error(`Scope lock lacks the staged baseline for ${file}; create a new task scope after reviewing existing user edits`);
+    }
     const current = status.get(file);
-    if (current !== before.status || (current && fingerprint(project, file, current) !== before.fingerprint)) {
+    const indexChanged = before.status !== "??" && (indexEntries.get(file) ?? null) !== before.index_entry;
+    if (current !== before.status || indexChanged || (current && fingerprint(project, file, current) !== before.fingerprint)) {
       preexistingChanged.push(file);
     }
   }
@@ -280,7 +292,7 @@ function main() {
     gitText(project, ["merge-base", base, "HEAD"]);
     const allowed = [...new Set(options.allow.map(validPath))];
     const manifest = {
-      version: 1, task_id: options["task-id"], intent: options.intent, branch, base,
+      version: 2, task_id: options["task-id"], intent: options.intent, branch, base,
       allowed_paths: allowed, preexisting: snapshotExisting(project), extensions: [],
     };
     writeManifest(file, manifest);
