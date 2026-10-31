@@ -108,10 +108,14 @@ jobs:
           if [ "$RESULT" -eq 0 ]; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
             if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-              echo "@ihgen/web-kit@$VERSION already exists on npm; bump VERSION to a new version." >&2
-              exit 1
+              BASE_VERSION="$(git show "origin/$GITHUB_BASE_REF:VERSION" | tr -d '\r\n')"
+              if [ "$BASE_VERSION" != "$VERSION" ]; then
+                echo "@ihgen/web-kit@$VERSION already exists on npm; choose an unpublished version." >&2
+                exit 1
+              fi
+              echo "Workflow-only change; same published package version is permitted."
             fi
-            echo "Release already on npm; only tag verification is needed."
+            echo "Release already on npm; publishing will be skipped."
           elif printf '%s' "$LOOKUP" | grep -Eqi 'E404|404 Not Found|No match found for version|is not in this registry'; then
             echo "already_published=false" >> "$GITHUB_OUTPUT"
             echo "@ihgen/web-kit@$VERSION is available for publication."
@@ -122,7 +126,7 @@ jobs:
 
   publish:
     needs: validate
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.validate.outputs.already_published == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -198,4 +202,84 @@ jobs:
             sleep 5
           done
           echo "npm registry verification did not observe release $VERSION." >&2
+          exit 1
+
+  promote_latest:
+    needs: [validate, publish]
+    # A new release promotes after publish; an already-published release
+    # can safely repair its dist-tag without trying to rewrite the Git tag.
+    if: ${{ always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.validate.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.validate.outputs.already_published == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository and release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Upgrade npm for OIDC dist-tag support
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@latest
+          node - "$(npm --version)" <<'NODE'
+          const parts = process.argv[2].split('.').map(Number);
+          const supported = parts[0] > 12 || (parts[0] === 12 && parts[1] >= 2) || (parts[0] === 11 && parts[1] >= 21);
+          if (!supported) throw new Error('npm OIDC dist-tag requires npm >=11.21.0 or >=12.2.0');
+          console.log('Verified npm OIDC dist-tag client: ' + parts.join('.'));
+          NODE
+
+      - name: Promote verified release to latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          test "$VERSION" = "$(node -p "require('./package.json').version")"
+          git fetch --no-tags origin "refs/tags/v$VERSION"
+          TAG_VERSION="$(git show "v$VERSION:VERSION" | tr -d '\r\n')"
+          test "$TAG_VERSION" = "$VERSION" || {
+            echo "Release tag v$VERSION doesn't contain VERSION=$VERSION; refusing promotion." >&2
+            exit 1
+          }
+
+          # npm processing can delay a version becoming queryable after publish.
+          FOUND=false
+          for attempt in $(seq 1 24); do
+            if FOUND_VERSION="$(npm view "@ihgen/web-kit@$VERSION" version --json --prefer-online 2>/dev/null)"; then
+              if [ "$FOUND_VERSION" = "\"$VERSION\"" ]; then FOUND=true; break; fi
+            fi
+            sleep 10
+          done
+          if [ "$FOUND" != true ]; then
+            echo "Registry has not exposed @ihgen/web-kit@$VERSION; refusing to change latest." >&2
+            exit 1
+          fi
+
+          CURRENT="$(npm view '@ihgen/web-kit' dist-tags.latest --json --prefer-online)"
+          if [ "$CURRENT" = "\"$VERSION\"" ]; then
+            echo "latest already points to $VERSION; no change needed."
+            exit 0
+          fi
+
+          # Requires the npm trusted publisher for publish-npm.yml to have
+          # the separate 'Allow npm dist-tag' permission enabled.
+          npm dist-tag add "@ihgen/web-kit@$VERSION" latest
+
+          for attempt in $(seq 1 24); do
+            CURRENT="$(npm view '@ihgen/web-kit' dist-tags.latest --json --prefer-online 2>/dev/null || true)"
+            if [ "$CURRENT" = "\"$VERSION\"" ]; then
+              echo "Verified latest -> $VERSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Dist-tag promotion was requested but latest could not be verified yet." >&2
           exit 1
