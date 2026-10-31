@@ -43,6 +43,52 @@ run("requirement-verify", "--task-id", "SMALL", "--id", "REQ-001", "--result", "
 run("update", "--task-id", "SMALL", "--final-validation", "PASS", "--status", "DONE", "--evidence", "Validated trivial request");
 assert(readJob("SMALL").status === "DONE", "SMALL was unnecessarily blocked by a formal spec gate");
 
+// A prior implementer must not become an independent reviewer merely because
+// another agent authored the final fix. An unrelated reviewer is still allowed.
+run("start", "--task-id", "MULTI-AUTHOR", "--classification", "SMALL");
+run("update", "--task-id", "MULTI-AUTHOR", "--status", "IMPLEMENTING", "--agent", "developer-a");
+run("update", "--task-id", "MULTI-AUTHOR", "--status", "FIXING", "--agent", "developer-b");
+run("update", "--task-id", "MULTI-AUTHOR", "--status", "FIXING", "--agent", "developer-b");
+assert(JSON.stringify(readJob("MULTI-AUTHOR").implementation.authors) === JSON.stringify(["developer-a", "developer-b"]),
+  "Implementation history must retain all unique contributors");
+run("update", "--task-id", "MULTI-AUTHOR", "--status", "REVIEWING", "--agent", "developer-a");
+fail("quality-review", "--task-id", "MULTI-AUTHOR", "--reviewer", "developer-a",
+  "--result", "PASS", "--evidence", "An earlier implementer cannot approve the feature");
+assert(readJob("MULTI-AUTHOR").quality.code_review.status === "PENDING",
+  "Rejected self-review unexpectedly wrote approval evidence");
+run("update", "--task-id", "MULTI-AUTHOR", "--status", "REVIEWING", "--agent", "reviewer-c");
+run("quality-review", "--task-id", "MULTI-AUTHOR", "--reviewer", "reviewer-c",
+  "--result", "PASS", "--evidence", "Third agent independently reviewed the complete diff");
+assert(readJob("MULTI-AUTHOR").quality.code_review.source === "reviewer-c",
+  "Independent third reviewer was not recorded");
+assert(!readJob("MULTI-AUTHOR").implementation.authors.includes("reviewer-c"),
+  "Reviewer role was incorrectly recorded as an implementation contributor");
+
+// Older saved jobs have last_author but no authors array. A later fix must
+// migrate the original author rather than erasing their reviewer prohibition.
+run("start", "--task-id", "LEGACY-AUTHOR", "--classification", "SMALL");
+run("update", "--task-id", "LEGACY-AUTHOR", "--status", "IMPLEMENTING", "--agent", "original-author");
+const legacyFile = path.join(project, ".agent-core", "state", "jobs", "LEGACY-AUTHOR.json");
+const legacyJob = readJob("LEGACY-AUTHOR");
+delete legacyJob.implementation.authors;
+fs.writeFileSync(legacyFile, JSON.stringify(legacyJob, null, 2) + "\n");
+run("update", "--task-id", "LEGACY-AUTHOR", "--status", "FIXING", "--agent", "later-fixer");
+assert(JSON.stringify(readJob("LEGACY-AUTHOR").implementation.authors) === JSON.stringify(["original-author", "later-fixer"]),
+  "Upgrading a legacy job lost the previous implementation author");
+fail("quality-review", "--task-id", "LEGACY-AUTHOR", "--reviewer", "original-author",
+  "--result", "PASS", "--evidence", "Legacy author must remain prohibited");
+
+// Implementation cycles also record the active author when implementation is
+// entered automatically, not just explicit IMPLEMENTING/FIXING updates.
+run("start", "--task-id", "CYCLE-AUTHOR", "--classification", "SMALL");
+run("update", "--task-id", "CYCLE-AUTHOR", "--status", "DISCOVERING", "--agent", "cycle-author");
+run("cycle", "--task-id", "CYCLE-AUTHOR", "--kind", "implementation", "--evidence", "Observed implementation work");
+assert(readJob("CYCLE-AUTHOR").implementation.authors.includes("cycle-author"),
+  "Automatic implementation cycle failed to retain its actor");
+run("update", "--task-id", "CYCLE-AUTHOR", "--status", "REVIEWING", "--agent", "reviewer-c");
+fail("quality-review", "--task-id", "CYCLE-AUTHOR", "--reviewer", "cycle-author",
+  "--result", "PASS", "--evidence", "Cycle author must not self-review");
+
 // An npm option-like script name must run the configured script, not npm's CLI option.
 run("start", "--task-id", "SCRIPT-OPTIONS", "--classification", "SMALL");
 const optionScript = run("check-run", "--task-id", "SCRIPT-OPTIONS", "--script", "--version");

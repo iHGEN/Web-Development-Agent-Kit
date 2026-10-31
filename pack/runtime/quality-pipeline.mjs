@@ -52,10 +52,12 @@ function requireEvidence(args) {
   }
   return evidence.slice(-20);
 }
-function requireRole(args, flag, job) {
+function requireRole(args, flag, job, implementationAuthor = null) {
   const source = String(arg(args, flag) || "").trim();
   if (!/^[a-zA-Z0-9._-]{2,100}$/.test(source)) throw new Error(flag + " requires a role identifier.");
-  if (source === job.current_agent) throw new Error("Independent reviewer cannot be the current author/implementer.");
+  if (source === (implementationAuthor || job.current_agent)) {
+    throw new Error("Independent reviewer cannot be the current author/implementer.");
+  }
   return source;
 }
 function assertMutable(job) {
@@ -209,11 +211,33 @@ function lastChecks(quality) {
   for (const record of quality.checks) map.set(record.script, record);
   return [...map.values()];
 }
+
+function scopeState(project, taskId, prBound = false) {
+  const manifest = path.join(project, ".agent-core", "state", "scope", taskId + ".json");
+  if (!prBound && !fs.existsSync(manifest)) return { status: "NOT_REQUIRED" };
+  if (!fs.existsSync(manifest)) return { status: "BLOCKED", reason: "PR-bound task has no pre-change scope snapshot." };
+  const guard = path.join(project, ".agent-core", "rules", "scope-guard.mjs");
+  if (!fs.existsSync(guard)) return { status: "BLOCKED", reason: "Scope guard is not installed." };
+  const child = spawnSync(process.execPath, [guard, "check", "--task-id", taskId, "--project", project], {
+    cwd: project, windowsHide: true, encoding: "utf8", timeout: 30000, maxBuffer: 2 * 1024 * 1024,
+  });
+  if (child.error) return { status: "BLOCKED", reason: child.error.message };
+  let result;
+  try { result = JSON.parse(child.status === 0 ? child.stdout : child.stdout || child.stderr); }
+  catch { return { status: "BLOCKED", reason: "Scope guard did not return a valid report." }; }
+  if (!["PASS", "FAIL", "BLOCKED"].includes(result.verdict) || (child.status === 0) !== (result.verdict === "PASS")) {
+    return { status: "BLOCKED", reason: "Inconsistent scope guard result." };
+  }
+  return { status: result.verdict, reason: result.errors?.join(" ") || result.error || null, change_digest: result.change_digest || null };
+}
+
 export function evaluateQuality(job, project) {
   const quality = ensureQuality(job);
   const acceptanceReasons = [];
   const formal = quality.required;
   const contract = quality.requirements.length > 0;
+  const prBound = job.pr_bound === true;
+  const scope = scopeState(project, job.task_id, prBound);
   if (formal && !specificationReady(job, project)) acceptanceReasons.push("Specification approval missing or stale.");
   if (formal && !contract) acceptanceReasons.push("No acceptance criteria registered.");
   for (const req of quality.requirements) {
@@ -221,13 +245,15 @@ export function evaluateQuality(job, project) {
       acceptanceReasons.push(req.id + " lacks passing verification evidence.");
     }
   }
-  if (!formal && !contract) return {
+  if (!formal && !contract && scope.status === "NOT_REQUIRED") return {
     ok: true, reasons: [], requirements_ok: null, requirements_reasons: [],
-    required: false, verified: 0, total: 0,
+    required: false, verified: 0, total: 0, scope_status: "NOT_REQUIRED", change_digest: null,
   };
   let digest;
-  try { digest = sourceDigest(project); }
-  catch (error) { acceptanceReasons.push("Unable to fingerprint current source: " + error.message); }
+  if (formal || contract || prBound) {
+    try { digest = sourceDigest(project); }
+    catch (error) { acceptanceReasons.push("Unable to fingerprint current source: " + error.message); }
+  }
   for (const req of quality.requirements) {
     if (req.verification?.status !== "PASS") continue;
     if (req.verification.source_digest !== digest) acceptanceReasons.push(req.id + " evidence is stale after source changes.");
@@ -240,8 +266,11 @@ export function evaluateQuality(job, project) {
   }
   // Requirements fidelity and the engineering quality gate must be independently observable.
   const reasons = [...acceptanceReasons];
+  if (scope.status !== "PASS" && scope.status !== "NOT_REQUIRED") {
+    reasons.push("Scope guard " + scope.status + ": " + (scope.reason || "inspect the current scoped diff."));
+  }
   const scripts = packageScripts(project);
-  if (formal) {
+  if (formal || prBound) {
     const relevant = Object.keys(scripts).filter((s) => /^(test([:_-].*)?|build|lint|typecheck|type-check)$/.test(s));
     const checks = lastChecks(quality);
     const requiredScripts = relevant.filter((s) => s === "test" || /^test[:_-]/.test(s));
@@ -253,9 +282,13 @@ export function evaluateQuality(job, project) {
     if (checks.some((c) => c.status !== "PASS" || c.source_digest !== digest)) {
       reasons.push("One or more recorded checks failed or became stale.");
     }
+  }
+  if (formal || prBound) {
     const review = quality.code_review;
     if (review.status !== "PASS" || !review.source || !review.evidence?.length || review.source_digest !== digest) {
       reasons.push("Independent code review must pass on current source.");
+    } else if (prBound && (scope.status !== "PASS" || !scope.change_digest || review.change_digest !== scope.change_digest)) {
+      reasons.push("Pre-PR review is missing or stale against the complete current Git diff.");
     }
   }
   return {
@@ -267,6 +300,8 @@ export function evaluateQuality(job, project) {
     verified: quality.requirements.filter((r) => r.verification?.status === "PASS" && r.verification?.source_digest === digest).length,
     total: quality.requirements.length,
     source_digest: digest || null,
+    scope_status: scope.status,
+    change_digest: scope.change_digest || null,
   };
 }
 export function assertQualityComplete(job, project) {
@@ -291,7 +326,9 @@ function report(job, project) {
   const checks = lastChecks(quality);
   const completion = job.status === "DONE" ? job.completion : null;
   const currentFreshness = completion?.source_digest && evaluation.source_digest
-    ? (completion.source_digest === evaluation.source_digest ? "CURRENT" : "STALE")
+    ? (completion.source_digest === evaluation.source_digest
+      && (!job.pr_bound || (completion.change_digest && completion.change_digest === evaluation.change_digest))
+      ? "CURRENT" : "STALE")
     : "UNKNOWN";
   const failureCount = Number(m.repeated_action_alerts || 0) + (job.anti_slop?.violation ? 1 : 0);
   const totalCycles = Number(m.ai_cycles || 0);
@@ -322,6 +359,11 @@ function report(job, project) {
       as_of_completion: completion || null,
       current_source_freshness: currentFreshness,
       current_source_findings: evaluation.reasons,
+      scope_guard: evaluation.scope_status,
+      pr_bound: Boolean(job.pr_bound),
+      reviewed_diff_current: job.pr_bound ? (quality.code_review.status === "PASS"
+        && Boolean(evaluation.change_digest)
+        && quality.code_review.change_digest === evaluation.change_digest) : null,
       executed_checks: checks.map((c) => ({ script: c.script, status: c.status, exit_code: c.exit_code, elapsed_ms: c.elapsed_ms, source_current: c.source_digest === evaluation.source_digest })),
       independent_review: quality.code_review.status,
     },
@@ -496,8 +538,19 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
   } else if (command === "quality-review") {
     const result = String(arg(args, "--result") || "").toUpperCase();
     if (!REVIEW_RESULTS.has(result)) throw new Error("--result must be PASS or FAIL.");
-    const reviewer = requireRole(args, "--reviewer", job);
-    quality.code_review = { status: result, source: reviewer, evidence: requireEvidence(args), source_digest: sourceDigest(project), at: now() };
+    const reviewer = requireRole(args, "--reviewer", job, job.implementation?.last_author);
+    const implementationAuthors = Array.isArray(job.implementation?.authors) ? job.implementation.authors : [];
+    if (implementationAuthors.includes(reviewer)) {
+      throw new Error("Independent Code Reviewer cannot be a previous implementation or fixing author.");
+    }
+    const scope = scopeState(project, job.task_id, job.pr_bound === true);
+    if (job.pr_bound && result === "PASS" && (scope.status !== "PASS" || !scope.change_digest)) {
+      throw new Error("Cannot approve PR-bound code without a passing current scope guard: " + (scope.reason || scope.status));
+    }
+    quality.code_review = {
+      status: result, source: reviewer, evidence: requireEvidence(args),
+      source_digest: sourceDigest(project), change_digest: scope.status === "PASS" ? scope.change_digest : null, at: now(),
+    };
   } else {
     throw new Error("Unknown quality command: " + command);
   }

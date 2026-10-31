@@ -7,6 +7,7 @@ Implementation-first / anti-slop policy: `.agent-core/rules/implementation-first
 Efficiency policy: `.agent-core/rules/efficiency-policy.md`  
 Context rollover: `.agent-core/rules/context-rollover.md`  
 Security review: `.agent-core/rules/security-review.md`
+Pre-PR review and scope fence: `.agent-core/rules/pre-pr-review.md`
 
 ## Core operating principle
 
@@ -31,16 +32,18 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 3. Classify `SMALL`, `MEDIUM`, or `LARGE`.
 4. Escalate governance to formal/high-risk when the change materially touches security/trust boundaries, public contracts, schema/migrations, destructive operations, major dependencies, or release/deployment architecture.
 5. For routine Git maintenance (rebase, cherry-pick, merge conflicts), use the focused Git operation mode in `efficiency-policy.md`; retain the same risk escalation rules and protect pre-existing user changes.
-6. Start evidence-based job tracking:
+6. Start evidence-based job tracking, using `--pr-bound` for code work intended to become a PR (the feature-branch default):
 
 ```bash
 node .agent-core/bin/work-progress.mjs start \
   --task-id <task-id> \
   --classification <SMALL|MEDIUM|LARGE> \
-  --title "<short task title>"
+  --title "<short task title>" --pr-bound
 ```
 
-Use `--high-risk` when formal governance is required regardless of size.
+Omit `--pr-bound` for explicitly local-only or review-only tasks; use `--high-risk` when formal governance is required regardless of size.
+
+7. Before the first **code write** on a Git feature branch, define exact permitted paths and explicit non-goals; capture existing dirty/untracked work using `scope-guard.mjs start` as specified in `pre-pr-review.md`. The scope fence is not a formal plan, including for SMALL tasks. A PR-bound job cannot reach `DONE` without this snapshot and a current independent review.
 
 Managed state:
 
@@ -152,10 +155,13 @@ Do not forward the full discovery transcript or every installed skill. Do not cr
 The worker:
 - makes the next evidence-supported repository change;
 - keeps changes within user scope and existing ownership boundaries;
+- edits only declared task paths, extends the fence with evidence **before** touching a necessary additional file, and never modifies pre-existing dirty work without direction;
 - prefers existing owners/framework capabilities over parallel abstractions;
 - runs relevant local checks/tests;
 - records actual changed files/symbols and validation evidence;
 - continues through a coherent implementation chunk instead of stopping after every tiny file-level action.
+
+After each coherent chunk, run `node .agent-core/rules/scope-guard.mjs check --task-id <task-id>` when a Git feature-branch scope is active. A failed or blocked result stops dependent work and publication; investigate exact hunks, protect user changes, and follow `pre-pr-review.md`. The same check must pass before a handoff, commit, push or PR creation. A file outside scope is not authorized just because the agent discovered it during implementation.
 
 When uncertain between another planning pass and a small reversible implementation plus a check, prefer the implementation plus check. Do not rerun unchanged commands, tests, or searches without a new reason.
 
@@ -267,6 +273,8 @@ Update test/build evidence with `work-progress.mjs update`.
 
 Only invoke specialist reviewers relevant to the changed surface. Code Simplifier, performance, accessibility, API-contract, DevSecOps, SRE, etc. are targeted capabilities, not mandatory universal stages. For formal tasks, execute declared npm checks when available, verify individual requirements, and record an independent quality-review with current source evidence.
 
+**For PR-bound work:** expand the **existing** independent Code Reviewer assessment to cover the complete eventual PR diff regardless of SMALL/MEDIUM/LARGE classification. Record the review using the existing `quality-review` command and reuse current evidence; do not run a duplicate final review just because a PR will be opened. Treat feature-branch code work as PR-bound by default unless explicitly local-only/review-only. A changed diff invalidates approval, requiring focused re-review of affected changes. See `pre-pr-review.md`.
+
 Validation should inspect the actual diff/results; it should not recreate the original task analysis. Start with affected checks and expand only for demonstrated dependency/risk or a required gate; never run the same failing test again unchanged.
 
 ## Phase 10 — Security Review
@@ -345,11 +353,20 @@ The explicit controller's one-unit boundary limits session batching; it does not
 
 ## Phase 13 — Final validation and completion
 
+For work intended to become a PR, **before** marking the task done/opening a PR:
+
+1. Review the full intended PR diff, including uncommitted and relevant untracked files, against the original request and allowed scope.
+2. Require a passing `scope-guard.mjs check` and **current evidence from the existing independent Code Reviewer**, covering security, architecture, correctness, testing, performance and maintainability. When previous quality-review evidence covers the same final diff and requirements, reuse it.
+3. Route verified findings to the implementation owner, fix/test, and re-review only changed and dependent areas. The `--pr-bound` job flag makes work-progress reject `DONE` if the snapshot, review or recorded diff fingerprint is missing/stale. Refuse PR publication on `NOT READY` or `VERIFICATION BLOCKED`.
+
+This applies to all PR-bound task sizes and does not authorize a PR, push, or merge by itself. Follow the project's CI/CD ownership policy; do not manually dispatch GitHub Actions merely because a local readiness gate exists.
+
 A job may be `DONE` only when:
 - requested behavior is implemented;
 - relevant tests/build/checks pass or limitations are explicitly accepted by the user;
 - required specialist/security reviews pass;
 - final integrated state satisfies the original request;
+- for PR-bound work, the pre-PR readiness gate is `READY TO OPEN PR` on current source, with no scope drift or unresolved blocking finding;
 - for new LARGE/high-risk jobs, the independent specification, acceptance checks, real executed checks where available, and independent code review remain current and pass;
 - final validation is recorded as `PASS`.
 

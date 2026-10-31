@@ -62,6 +62,13 @@ Adaptive execution, focused Git maintenance, no-progress recovery, proportional 
 .agent-core/rules/efficiency-policy.md
 ```
 
+Every code-changing Git feature branch must protect its intended change surface and pre-existing user edits. Start PR-bound jobs with `work-progress.mjs start ... --pr-bound`: the existing independent Code Review doubles as professional PR readiness evidence, and the runtime blocks `DONE` when the scope or full-diff review becomes stale. Do not add a duplicate Code Reviewer stage:
+
+```text
+.agent-core/rules/pre-pr-review.md
+.agent-core/rules/scope-guard.mjs
+```
+
 Machine-readable project metadata is:
 
 ```text
@@ -256,6 +263,8 @@ Minimum sufficient current repository evidence is authoritative for every path. 
 Transparent context rollover is an **outer provider-session overlay**, never a second workflow. It cannot reset approval state or skip validations required by the chosen classification and risk. No agent may self-approve a plan, implementation handoff, or final integration result when an independent validator is required.
 
 Material new evidence that invalidates an approved plan requires a Plan Delta and independent revalidation before affected work continues. Ordinary implementation discoveries do not restart planning.
+
+Before writing on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound work, the independent Code Reviewer must report `READY TO OPEN PR` on the current full diff after verified findings have been fixed and re-reviewed. Required specialist/security review and final integration validation remain intact.
 
 ## Efficiency and backwards compatibility
 

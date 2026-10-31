@@ -38,8 +38,11 @@ jobs:
           node --check scripts/ai-compat.mjs
           node --check pack/runtime/work-progress.mjs
           node --check pack/runtime/quality-pipeline.mjs
+          node --check pack/rules/scope-guard.mjs
           node --check tests/work-progress-smoke.mjs
           node --check tests/quality-pipeline-smoke.mjs
+          node --check tests/scope-guard-smoke.mjs
+          node --check tests/pre-pr-readiness-smoke.mjs
 
       - name: Run requirements and quality regressions
         shell: bash
@@ -47,6 +50,8 @@ jobs:
           set -euo pipefail
           node tests/work-progress-smoke.mjs
           node tests/quality-pipeline-smoke.mjs
+          node tests/scope-guard-smoke.mjs
+          node tests/pre-pr-readiness-smoke.mjs
 
       - name: Verify repository search
         shell: bash

@@ -97,15 +97,17 @@ Classification changes the workflow:
 
 ```text
 SMALL
-  targeted discovery -> implement -> local check -> review -> validate -> done
+  targeted discovery -> scoped implementation -> local check -> review -> validate -> done
 
 MEDIUM
-  targeted discovery -> 3-6 execution bullets -> implement -> test/review -> validate -> done
+  targeted discovery -> 3-6 execution bullets -> scoped implementation -> test/review -> validate -> done
 
 LARGE / HIGH-RISK
   discovery/design -> formal plan -> independent plan validation
   -> implementation -> specialist/final gates
 ```
+
+For any feature that will become a pull request, the **existing independent Code Review** must cover the complete final diff, requirements, affected integration points and test evidence. Fix verified findings and re-review affected changes before `READY TO OPEN PR`. An unchanged approved diff reuses the existing review; there is no extra duplicate review stage. This applies to SMALL, MEDIUM and LARGE tasks and remains separate from later external PR reviews or CI/CD.
 
 After initial discovery, two consecutive planning/routing/prose-only cycles without concrete implementation/verification evidence trigger the anti-slop guard. Plan-required work keeps its required approval gate; plan-free/approved work is pushed back to implementation.
 
@@ -117,6 +119,40 @@ planning + routing + summaries: 10-20%
 ```
 
 This is a diagnostic target; required safety work is never skipped just to improve the ratio.
+
+## Pre-PR professional review and unrelated-change protection
+
+At the beginning of PR-bound work, mark the existing job once so completion requires a current scope check and independently reviewed diff:
+
+```bash
+node .agent-core/bin/work-progress.mjs start \
+  --task-id TASK-042 --classification SMALL --title "Implement REQ-001" --pr-bound
+```
+
+Before editing on a Git feature branch, the Captain names the exact permitted files and captures existing user changes:
+
+```bash
+node .agent-core/rules/scope-guard.mjs start \
+  --task-id TASK-042 --base main --intent "Implement REQ-001" \
+  --allow src/feature.js --allow tests/feature.test.js
+```
+
+Use the actual target branch (`main` is only an example). The guard accepts exact paths, not broad globs; it does not stash, stage, reset, revert or modify code. If a real dependency requires another file, add it **before** editing and record evidence:
+
+```bash
+node .agent-core/rules/scope-guard.mjs extend \
+  --task-id TASK-042 --allow src/shared/contract.js \
+  --reason "Required by REQ-001" --evidence "Affected consumer and test"
+node .agent-core/rules/scope-guard.mjs check --task-id TASK-042
+```
+
+Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work. A scope snapshot additionally makes the existing `DONE` command fail on scope violations.
+
+PR-bound completion also requires a current executed npm test (or an available build/lint/typecheck when there is no test script). The reviewer documents verification of behavior not represented by npm scripts.
+
+The existing Code Reviewer audits the complete intended diff and affected dependencies, scores **Security 25%, Architecture 20%, Correctness 20%, Testing 15%, Performance 10%, Maintainability 10%**, records evidence-based P0–P3 findings, and returns `READY TO OPEN PR`, `NOT READY` or `VERIFICATION BLOCKED`. Record this same review using `work-progress.mjs quality-review`. For `--pr-bound` jobs the review is fingerprinted against the full Git diff; a later code, doc, staged or untracked change invalidates approval until focused re-review. A score cannot override an unresolved blocker.
+
+See `.agent-core/rules/pre-pr-review.md` and `.agent-core/agents/code-reviewer.md`. The review is not a claim that later reviewers will find no issues. CI/CD remains with the project's authorized owner; this feature does not dispatch GitHub Actions.
 
 ## Requirements, engineering quality and efficiency reports
 

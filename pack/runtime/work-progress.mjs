@@ -349,6 +349,7 @@ function writeJob(project, job) {
         const snapshot = {
           completed_at: nowIso(),
           source_digest: verdict.source_digest,
+          change_digest: verdict.change_digest || null,
           gate: "PASS",
           acceptance_verified: verdict.total > 0 && verdict.total === verdict.verified,
           requirements_verified: verdict.verified,
@@ -398,6 +399,7 @@ function start(project, args) {
     title: getArg(args, "--title") || taskId,
     classification,
     high_risk: highRisk,
+    pr_bound: hasArg(args, "--pr-bound"),
     status: "QUEUED",
     progress: 0,
     current_agent: null,
@@ -409,7 +411,7 @@ function start(project, args) {
       version: 0,
       validator: defaultValidator(governance),
     },
-    implementation: { total: 0, completed: 0, active: null },
+    implementation: { total: 0, completed: 0, active: null, authors: [] },
     evidence: { files_changed: 0, tests_added: 0, tests_total: 0, tests_passing: 0, build: "UNKNOWN", items: [] },
     review: { status: "PENDING" },
     final_validation: { status: "PENDING" },
@@ -427,6 +429,14 @@ function start(project, args) {
   writeJob(project, job);
   return job;
 }
+function recordImplementationAuthor(job, agent) {
+  if (!agent) return;
+  // A later fix must not erase earlier implementers, including legacy jobs
+  // that predate the authors array.
+  const authors = Array.isArray(job.implementation.authors) ? job.implementation.authors : [];
+  job.implementation.authors = [...new Set([...authors, job.implementation.last_author, agent].filter(Boolean))];
+  job.implementation.last_author = agent;
+}
 function update(project, args) {
   const taskId = safeTaskId(getArg(args, "--task-id"));
   const { job } = loadJob(project, taskId);
@@ -436,6 +446,9 @@ function update(project, args) {
   }
 
   const requestedStatus = getArg(args, "--status");
+  // A local task can become PR-bound later, but cannot downgrade a PR-bound
+  // task to bypass its scope/review completion gate.
+  if (hasArg(args, "--pr-bound")) job.pr_bound = true;
   if (reopening) {
     if (!requestedStatus) throw new Error("--reopen requires an explicit non-DONE --status.");
     const reopenStatus = String(requestedStatus).toUpperCase();
@@ -491,7 +504,12 @@ function update(project, args) {
   }
 
   const agent = getArg(args, "--agent");
-  if (agent) job.current_agent = agent;
+  if (agent) {
+    job.current_agent = agent;
+    if (["IMPLEMENTING", "FIXING"].includes(job.status)) {
+      recordImplementationAuthor(job, agent);
+    }
+  }
   const next = getArg(args, "--next");
   if (next) job.next_action = next;
 
@@ -587,6 +605,7 @@ function cycle(project, args) {
     job.status = "IMPLEMENTING";
     job.current_phase = "IMPLEMENTING";
   }
+  if (kind === "implementation") recordImplementationAuthor(job, job.current_agent);
 
   const m = job.metrics;
   for (const [field, value] of Object.entries(reported)) m[field] += value;
@@ -677,7 +696,7 @@ function show(project, args) {
   };
 }
 function printHelp() {
-  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
+  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk] [--pr-bound]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen] [--pr-bound]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
         [--action-key <operation-id> --outcome progress|no-progress] [--tool-calls N] [--elapsed-ms N]
         [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]
   spec-set --task-id <id> --file <project-relative-spec.md>

@@ -20,10 +20,11 @@ The next dependent step must not begin until this gate returns `PASS`.
 2. Inspect the actual diff first.
 3. Inspect changed symbols/config sections.
 4. Compare actual files changed with expected/approved scope.
-5. Verify claimed behavior in the implementation.
-6. Verify relevant build/lint/static-analysis/test results that can reasonably run.
-7. Verify downstream API/data/event/component/deployment contract.
-8. Expand to unchanged surrounding code only when the diff exposes a dependency that must be checked.
+5. For Git feature-branch changes, require the current `scope-guard.mjs check` result and inspect unexpected paths, extensions and pre-existing user changes. A passing path-level guard never excuses unrelated hunks inside an allowed file.
+6. Verify claimed behavior in the implementation.
+7. Verify relevant build/lint/static-analysis/test results that can reasonably run.
+8. Verify downstream API/data/event/component/deployment contract.
+9. Expand to unchanged surrounding code only when the diff exposes a dependency that must be checked.
 
 ## PASS criteria
 
@@ -31,6 +32,7 @@ Return `PASS` only when:
 - approved behavior is actually present;
 - work is complete enough for the downstream dependency;
 - actual changes remain inside approved scope or have an approved Plan Delta;
+- current feature-branch scope check is `PASS` where applicable, with no hidden unrelated hunks;
 - required checks/tests are successful or any unavailable check is explicitly justified;
 - downstream contract is concrete and matches the implementation;
 - known failures are not hidden.
@@ -40,6 +42,7 @@ Return `PASS` only when:
 Return `FAIL` for:
 - partial or missing claimed functionality;
 - unexpected/unapproved scope;
+- failed, missing or stale required scope-check evidence, or altered pre-existing user work;
 - hidden or unexplained failures;
 - tests/checks that should run but did not;
 - ambiguous or incorrect downstream contracts;

@@ -5,6 +5,7 @@
 Own the user request end-to-end, route the smallest useful agent team, keep progress evidence-based, and make implementation start as soon as the next safe repository change is known.
 
 The canonical workflow is `.agent-core/rules/workflow.md`. The implementation-first policy is `.agent-core/rules/implementation-first.md`. Apply the supporting `.agent-core/rules/efficiency-policy.md` to all task types.
+Use `.agent-core/rules/pre-pr-review.md` for the task's narrow scope fence and pre-PR readiness gate.
 
 ## Modification authority
 
@@ -14,7 +15,9 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 Read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
-Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`.
+Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review.
+
+For code changes on a Git feature branch, capture the current dirty/untracked baseline and declare exact permitted files before implementation using `scope-guard.mjs start`. Do not quietly adopt or alter existing user changes. The short scope note is not a formal plan.
 
 ## Classification drives the lifecycle
 
@@ -48,6 +51,8 @@ High-risk includes material changes to trust/security boundaries, public contrac
 ## Routing rules
 
 - Route by required expertise, not ceremony.
+- Give each implementer an explicit file/symbol scope and non-goals. Inspecting a dependency does not authorize editing it. Require a justified `scope-guard.mjs extend` before an additional necessary file is changed; material changes still require a validated Plan Delta.
+- After each coherent change/fix chunk, ensure `scope-guard.mjs check` passes before handoff/commit/push. On drift, stop and return exact paths/hunks to the owner; never silently reset user work or broaden scope to hide it.
 - Installed agents are available capabilities, not mandatory lifecycle stops.
 - Prefer one capable implementer for a coherent change over multiple agents repeating the same discovery.
 - Detect Git maintenance tasks and route focused status/conflict-resolution/continue/verify actions instead of the full feature-planning path; retain risk gates and prohibit destructive history edits without approval.
@@ -96,13 +101,17 @@ A fresh context verifies current repository state and continues the recorded nex
 
 `run security-review` remains independent and read-only. Run it on implemented code when the changed attack surface is security-sensitive and as a mandatory full release gate. Route findings to the responsible developer; the Security Reviewer never fixes its own findings.
 
+## Pre-PR readiness
+
+For **every feature intended for a PR**, regardless of size, use the **existing independent Code Reviewer** to inspect the complete eventual diff, passing scope guard, requirements, test evidence and six applicable quality categories. Record that one review through `work-progress.mjs quality-review`; for formal tasks it also satisfies the existing formal quality gate. Do **not** add another full review when evidence already covers the unchanged final diff. Route verified P0/P1/material P2 issues to the worker; re-test and independently re-review changed/dependent areas, then update the same review record. `--pr-bound` makes completion fail if scope or diff-bound review is absent/stale. Do not open or mark a PR ready unless the verdict is `READY TO OPEN PR` and publication is authorized. A high numerical score never excuses a blocker. Respect the project's configured CI/CD owner and never manually dispatch GitHub Actions to satisfy this review.
+
 ## Adaptive execution and verification
 
 Avoid duplicate tool calls, duplicated context reads, and unnecessary Graphify refreshes. Start with targeted checks, escalate only when required by risk or evidence, and never bypass independent approvals. Report token/tool/time metrics only when measured by the provider/runtime.
 
 ## Completion
 
-Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
+Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires a current `READY TO OPEN PR` verdict supported by the existing Code Review record and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
 
 ## Captain handoff
 
