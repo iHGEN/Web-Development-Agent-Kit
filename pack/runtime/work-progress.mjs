@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { createQuality, ensureQuality, assertSpecificationReady, evaluateQuality, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
 
 const CLASSIFICATIONS = new Set(["SMALL", "MEDIUM", "LARGE"]);
@@ -385,13 +386,35 @@ function writeEfficiency(project) {
   totals.useful_work_ratio = totals.ai_cycles ? Math.round((useful / totals.ai_cycles) * 100) : 0;
   atomicWriteJson(paths.efficiency, { schema_version: 1, jobs: jobs.length, totals, updated_at: nowIso() });
 }
+function prIntent(project, args) {
+  const local = hasArg(args, "--local-only") || hasArg(args, "--review-only");
+  if (local && hasArg(args, "--pr-bound")) throw new Error("Choose PR-bound work or an explicit local/review-only task.");
+  if (local) return false;
+  if (hasArg(args, "--pr-bound")) return true;
+  let dir = path.resolve(project);
+  while (!fs.existsSync(path.join(dir, ".git"))) {
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  const git = values => spawnSync("git", values, { cwd: project, encoding: "utf8", windowsHide: true, timeout: 5000 });
+  const current = git(["branch", "--show-current"]);
+  if (current.error || current.status !== 0) throw new Error("Cannot determine PR intent from Git; use --pr-bound or an explicit --local-only/--review-only task.");
+  const branch = current.stdout.trim();
+  if (!branch) throw new Error("Detached HEAD needs explicit --pr-bound or --local-only/--review-only task intent.");
+  const remote = git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const defaultBranch = remote.status === 0 ? remote.stdout.trim().replace(/^origin\//, "") : null;
+  return defaultBranch ? branch !== defaultBranch : !["main", "master", "trunk", "develop"].includes(branch);
+}
 function start(project, args) {
   const taskId = safeTaskId(getArg(args, "--task-id"));
   const classification = String(getArg(args, "--classification") || "MEDIUM").toUpperCase();
   if (!CLASSIFICATIONS.has(classification)) throw new Error("--classification must be SMALL, MEDIUM, or LARGE");
   const highRisk = hasArg(args, "--high-risk") || String(getArg(args, "--risk") || "").toLowerCase() === "high";
   const paths = statePaths(project, taskId);
+  const prBound = prIntent(project, args);
   if (fs.existsSync(paths.job) && !hasArg(args, "--force")) throw new Error(`Job ${taskId} already exists; use --force to replace it.`);
+  if (fs.existsSync(paths.job) && JSON.parse(fs.readFileSync(paths.job, "utf8")).pr_bound && !prBound) throw new Error("A PR-bound job cannot be downgraded by recreating it.");
   const governance = governanceFor(classification, highRisk);
   const job = {
     schema_version: 3,
@@ -399,7 +422,7 @@ function start(project, args) {
     title: getArg(args, "--title") || taskId,
     classification,
     high_risk: highRisk,
-    pr_bound: hasArg(args, "--pr-bound"),
+    pr_bound: prBound,
     status: "QUEUED",
     progress: 0,
     current_agent: null,
@@ -696,20 +719,31 @@ function show(project, args) {
   };
 }
 function printHelp() {
-  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk] [--pr-bound]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen] [--pr-bound]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
+  console.log(`Web Kit Work Progress\n\nCommands:\n  start --task-id <id> --classification SMALL|MEDIUM|LARGE [--title <text>] [--high-risk] [--pr-bound|--local-only|--review-only]\n  update --task-id <id> [--status IMPLEMENTING] [--agent <role>] [--implementation-total N] [--implementation-completed N]\n         [--files-changed N] [--tests-added N] [--tests-total N] [--tests-passing N] [--build PASS|FAIL]\n         [--plan-status APPROVED] [--plan-bullets N] [--plan-version N] [--review PASS|FAIL] [--final-validation PASS|FAIL]\n         [--evidence <text>]... [--next <text>] [--replan] [--handoff] [--reopen] [--pr-bound]\n  plan-validate --task-id <id> --result APPROVED|REVISE|REJECTED --validator <independent-role> --evidence <text>...\n  cycle --task-id <id> --kind discovery|planning|routing|implementation|testing|review|validation|prose [--evidence <text>]...
         [--action-key <operation-id> --outcome progress|no-progress] [--tool-calls N] [--elapsed-ms N]
         [--input-tokens N] [--output-tokens N]\n  project-update --area <name> --progress <0..100> --evidence <text> [--status <status>] [--weight N]\n  show [--task-id <id>]
   spec-set --task-id <id> --file <project-relative-spec.md>
   requirement-add --task-id <id> --id REQ-001 --description <text> --acceptance <testable-criteria>
   spec-validate --task-id <id> --validator <independent-role> --result APPROVED|REVISE|REJECTED --evidence <text>
-  check-run --task-id <id> --script <npm-script-name>
+  check-require --task-id <id> --script <npm-script-name>
+  check-require --task-id <id> --id <check-id> --command <executable> [--arg <argument>]...
+  check-run --task-id <id> --script <npm-script-name>|--check <check-id>
   requirement-verify --task-id <id> --id REQ-001 --result PASS|FAIL --check-script <script>|--manual --evidence <text>
-  quality-review --task-id <id> --reviewer <independent-role> --result PASS|FAIL --evidence <text>
-  report|audit --task-id <id>; benchmark --task-id <id> --against <other-id>\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nProgress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
+  quality-review --task-id <id> --report <code-review-run-artifact>
+  quality-review --task-id <id> --reviewer <role> --result PASS|FAIL|BLOCKED --evidence <text> (non-PR attestation only)
+  report|audit --task-id <id>; benchmark --task-id <id> --against <other-id>\n\nOptions:\n  --project <path>   Project root, default current directory.\n\nFeature branches default to PR-bound work; use explicit --local-only/--review-only for those tasks. Detached HEAD needs explicit intent. Run code-review.mjs to produce the structured review artifact. Progress is evidence-weighted. SMALL skips formal planning, MEDIUM requires 3-6 approved bullets, LARGE/high-risk requires independent validator provenance for the current plan version, DONE is immutable unless explicitly reopened, two consecutive post-discovery meta-only cycles trigger the anti-slop guard, and two consecutive tagged attempts of the same no-progress action trigger a repeated-action alert. Telemetry fields are optional and must not be invented.`);
 }
 
 const args = process.argv.slice(2);
 const command = args[0];
+if (command === "check-require") {
+  // Child arguments are opaque, even when named --project, --help or --script.
+  // Normalize before any outer option lookup so their meaning stays with the
+  // registered command. Keep a trailing --arg for its missing-value error.
+  for (let i = 1; i < args.length - 1; i++) {
+    if (args[i] === "--arg") args.splice(i, 2, "--arg=" + args[i + 1]);
+  }
+}
 const project = path.resolve(getArg(args, "--project") || ".");
 try {
   if (!command || command === "help" || hasArg(args, "--help") || hasArg(args, "-h")) { printHelp(); process.exitCode = 0; }

@@ -8,7 +8,7 @@ Follow .agent-core/rules/workflow.md and .agent-core/rules/efficiency-policy.md 
 3. **Execution efficiency** — observed tool/token/time metrics and task-local no-progress signals, never an excuse to skip quality gates.
 
 ## Planning depth
-- SMALL low risk: no formal spec or independent plan validation. Direct implementation and focused verification; optional lightweight requirement tracking.
+- SMALL low risk: no formal spec or independent plan validation. PR-bound tasks require a short registered acceptance checklist and declared checks; local-only work can use optional lightweight tracking.
 - MEDIUM: brief plan only (3–6 bullets), unless material risk demands more.
 - LARGE/high risk: Spec Writer -> independent Spec Validator -> Architect / Plan Validator -> locked/approved plan -> implementation.
 
@@ -23,11 +23,14 @@ Follow .agent-core/rules/workflow.md and .agent-core/rules/efficiency-policy.md 
 - Freshness checks include Git-tracked and non-ignored untracked application/config inputs (MDX, GraphQL, proto, SVG and Dockerfile) with bounded standalone-directory fallback.
 
 ## Engineering quality
-- Implement and run relevant project checks through check-run --script <actual-npm-script> where scripts exist.
-- This helper executes an existing package.json script using npm; it records observed exit code, duration, and current-source fingerprint. It is not a replacement for full E2E/manual testing.
+- Declare relevant required checks with `check-require --script <actual-npm-script>`, then execute them through `check-run --script <name>`. Every declared check must pass for PR readiness; a different passing script cannot substitute for one that did not run.
+- For non-npm checks, use `check-require --id regression --command node --arg tests/regression.mjs`, then `check-run --check regression`. Executables and arguments are recorded separately; do not use a shell command string.
+- The runner records actual exit status, duration and source evidence. PR-bound evidence also covers the complete Git change set. Check results still need review for relevance and useful assertions; executing a script does not establish behavioral coverage by itself.
 - Use requirement-verify --result PASS --check-script test --evidence ... to attach executable verification or --manual with concrete evidence for non-automatable acceptance.
-- Formal work requires a separate quality-review --reviewer code-reviewer --result PASS --evidence ....
-- Failed or stale checks, unverified acceptance criteria, stale independent review, and material spec drift block formal DONE. Never mark a skipped test PASS.
+- `--check-script` also accepts a registered external check ID, such as `regression`. Manual acceptance evidence never substitutes for an unexecuted required check.
+- PR-bound work uses `code-review.mjs --task-id <id>` for the existing independent review. It launches a fresh read-only provider process and imports the returned report through `quality-review --report <generated-path>`. A caller-supplied reviewer name and PASS statement do not grant PR readiness.
+- Formal non-PR jobs retain the existing explicit review-attestation path. Such an attestation is not represented as a newly executed provider review.
+- Failed or stale checks, unverified acceptance criteria, stale/incomplete review evidence and material spec drift block required completion. Missing essential evidence is `VERIFICATION BLOCKED`; never mark a skipped test PASS.
 - Existing update --review PASS, --build PASS and summary test counters do not substitute for executed formal-quality evidence.
 
 ## Reports
@@ -40,4 +43,4 @@ Meta-work is counted once per planning, routing or prose cycle. Historical jobs 
 A percentage is a policy indicator, not a claim that implementation correctness can be reduced to one number. Comparisons are observational and meaningful only for comparable workloads. Completed jobs retain their verification verdict and source digest as of completion; later code changes appear as separate current-source freshness warnings without rewriting historical benchmark eligibility.
 
 ## Limits
-The quality guard fingerprints bounded source files. If it cannot verify current source, fail closed rather than approving stale evidence. Runtime reviewer identity is recorded provenance, not cryptographic proof of independent human review; CI/branch protection can enforce stronger external review gates. Do not force telemetry collection from providers that do not expose it.
+The quality guard fingerprints bounded source files and PR-bound Git changes. If it cannot verify the snapshot, fail closed. A recorded fresh provider invocation establishes how the review was executed; report validation checks structure, coverage and freshness, not the truth of every model conclusion. Local evidence files are not a tamper-proof security boundary. Keep human review and the configured CI/CD owner; do not force telemetry collection that providers do not expose.

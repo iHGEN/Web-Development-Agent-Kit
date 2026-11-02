@@ -15,7 +15,9 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 Read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
-Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review.
+Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review. Before implementation, register a short testable requirements checklist and the relevant required checks for every PR-bound task, including SMALL. This does not add a formal plan to SMALL work.
+
+Detected feature branches default new jobs to PR-bound. Use `--local-only` or `--review-only` only when the user's task has that explicit scope. Do not silently opt a feature out to avoid missing evidence.
 
 For code changes on a Git feature branch, capture the current dirty/untracked baseline and declare exact permitted files before implementation using `scope-guard.mjs start`. Do not quietly adopt or alter existing user changes. The short scope note is not a formal plan.
 
@@ -103,7 +105,17 @@ A fresh context verifies current repository state and continues the recorded nex
 
 ## Pre-PR readiness
 
-For **every feature intended for a PR**, regardless of size, use the **existing independent Code Reviewer** to inspect the complete eventual diff, passing scope guard, requirements, test evidence and six applicable quality categories. Record that one review through `work-progress.mjs quality-review`; for formal tasks it also satisfies the existing formal quality gate. Do **not** add another full review when evidence already covers the unchanged final diff. Route verified P0/P1/material P2 issues to the worker; re-test and independently re-review changed/dependent areas, then update the same review record. `--pr-bound` makes completion fail if scope or diff-bound review is absent/stale. Do not open or mark a PR ready unless the verdict is `READY TO OPEN PR` and publication is authorized. A high numerical score never excuses a blocker. Respect the project's configured CI/CD owner and never manually dispatch GitHub Actions to satisfy this review.
+For **every feature intended for a PR**, regardless of size, use the **existing independent Code Reviewer** after the relevant checks:
+
+```bash
+node .agent-core/bin/code-review.mjs --task-id TASK-042
+```
+
+The runner starts a fresh read-only provider process, without resuming the implementation session. Give it the original intent, registered requirements, complete eventual diff, scope result and real check evidence. Do not substitute the builder's conclusion or a different role name for an actual reviewer invocation. The reviewer actively seeks counterexamples and must substantiate findings; it has no required finding count.
+
+The runner imports the returned structured report through the existing `quality-review --report` path. Reuse that review when its diff, requirements and evidence remain current. Route verified blockers to the owning worker, rerun affected checks and re-review changed/dependent behavior. Ensure prior findings receive explicit disposition. Never claim a live review ran when the provider is unavailable or only a fixture was used.
+
+Completion requires the registered acceptance criteria, all declared checks, scope and current review evidence to pass. Missing essential evidence is `VERIFICATION BLOCKED`; known defects are `NOT READY`. Only `READY TO OPEN PR` plus publication authorization permits opening or marking a PR ready. A score never excuses a blocker. Respect the configured CI/CD owner; Dot remains the CI/CD executor and no GitHub Actions dispatch is part of this review.
 
 ## Adaptive execution and verification
 

@@ -11,8 +11,10 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-pre-pr-"));
 const progress = path.join(repo, "pack/runtime/work-progress.mjs");
 const guard = path.join(repo, "pack/rules/scope-guard.mjs");
+const runner = path.join(repo, "pack/runtime/code-review.mjs");
+const fixture = path.join(repo, "tests/fixtures/mock-code-review-provider.mjs");
 function invoke(bin, args, expected = 0) {
-  const run = spawnSync(bin, args, { cwd: project, encoding: "utf8" });
+  const run = spawnSync(bin, args, { cwd: project, encoding: "utf8", env: { ...process.env, WEB_KIT_CODE_REVIEW_CODEX_BIN: fixture } });
   assert.equal(run.status, expected, `${bin} ${args.join(" ")}\n${run.stdout}\n${run.stderr}`);
   if (expected !== 0) return run;
   return JSON.parse(run.stdout);
@@ -25,6 +27,14 @@ const git = (...args) => {
 const work = (...args) => invoke(process.execPath, [progress, ...args, "--project", project]);
 const workFails = (...args) => invoke(process.execPath, [progress, ...args, "--project", project], 1);
 const scope = (...args) => invoke(process.execPath, [guard, ...args, "--project", project]);
+function review(taskId, expected = 0) {
+  const result = invoke(process.execPath, [runner, "--project", project, "--task-id", taskId, "--provider", "codex", "--json"], expected);
+  return expected === 0 ? result : JSON.parse(result.stdout);
+}
+function verify(taskId) {
+  assert.equal(work("check-run", "--task-id", taskId, "--script", "test").status, "PASS");
+  work("requirement-verify", "--task-id", taskId, "--id", "REQ-001", "--result", "PASS", "--check-script", "test", "--evidence", "Actual unit test imported enabled and asserted that it is true.");
+}
 function write(rel, content) {
   const full = path.join(project, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -39,11 +49,12 @@ try {
   fs.copyFileSync(guard, path.join(project, ".agent-core/rules/scope-guard.mjs"));
   write("src/feature.js", "export const enabled = false;\n");
   write("docs/feature.md", "# Original behavior\n");
-  write("package.json", JSON.stringify({ name: "pre-pr-smoke", private: true, type: "module", scripts: { test: "node --check src/feature.js" } }) + "\n");
+  write("tests/feature.test.mjs", 'import assert from "node:assert/strict"; import { enabled } from "../src/feature.js"; assert.equal(enabled, true);\n');
+  write("package.json", JSON.stringify({ name: "pre-pr-smoke", private: true, type: "module", scripts: { test: "node tests/feature.test.mjs" } }) + "\n");
   git("init", "-b", "main");
   git("config", "user.name", "Web Kit Smoke");
   git("config", "user.email", "smoke@example.invalid");
-  git("add", "src", "docs", "package.json");
+  git("add", "src", "docs", "tests", "package.json");
   git("commit", "-m", "baseline");
   git("switch", "-c", "feat/pre-pr");
 
@@ -52,10 +63,11 @@ try {
   work("update", "--task-id", "NO-SCOPE", "--status", "IMPLEMENTING", "--agent", "implementer");
   workFails("quality-review", "--task-id", "NO-SCOPE", "--reviewer", "code-reviewer",
     "--result", "PASS", "--evidence", "Cannot review missing scope");
+  assert.equal(review("NO-SCOPE", 4).verdict, "VERIFICATION BLOCKED");
   workFails("update", "--task-id", "NO-SCOPE", "--status", "DONE", "--final-validation", "PASS");
 
   // Existing jobs can opt into PR readiness later; they cannot bypass the new gate.
-  work("start", "--task-id", "LATE-PR", "--classification", "SMALL");
+  work("start", "--task-id", "LATE-PR", "--classification", "SMALL", "--local-only");
   work("update", "--task-id", "LATE-PR", "--pr-bound");
   assert.equal(job("LATE-PR").pr_bound, true);
   workFails("update", "--task-id", "LATE-PR", "--status", "DONE", "--final-validation", "PASS");
@@ -64,6 +76,8 @@ try {
   work("start", "--task-id", task, "--classification", "SMALL", "--pr-bound");
   scope("start", "--task-id", task, "--base", "main", "--intent", "Enable feature",
     "--allow", "src/feature.js", "--allow", "docs/feature.md");
+  work("requirement-add", "--task-id", task, "--id", "REQ-001", "--description", "Enable the feature", "--acceptance", "The feature module exports enabled=true to its existing consumer.");
+  work("check-require", "--task-id", task, "--script", "test");
   write("src/feature.js", "export const enabled = true;\n");
   work("update", "--task-id", task, "--status", "IMPLEMENTING", "--agent", "implementer");
   assert.equal(scope("check", "--task-id", task).verdict, "PASS");
@@ -71,16 +85,18 @@ try {
   workFails("quality-review", "--task-id", task, "--reviewer", "implementer",
     "--result", "PASS", "--evidence", "Self approval must fail");
 
-  // One independent review is enough; it also serves as the existing quality-review record.
-  // The current agent may be the reviewer; independence is checked against the implementer.
+  // A role name and a free-text PASS are insufficient, even with a different role.
   work("update", "--task-id", task, "--status", "REVIEWING", "--agent", "code-reviewer");
-  work("quality-review", "--task-id", task, "--reviewer", "code-reviewer",
+  workFails("quality-review", "--task-id", task, "--reviewer", "code-reviewer",
     "--result", "PASS", "--evidence", "Full diff and requirements checked");
+  // The provider can inspect the code, but cannot grant overall readiness when
+  // the actual required check and requirement verification are still missing.
+  assert.equal(review(task, 4).verdict, "VERIFICATION BLOCKED");
+  workFails("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
+  verify(task);
+  assert.equal(review(task).verdict, "READY TO OPEN PR");
   const reviewed = job(task).quality.code_review.change_digest;
   assert.match(reviewed, /^[a-f0-9]{64}$/);
-  workFails("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
-  assert.equal(work("check-run", "--task-id", task, "--script", "test").status, "PASS",
-    "An actual current npm test run is required for PR readiness");
 
   // Docs are deliberately excluded from the old source digest. The new Git diff
   // binding must still invalidate review if an allowed .md file changes afterward.
@@ -93,10 +109,11 @@ try {
   assert.equal(invoke(process.execPath, [guard, "check", "--task-id", task, "--project", project], 1).status, 1);
   workFails("quality-review", "--task-id", task, "--reviewer", "code-reviewer",
     "--result", "PASS", "--evidence", "Unrelated change should block approval");
+  assert.equal(review(task, 4).verdict, "VERIFICATION BLOCKED");
   fs.unlinkSync(path.join(project, "src/unrelated.js")); // Only the disposable test fixture.
 
-  work("quality-review", "--task-id", task, "--reviewer", "code-reviewer",
-    "--result", "PASS", "--evidence", "Final current PR diff checked");
+  verify(task);
+  assert.equal(review(task).verdict, "READY TO OPEN PR");
   assert.notEqual(job(task).quality.code_review.change_digest, reviewed);
   const finalReviewDigest = job(task).quality.code_review.change_digest;
   git("add", "src/feature.js", "docs/feature.md");

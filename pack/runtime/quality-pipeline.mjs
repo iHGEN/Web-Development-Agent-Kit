@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { captureReviewSnapshot, reviewContextDigest, validateReviewArtifact } from "./review-contract.mjs";
 
 // Runtime and deployment inputs, not just conventional JS/TS suffixes.
 const SOURCE_EXTENSIONS = new Set([
@@ -43,6 +44,17 @@ function allArgs(args, name) {
     else if (args[i].startsWith(name + "=")) values.push(args[i].slice(name.length + 1));
   }
   return values.filter((value) => String(value).trim());
+}
+function commandArgs(args) {
+  // Empty and whitespace arguments are real test inputs, not absent evidence.
+  const values = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--arg") {
+      if (i + 1 >= args.length) throw new Error("--arg requires a value; use --arg= for an empty argument.");
+      values.push(args[++i]);
+    } else if (args[i].startsWith("--arg=")) values.push(args[i].slice(6));
+  }
+  return values;
 }
 function has(args, name) { return args.includes(name); }
 function requireEvidence(args) {
@@ -101,6 +113,8 @@ export function createQuality(governance) {
     required,
     spec: { file: null, validator: { status: required ? "PENDING" : "NOT_REQUIRED", source: null, digest: null, evidence: [] } },
     requirements: [],
+    required_checks: [],
+    known_findings: [],
     checks: [],
     code_review: { status: "PENDING", source: null, evidence: [], source_digest: null },
   };
@@ -111,6 +125,7 @@ export function ensureQuality(job) {
     job.quality = createQuality({ plan_validator_required: false });
     job.quality.legacy = true;
   }
+  job.quality.required_checks ??= [];
   return job.quality;
 }
 export function specificationReady(job, project) {
@@ -231,6 +246,12 @@ function scopeState(project, taskId, prBound = false) {
   return { status: result.verdict, reason: result.errors?.join(" ") || result.error || null, change_digest: result.change_digest || null };
 }
 
+function checkDefinitionDigest(definition) { return hash(JSON.stringify(definition)); }
+function executedCheckCurrent(check, digest, scope, prBound) {
+  return check?.status === "PASS" && check.source_digest === digest
+    && (!prBound || (scope.status === "PASS" && check.change_digest === scope.change_digest));
+}
+
 export function evaluateQuality(job, project) {
   const quality = ensureQuality(job);
   const acceptanceReasons = [];
@@ -239,7 +260,7 @@ export function evaluateQuality(job, project) {
   const prBound = job.pr_bound === true;
   const scope = scopeState(project, job.task_id, prBound);
   if (formal && !specificationReady(job, project)) acceptanceReasons.push("Specification approval missing or stale.");
-  if (formal && !contract) acceptanceReasons.push("No acceptance criteria registered.");
+  if ((formal || prBound) && !contract) acceptanceReasons.push("No acceptance criteria registered.");
   for (const req of quality.requirements) {
     if (req.verification?.status !== "PASS" || !req.verification.evidence?.length) {
       acceptanceReasons.push(req.id + " lacks passing verification evidence.");
@@ -256,10 +277,10 @@ export function evaluateQuality(job, project) {
   }
   for (const req of quality.requirements) {
     if (req.verification?.status !== "PASS") continue;
-    if (req.verification.source_digest !== digest) acceptanceReasons.push(req.id + " evidence is stale after source changes.");
+    if (req.verification.source_digest !== digest || (prBound && req.verification.change_digest !== scope.change_digest)) acceptanceReasons.push(req.id + " evidence is stale after source or diff changes.");
     if (req.verification.method === "check") {
       const check = lastChecks(quality).find((c) => c.script === req.verification.check_script);
-      if (!check || check.status !== "PASS" || check.source_digest !== digest) acceptanceReasons.push(req.id + " lacks a fresh passing executed check.");
+      if (!executedCheckCurrent(check, digest, scope, prBound)) acceptanceReasons.push(req.id + " lacks a fresh passing executed check.");
     } else if (req.verification.method !== "manual") {
       acceptanceReasons.push(req.id + " has no documented verification method.");
     }
@@ -270,16 +291,23 @@ export function evaluateQuality(job, project) {
     reasons.push("Scope guard " + scope.status + ": " + (scope.reason || "inspect the current scoped diff."));
   }
   const scripts = packageScripts(project);
+  if (prBound && !quality.required_checks.length) reasons.push("Declare the checks required for this PR with check-require.");
+  for (const required of quality.required_checks) {
+    const check = lastChecks(quality).find(c => c.script === required.id);
+    if (!executedCheckCurrent(check, digest, scope, prBound) || check.definition_digest !== checkDefinitionDigest(required)) {
+      reasons.push("Required check has no current successful execution: " + required.id);
+    }
+  }
   if (formal || prBound) {
     const relevant = Object.keys(scripts).filter((s) => /^(test([:_-].*)?|build|lint|typecheck|type-check)$/.test(s));
     const checks = lastChecks(quality);
     const requiredScripts = relevant.filter((s) => s === "test" || /^test[:_-]/.test(s));
-    if (requiredScripts.length && !requiredScripts.some((s) => checks.some((c) => c.script === s && c.status === "PASS" && c.source_digest === digest))) {
+    if (!quality.required_checks.length && requiredScripts.length && !requiredScripts.some((s) => checks.some((c) => c.script === s && c.status === "PASS" && c.source_digest === digest))) {
       reasons.push("An available npm test script must be executed successfully on current source.");
-    } else if (!requiredScripts.length && relevant.length && !relevant.some((s) => checks.some((c) => c.script === s && c.status === "PASS" && c.source_digest === digest))) {
+    } else if (!quality.required_checks.length && !requiredScripts.length && relevant.length && !relevant.some((s) => checks.some((c) => c.script === s && c.status === "PASS" && c.source_digest === digest))) {
       reasons.push("At least one available npm build/lint/typecheck check must pass on current source.");
     }
-    if (checks.some((c) => c.status !== "PASS" || c.source_digest !== digest)) {
+    if (checks.some((c) => !executedCheckCurrent(c, digest, scope, prBound))) {
       reasons.push("One or more recorded checks failed or became stale.");
     }
   }
@@ -290,13 +318,26 @@ export function evaluateQuality(job, project) {
     } else if (prBound && (scope.status !== "PASS" || !scope.change_digest || review.change_digest !== scope.change_digest)) {
       reasons.push("Pre-PR review is missing or stale against the complete current Git diff.");
     }
+    if (prBound) {
+      if (quality.review_attempt?.status === "RUNNING") reasons.push("An independent review is still running.");
+      if (!review.report_path || !review.artifact_digest || review.provenance?.kind !== "provider-process") {
+        reasons.push("PR readiness requires the actual fresh reviewer report; a role name or claimed PASS is insufficient.");
+      } else {
+        try {
+          const snapshot = captureReviewSnapshot(project, job, sourceDigest);
+          const result = validateReviewArtifact(project, review.report_path, job, snapshot, review.artifact_digest);
+          if (result.verdict !== "READY TO OPEN PR") reasons.push(...result.reasons);
+          if (quality.review_attempt?.run_id !== result.envelope.run_id || quality.review_attempt.status !== "COMPLETE") reasons.push("Review attempt is incomplete or superseded.");
+        } catch (error) { reasons.push(error.message); }
+      }
+    }
   }
   return {
     ok: reasons.length === 0,
     reasons,
     requirements_ok: acceptanceReasons.length === 0,
     requirements_reasons: acceptanceReasons,
-    required: formal || contract,
+    required: formal || contract || prBound,
     verified: quality.requirements.filter((r) => r.verification?.status === "PASS" && r.verification?.source_digest === digest).length,
     total: quality.requirements.length,
     source_digest: digest || null,
@@ -366,6 +407,11 @@ function report(job, project) {
         && quality.code_review.change_digest === evaluation.change_digest) : null,
       executed_checks: checks.map((c) => ({ script: c.script, status: c.status, exit_code: c.exit_code, elapsed_ms: c.elapsed_ms, source_current: c.source_digest === evaluation.source_digest })),
       independent_review: quality.code_review.status,
+      review_run: quality.review_attempt || null,
+      review_report: quality.code_review.report_path || null,
+      review_provenance: quality.code_review.provenance || null,
+      unresolved_findings: quality.known_findings || [],
+      required_checks: quality.required_checks.map(c => c.id),
     },
     execution_efficiency: {
       policy_checks: observations,
@@ -386,10 +432,10 @@ function report(job, project) {
     },
   };
 }
-function formalOrRequirements(job) { return Boolean(job.quality.required || job.quality.requirements.length); }
+function formalOrRequirements(job) { return Boolean(job.pr_bound || job.quality.required || job.quality.requirements.length); }
 export const QUALITY_COMMANDS = new Set([
   "spec-set", "requirement-add", "spec-validate", "requirement-verify",
-  "check-run", "quality-review", "report", "audit", "benchmark",
+  "check-require", "check-run", "quality-review", "report", "audit", "benchmark",
 ]);
 export function runQualityCommand(project, command, args, loadJob, writeJob) {
   if (command === "benchmark") {
@@ -468,29 +514,64 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     quality.spec.validator = {
       status: result, source: validator, evidence, digest: approvedDigest, validated_at: now(),
     };
+  } else if (command === "check-require") {
+    assertPlanning(job);
+    const script = arg(args, "--script");
+    const executable = arg(args, "--command");
+    const id = String(arg(args, "--id") || script || "");
+    if (!/^[a-zA-Z0-9_][a-zA-Z0-9_:-]{0,79}$/.test(id) || Boolean(script) === Boolean(executable)) {
+      throw new Error("check-require needs --script <npm-script> or --id <name> --command <executable> [--arg <value>].");
+    }
+    let definition;
+    if (script) {
+      if (!/^[a-zA-Z0-9_][a-zA-Z0-9_:-]{0,79}$/.test(script) || !Object.hasOwn(packageScripts(project), script)) throw new Error("Required npm script does not exist.");
+      if (commandArgs(args).length) throw new Error("Use package.json for npm script arguments.");
+      definition = { id, script };
+    } else {
+      const argv = commandArgs(args);
+      if (!executable || executable.startsWith("-") || /[\0\r\n]/.test(executable) || executable.length > 4096
+        || argv.length > 100 || argv.some(v => v.includes("\0") || v.length > 16000)) throw new Error("Invalid required command or arguments.");
+      definition = { id, command: executable, args: argv };
+    }
+    const index = quality.required_checks.findIndex(c => c.id === id);
+    if (index >= 0) quality.required_checks[index] = definition;
+    else quality.required_checks.push(definition);
+    quality.code_review = { ...quality.code_review, status: "PENDING" };
   } else if (command === "check-run") {
     const executableStatuses = ["IMPLEMENTING", "TESTING", "REVIEWING", "FIXING", "VALIDATING"];
     if (quality.required && !executableStatuses.includes(job.status)) {
       throw new Error("Approve the formal specification and plan before executing checks.");
     }
-    const script = String(arg(args, "--script") || "");
-    if (!/^[a-zA-Z0-9_:-]{1,80}$/.test(script) || !Object.hasOwn(packageScripts(project), script)) {
-      throw new Error("--script must name an existing npm package.json script.");
-    }
+    const checkId = arg(args, "--check");
+    const requestedScript = arg(args, "--script");
+    if (Boolean(checkId) === Boolean(requestedScript)) throw new Error("Choose --script <npm-script> or --check <registered-check-id>.");
+    const definition = checkId ? quality.required_checks.find(c => c.id === checkId)
+      : quality.required_checks.find(c => c.id === requestedScript && c.script === requestedScript);
+    if (checkId && !definition) throw new Error("Unknown required check: " + checkId);
+    const npmScript = definition?.script || (checkId ? null : requestedScript);
+    if (npmScript && (!/^[a-zA-Z0-9_:-]{1,80}$/.test(npmScript) || !Object.hasOwn(packageScripts(project), npmScript))) throw new Error("--script must name an existing npm package.json script.");
+    const script = definition?.id || npmScript;
+    const definitionDigest = definition ? checkDefinitionDigest(definition) : null;
     // Capture source both before and after the script: a passing exit against moving code is not fresh evidence.
     const fingerprintBefore = sourceDigest(project);
+    const scopeBefore = job.pr_bound ? scopeState(project, job.task_id, true) : null;
+    if (job.pr_bound && scopeBefore.status !== "PASS") throw new Error("Run the scope guard successfully before recording PR check evidence.");
     const started = Date.now();
-    const commandName = process.platform === "win32" ? "npm.cmd" : "npm";
-    const child = spawnSync(commandName, ["run", "--", script], {
-      cwd: project, windowsHide: true, shell: process.platform === "win32",
+    const commandName = npmScript ? (process.platform === "win32" ? "npm.cmd" : "npm") : definition.command;
+    const commandArgs = npmScript ? ["run", "--", npmScript] : definition.args;
+    const child = spawnSync(commandName, commandArgs, {
+      cwd: project, windowsHide: true, shell: Boolean(npmScript) && process.platform === "win32",
       encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024,
     });
     const fingerprint = sourceDigest(project);
-    const status = fingerprintBefore !== fingerprint ? "STALE"
+    const scopeAfter = job.pr_bound ? scopeState(project, job.task_id, true) : null;
+    const status = fingerprintBefore !== fingerprint || (job.pr_bound && (scopeAfter.status !== "PASS" || scopeAfter.change_digest !== scopeBefore.change_digest)) ? "STALE"
       : !child.error && child.status === 0 ? "PASS" : "FAIL";
     const record = {
       script, status, exit_code: child.status ?? null,
       elapsed_ms: Date.now() - started, source_digest: fingerprint, at: now(),
+      change_digest: scopeAfter?.change_digest || null, definition_digest: definitionDigest,
+      command: commandName, args: commandArgs,
       error: child.error?.message || null,
     };
     // Do not write the job object loaded before running a potentially long subprocess.
@@ -504,9 +585,11 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
         throw new Error("Task changed phase while npm ran; refusing to attach a stale check.");
       }
       const latestQuality = ensureQuality(latest);
+      const currentDefinition = latestQuality.required_checks.find(c => c.id === script);
+      if ((currentDefinition ? checkDefinitionDigest(currentDefinition) : null) !== definitionDigest) throw new Error("Required check definition changed during execution; rerun the current check.");
       latestQuality.checks.push(record);
       latestQuality.checks = latestQuality.checks.slice(-50);
-      latest.evidence.items.push({ kind: "executed-check", value: "npm run " + script + ": " + status, at: now() });
+      latest.evidence.items.push({ kind: "executed-check", value: script + ": " + status, at: now() });
       latest.evidence.items = latest.evidence.items.slice(-200);
       try {
         writeJob(project, latest);
@@ -531,26 +614,72 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
       throw new Error("PASS needs --check-script <executed npm script> or --manual and evidence.");
     }
     const fingerprint = sourceDigest(project);
-    if (result === "PASS" && checkScript && !lastChecks(quality).some((c) => c.script === checkScript && c.status === "PASS" && c.source_digest === fingerprint)) {
+    const scope = job.pr_bound ? scopeState(project, job.task_id, true) : { status: "NOT_REQUIRED" };
+    if (result === "PASS" && job.pr_bound && scope.status !== "PASS") throw new Error("Requirement evidence needs a passing scope check.");
+    if (result === "PASS" && checkScript && !lastChecks(quality).some((c) => c.script === checkScript && executedCheckCurrent(c, fingerprint, scope, job.pr_bound))) {
       throw new Error("Requirement verification must reference a fresh successful executed check.");
     }
-    req.verification = { status: result, method: checkScript ? "check" : "manual", check_script: checkScript || null, evidence, source_digest: fingerprint, at: now() };
+    req.verification = { status: result, method: checkScript ? "check" : "manual", check_script: checkScript || null, evidence, source_digest: fingerprint, change_digest: scope.change_digest || null, at: now() };
   } else if (command === "quality-review") {
-    const result = String(arg(args, "--result") || "").toUpperCase();
-    if (!REVIEW_RESULTS.has(result)) throw new Error("--result must be PASS or FAIL.");
-    const reviewer = requireRole(args, "--reviewer", job, job.implementation?.last_author);
-    const implementationAuthors = Array.isArray(job.implementation?.authors) ? job.implementation.authors : [];
-    if (implementationAuthors.includes(reviewer)) {
-      throw new Error("Independent Code Reviewer cannot be a previous implementation or fixing author.");
+    const runId = arg(args, "--run-id");
+    const reportPath = arg(args, "--report");
+    if (has(args, "--begin")) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,119}$/.test(runId || "") || reportPath || arg(args, "--result")) throw new Error("Review begin requires only a new --run-id.");
+      if (quality.review_attempt?.run_id === runId) throw new Error("Review run IDs cannot be reused.");
+      quality.review_attempt = { run_id: runId, status: "RUNNING", started_at: now(), context_digest: reviewContextDigest(job) };
+      quality.code_review = { ...quality.code_review, status: "PENDING" };
+    } else if (reportPath) {
+      if (arg(args, "--result") || arg(args, "--reviewer")) throw new Error("The actual reviewer artifact determines its verdict and provenance.");
+      const snapshot = captureReviewSnapshot(project, job, sourceDigest);
+      const result = validateReviewArtifact(project, reportPath, job, snapshot);
+      const attempt = quality.review_attempt;
+      if (attempt?.status !== "RUNNING" || attempt.run_id !== result.envelope.run_id
+        || attempt.context_digest !== reviewContextDigest(job)
+        || Date.parse(result.envelope.provenance.started_at) < Date.parse(attempt.started_at)) throw new Error("Review attempt is stale, superseded, or was not started by the review runner.");
+      const known = new Map((snapshot.prior_findings || []).map(f => [f.id, f]));
+      if (result.verdict !== "VERIFICATION BLOCKED") {
+        for (const disposition of result.envelope.report.prior_findings) if (disposition.status === "RESOLVED") known.delete(disposition.id);
+      }
+      for (const finding of result.envelope.report.findings) known.set(finding.id, finding);
+      quality.known_findings = [...known.values()];
+      quality.code_review = {
+        status: result.verdict === "READY TO OPEN PR" ? "PASS" : result.verdict === "NOT READY" ? "FAIL" : "BLOCKED",
+        source: result.envelope.provenance.provider + "-" + result.envelope.run_id,
+        evidence: [result.envelope.report.summary, ...result.reasons],
+        source_digest: snapshot.source_digest, change_digest: snapshot.change_digest,
+        report_path: reportPath, artifact_digest: result.digest, provenance: result.envelope.provenance,
+        at: now(),
+      };
+      quality.review_attempt = { ...attempt, status: "COMPLETE", completed_at: now() };
+    } else {
+      const result = String(arg(args, "--result") || "").toUpperCase();
+      if (!["PASS", "FAIL", "BLOCKED"].includes(result)) throw new Error("--result must be PASS, FAIL, or BLOCKED.");
+      if (runId) {
+        if (result !== "BLOCKED" || quality.review_attempt?.run_id !== runId || quality.review_attempt?.status !== "RUNNING") throw new Error("Only the active review attempt can record its operational failure.");
+        quality.code_review = { ...quality.code_review, status: "BLOCKED", evidence: requireEvidence(args), at: now() };
+        quality.review_attempt = { ...quality.review_attempt, status: "BLOCKED", completed_at: now() };
+      } else {
+        if (job.pr_bound && result === "PASS") throw new Error("Run code-review; PR readiness cannot use a claimed PASS or a different reviewer name.");
+        const reviewer = requireRole(args, "--reviewer", job, job.implementation?.last_author);
+        const implementationAuthors = Array.isArray(job.implementation?.authors) ? job.implementation.authors : [];
+        if (implementationAuthors.includes(reviewer)) throw new Error("Independent Code Reviewer cannot be a previous implementation or fixing author.");
+        const evidence = requireEvidence(args);
+        const scope = scopeState(project, job.task_id, job.pr_bound === true);
+        if (job.pr_bound) {
+          // A newer external objection supersedes an in-flight provider, too.
+          // Keep it as an observation to investigate; do not invent a source
+          // location or severity as if a structured defect had been confirmed.
+          quality.known_findings ??= [];
+          quality.known_findings.push({ id: "MANUAL-" + crypto.randomUUID(), kind: "external-observation",
+            reported_status: result, source: reviewer, evidence: evidence.join("\n"), at: now() });
+          if (quality.review_attempt) quality.review_attempt = { ...quality.review_attempt, status: "SUPERSEDED", completed_at: now() };
+        }
+        quality.code_review = {
+          ...quality.code_review, status: result, source: reviewer, evidence,
+          source_digest: sourceDigest(project), change_digest: scope.status === "PASS" ? scope.change_digest : null, at: now(),
+        };
+      }
     }
-    const scope = scopeState(project, job.task_id, job.pr_bound === true);
-    if (job.pr_bound && result === "PASS" && (scope.status !== "PASS" || !scope.change_digest)) {
-      throw new Error("Cannot approve PR-bound code without a passing current scope guard: " + (scope.reason || scope.status));
-    }
-    quality.code_review = {
-      status: result, source: reviewer, evidence: requireEvidence(args),
-      source_digest: sourceDigest(project), change_digest: scope.status === "PASS" ? scope.change_digest : null, at: now(),
-    };
   } else {
     throw new Error("Unknown quality command: " + command);
   }

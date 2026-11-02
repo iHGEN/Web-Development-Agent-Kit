@@ -11,6 +11,8 @@ const SETUP_VALUE_OPTIONS = new Set(["--project", "--ref", "--repo", "--source",
 const SETUP_FLAGS = new Set(["--allow-downgrade", "--install-graphify"]);
 const REVIEW_VALUE_OPTIONS = new Set(["--base", "--provider", "--timeout"]);
 const REVIEW_FLAGS = new Set(["--deep", "--scan-only", "--no-scanners", "--json", "--fail-on-blocking"]);
+const CODE_REVIEW_VALUE_OPTIONS = new Set(["--project", "--task-id", "--provider", "--timeout"]);
+const CODE_REVIEW_FLAGS = new Set(["--json", "--help", "-h"]);
 
 function runNode(file, args, options = {}) {
   const result = spawnSync(process.execPath, [file, ...args], { stdio: "inherit", windowsHide: true, ...options });
@@ -29,11 +31,17 @@ function getOption(args, name) {
   return null;
 }
 
-function splitSetupArgs(args) {
+function splitSetupArgs(args, { protectCheckArgs = false } = {}) {
   const setup = [];
   const rest = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    // Required checks own the token after --arg, even when it looks like a kit option.
+    if (protectCheckArgs && rest[0] === "check-require" && arg === "--arg") {
+      if (i + 1 >= args.length) throw new Error("--arg requires a value.");
+      rest.push(`--arg=${args[++i]}`);
+      continue;
+    }
     const setupValue = [...SETUP_VALUE_OPTIONS].find((name) => arg === name || arg.startsWith(`${name}=`));
     if (setupValue) {
       setup.push(arg);
@@ -98,7 +106,7 @@ function runSecurityReview(rawArgs) {
 }
 
 function runWorkProgress(rawArgs, alias = "progress") {
-  const { setup, rest } = splitSetupArgs(rawArgs);
+  const { setup, rest } = splitSetupArgs(rawArgs, { protectCheckArgs: alias === "progress" });
   const project = resolve(getOption(setup, "--project") || process.cwd());
   const commandArgs = alias === "status" ? ["show", ...rest] : rest.length ? rest : ["show"];
 
@@ -115,7 +123,57 @@ function runWorkProgress(rawArgs, alias = "progress") {
   return runNode(engine, [...commandArgs, "--project", project], { cwd: project });
 }
 
+function runCodeReview(rawArgs) {
+  const values = new Map();
+  const flags = new Set();
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const option = rawArgs[i];
+    const separator = option.indexOf("=");
+    const name = separator === -1 ? option : option.slice(0, separator);
+    if (CODE_REVIEW_VALUE_OPTIONS.has(name)) {
+      const value = separator === -1 ? rawArgs[++i] : option.slice(separator + 1);
+      if (!value || value.startsWith("--")) throw new Error(`${name} requires a value.`);
+      if (values.has(name)) throw new Error(`${name} may only be supplied once.`);
+      values.set(name, value);
+    } else if (CODE_REVIEW_FLAGS.has(option)) {
+      flags.add(option);
+    } else {
+      throw new Error(`Unknown code-review option: ${option}`);
+    }
+  }
+
+  if (flags.has("--help") || flags.has("-h")) {
+    console.log(`iHGEN Web Kit Independent Code Reviewer\n\nUsage:\n  npx @ihgen/web-kit code-review --task-id <id> [options]\n\nOptions:\n  --project <path>          Installed project. Default: current directory.\n  --task-id <id>            Existing PR-bound task with a scope snapshot.\n  --provider <name>         auto | codex | claude. Default: auto.\n  --timeout <seconds>       Reviewer process timeout.\n  --json                    Print the review result as JSON.\n\nRuns the existing Code Review in a fresh, read-only provider process and records its report.\nActive adapters: Codex and Claude; auto selects from those two providers.\n--provider gemini is recognized but returns VERIFICATION BLOCKED without launching Gemini\nuntil a safe read-only integration is available.\nThe command uses the installed runtime; run Web Kit update separately before starting work.\nNo provider session is resumed, and no model or reasoning setting is overridden.\n`);
+    return 0;
+  }
+
+  if (!values.has("--task-id")) throw new Error("code-review requires --task-id <id>.");
+  const project = resolve(values.get("--project") || process.cwd());
+  const engine = join(project, ".agent-core", "bin", "code-review.mjs");
+  if (!existsSync(engine)) {
+    console.error(`Code Review Engine is missing: ${engine}`);
+    console.error("Run Web Kit update separately, then retry code-review. This command does not install or update the project.");
+    return 1;
+  }
+
+  const review = ["--project", project];
+  for (const [name, value] of values) {
+    if (name !== "--project") review.push(name, value);
+  }
+  if (flags.has("--json")) review.push("--json");
+  return runNode(engine, review, { cwd: project });
+}
+
 const args = process.argv.slice(2);
+if (args[0] === "code-review") {
+  try {
+    process.exit(runCodeReview(args.slice(1)));
+  } catch (error) {
+    console.error(`[Web Kit] ${error.message}`);
+    process.exit(2);
+  }
+}
+
 if (args[0] === "security-review") {
   try {
     process.exit(runSecurityReview(args.slice(1)));
@@ -136,6 +194,7 @@ if (args[0] === "progress" || args[0] === "status") {
 
 const status = runNode(legacyCli, args);
 if ((args.includes("--help") || args.includes("-h") || args[0] === "help") && status === 0) {
+  console.log("Code review:\n  npx @ihgen/web-kit code-review --task-id <id>\n  Runs the installed reviewer without installing/updating the project.\n");
   console.log("Security review:\n  npx @ihgen/web-kit security-review\n  Inside AI providers: run security-review\n");
   console.log("Work progress:\n  npx @ihgen/web-kit status\n  npx @ihgen/web-kit status --task-id <id>\n  npx @ihgen/web-kit progress show --task-id <id>\n  npx @ihgen/web-kit progress help\n");
 }

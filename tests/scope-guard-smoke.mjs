@@ -170,6 +170,31 @@ try {
   fs.writeFileSync(path.join(scopeDir, `${legacyId}.json`), `${JSON.stringify(legacyManifest)}\n`);
   const legacyResult = run("node", [script, "check", "--task-id", legacyId, "--project", project], 2);
   assert.match(legacyResult.error, /lacks the staged baseline/);
+
+  // A tracked bookkeeping file remains PR content after its deletion is committed.
+  // HEAD/index alone cannot decide whether a state path is generated.
+  const deletedProject = path.join(project, "committed-state-deletion");
+  fs.mkdirSync(deletedProject);
+  const deletedGit = (...values) => {
+    const result = spawnSync("git", values, { cwd: deletedProject, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  deletedGit("init", "-b", "main");
+  deletedGit("config", "user.name", "State deletion regression");
+  deletedGit("config", "user.email", "state-delete@example.invalid");
+  fs.mkdirSync(path.join(deletedProject, ".agent-core/state"), { recursive: true });
+  fs.writeFileSync(path.join(deletedProject, ".agent-core/state/history.md"), "Tracked baseline history\n");
+  fs.writeFileSync(path.join(deletedProject, "feature.mjs"), "export const enabled = false;\n");
+  deletedGit("add", "."); deletedGit("commit", "-m", "baseline"); deletedGit("switch", "-c", "feat/delete-state");
+  const deletionArgs = ["--task-id", "STATE-DELETE", "--project", deletedProject];
+  const locked = spawnSync(process.execPath, [script, "start", ...deletionArgs, "--base", "main", "--intent", "Enable feature only", "--allow", "feature.mjs"], { encoding: "utf8" });
+  assert.equal(locked.status, 0, locked.stdout + locked.stderr);
+  fs.unlinkSync(path.join(deletedProject, ".agent-core/state/history.md"));
+  fs.writeFileSync(path.join(deletedProject, "feature.mjs"), "export const enabled = true;\n");
+  deletedGit("add", "feature.mjs", ".agent-core/state/history.md"); deletedGit("commit", "-m", "feature with accidental deletion");
+  const deleted = spawnSync(process.execPath, [script, "check", ...deletionArgs], { encoding: "utf8" });
+  assert.equal(deleted.status, 1, deleted.stdout + deleted.stderr);
+  assert.deepEqual(JSON.parse(deleted.stdout).unexpected_paths, [".agent-core/state/history.md"]);
   console.log("Scope guard smoke: PASS");
 } finally {
   // The fixture is entirely created by this test and contains no user files.

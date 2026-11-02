@@ -47,11 +47,12 @@ function fileDigest(file) {
   } finally { fs.closeSync(fd); }
   return hash.digest("hex");
 }
-function trackedStateFiles(project) {
+function trackedStateFiles(project, comparisonBase = null) {
   // Generated state is exempt only while untracked. A tracked state file is real
   // repository content and must not be hidden from the scope fence.
   return new Set([
     ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ".agent-core/state"]),
+    ...(comparisonBase ? gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", comparisonBase, "--", ".agent-core/state"]) : []),
     ...gitPaths(project, ["ls-files", "--cached", "-z", "--", ".agent-core/state"]),
   ]);
 }
@@ -154,7 +155,9 @@ function changePaths(project, base) {
   const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, "HEAD"]);
   const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]);
   const unstaged = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]);
-  const tracked = trackedStateFiles(project);
+  // A committed deletion is still a real PR change even after the path vanished
+  // from HEAD and the index. Preserve paths tracked at the comparison baseline.
+  const tracked = trackedStateFiles(project, mergeBase);
   const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
     .filter(file => !isGeneratedState(file, tracked));
   return [...new Set([...committed, ...staged, ...unstaged, ...untracked])]
