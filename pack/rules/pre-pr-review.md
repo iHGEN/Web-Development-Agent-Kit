@@ -46,6 +46,8 @@ node .agent-core/rules/scope-guard.mjs start \
 
 The guard captures pre-existing staged, unstaged and untracked changes without modifying them. Exact file paths are required: no blanket `src/**`, whole-repository patterns or broad directory exemptions. Generated untracked state lives in `.agent-core/state/scope/` and is not a deliverable; staged or committed changes to state files are not silently exempt.
 
+For a kit installed in a nested application, keep `--project` consistent across task, scope and review commands. All allowed/source paths are relative to the Git repository root, such as `apps/web/src/feature.js` and `packages/shared/contract.js`. Task state and check execution stay in the selected application; the scope fence and review diff span the entire repository. Canonical directory resolution handles filesystem aliases without requiring the user to move task state to the Git root.
+
 - Never amend, stage, discard or overwrite pre-existing user changes merely to finish a task. If work overlaps an already-dirty file, stop and request direction.
 - Do not edit unrelated files for aesthetic cleanup, naming consistency, warnings discovered elsewhere, dependency upgrades, broad formatting, or opportunistic refactors.
 - An unchanged file may be read to understand a real dependency. Reading it does not authorize changing it.
@@ -106,6 +108,8 @@ node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --check regr
 
 Use `--check-script regression` to link an acceptance criterion to that named external check. Manual acceptance evidence must state what was observed and where the evidence can be inspected; it does not replace an unexecuted required check. Dot remains responsible for CI/CD; these commands provide local verification records and do not dispatch GitHub Actions.
 
+On Windows, external checks resolve recognized standard npm Node `.cmd` shims to their actual Node entry point and preserve literal arguments without shell interpolation. Unsupported/custom `.cmd` or `.bat` scripts require an explicitly registered interpreter or entry point and block before execution with setup instructions. npm package-script checks retain their existing execution route.
+
 For each actionable finding, report `P0` critical / `P1` high / `P2` medium / `P3` low, exact path and line/symbol, triggering conditions, impact, evidence/reproduction, and smallest safe fix. Investigate suspected issues before reporting them as confirmed. Record verification honestly and distinguish source reasoning from executed checks. Never fabricate a pass or weaken/delete checks to obtain approval.
 
 Run **this same review**, for all PR-bound sizes:
@@ -116,9 +120,11 @@ node .agent-core/bin/code-review.mjs --task-id TASK-042 --provider codex
 npx @ihgen/web-kit code-review --task-id TASK-042 --provider codex
 ```
 
-`--provider auto` is the default and selects from the active Codex and Claude adapters. `--provider gemini` is recognized but returns `VERIFICATION BLOCKED` before launching a provider until a safe read-only Gemini integration is available. Missing providers, timeouts, malformed reports, incomplete essential coverage or changed source during review block verification. The runner records the actual invocation and returned report, then imports it through `work-progress.mjs quality-review --report <generated-path>`. A free-text `--reviewer code-reviewer --result PASS` cannot approve PR-bound work.
+`--provider auto` is the default and selects Codex. Per-run restrictions disable automatic approvals, lifecycle hooks, legacy notifications, apps, plugins and configured MCP tools. Before inference, preflights must verify effective configuration and managed requirements. Configured `.rules` files, remote execution environments and unsupported managed permission-profile modes block the review; the runner does not remove or replace those policies. Windows additionally requires explicit existing `CODEX_HOME` and a verified supported sandbox. Configuration inspection starts no model session, though provider-owned state/cache may be maintained. `--provider claude` is blocked because managed lifecycle hooks cannot be disabled or inspected safely before inference. `--provider gemini` remains blocked because its read-only headless mode cannot preserve configured user policies. Neither blocked provider is launched. Missing providers, timeouts, malformed reports, incomplete essential coverage or changed source during review block verification. The runner records the actual invocation and returned report, then imports it through `work-progress.mjs quality-review --report <generated-path>`. A free-text `--reviewer code-reviewer --result PASS` cannot approve PR-bound work.
 
 The report records examined files, requirement cases, affected boundaries, supported findings and verification gaps. The completion gate checks structural completeness, recorded execution, required check results and snapshot freshness. These checks make the evidence inspectable; they do not prove the model's conclusions correct or make local records tamper-proof. The full Git fingerprint still protects docs and staged content as well as source files.
+
+The review also binds the registered spec's path, current contents and approval digest, plus material plan state. Read the complete specification even when it is ignored by Git or absent from the diff, and include its repository-relative path in `files_reviewed`. A changed/revoked spec or plan approval supersedes the current review attempt while preserving prior findings. After reapproval, start a fresh review; an old report cannot finish the new task state.
 
 ## 3. Fix, re-test, re-review
 

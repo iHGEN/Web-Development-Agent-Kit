@@ -24,14 +24,14 @@ function run(bin, args, expected = 0) {
 const git = (...args) => run("git", args);
 const work = (...args) => JSON.parse(run(process.execPath, [workFile, ...args, "--project", project]).stdout);
 const fail = (...args) => run(process.execPath, [workFile, ...args, "--project", project], 1);
-const job = () => JSON.parse(fs.readFileSync(path.join(project, `.agent-core/state/jobs/${task}.json`), "utf8"));
+const job = (taskId = task) => JSON.parse(fs.readFileSync(path.join(project, `.agent-core/state/jobs/${taskId}.json`), "utf8"));
 const write = (file, data) => { fs.mkdirSync(path.dirname(path.join(project, file)), { recursive: true }); fs.writeFileSync(path.join(project, file), data); };
-const snapshot = () => captureReviewSnapshot(project, job(), sourceDigest);
+const snapshot = (taskId = task) => captureReviewSnapshot(project, job(taskId), sourceDigest);
 
 function report(snap) {
   return {
     schema_version: 1, summary: "Validated the enabled flag and inspected its sole consumer.",
-    files_reviewed: [...snap.files],
+    files_reviewed: [...new Set([...snap.files, snap.specification?.file].filter(Boolean))],
     requirements: [{ id: "REQ-001", status: "PASS", evidence: "The executed regression asserts enabled is true." }],
     scenarios: [
       { requirement_id: "REQ-001", kind: "normal", status: "PASS", scenario: "Read enabled flag.", expected: "true", observed: "true", evidence: "Node assert in the required regression command." },
@@ -42,28 +42,138 @@ function report(snap) {
     findings: [], prior_findings: [], verification_gaps: [],
   };
 }
-function begin() {
+function begin(taskId = task) {
   const id = randomUUID();
-  work("quality-review", "--task-id", task, "--begin", "--run-id", id);
-  return { id, snap: snapshot() };
+  work("quality-review", "--task-id", taskId, "--begin", "--run-id", id);
+  return { id, snap: snapshot(taskId) };
 }
 function artifact(attempt, body = report(attempt.snap)) {
-  const result = validateReviewReport(body, attempt.snap, job());
-  return storeReviewArtifact(project, job(), {
-    schema_version: 1, task_id: task, run_id: attempt.id, snapshot: attempt.snap,
+  const current = job(attempt.snap.task_id);
+  const result = validateReviewReport(body, attempt.snap, current);
+  return storeReviewArtifact(project, current, {
+    schema_version: 1, task_id: current.task_id, run_id: attempt.id, snapshot: attempt.snap,
     provenance: { kind: "provider-process", provider: "codex", pid: process.pid, fresh_session: true, read_only: true,
       started_at: new Date().toISOString(), completed_at: new Date().toISOString(), exit_code: 0 },
     report: body, verdict: result.verdict,
   });
 }
-const importReport = relative => work("quality-review", "--task-id", task, "--report", relative);
+const importReport = (relative, taskId = task) => work("quality-review", "--task-id", taskId, "--report", relative);
+
+function resolvedReport(attempt) {
+  return { ...report(attempt.snap), prior_findings: attempt.snap.prior_findings.map(f => ({
+    id: f.id, status: "RESOLVED", evidence: "Rechecked the reported fixture scenario against the current approved specification.",
+  })) };
+}
+
+function formalSpecificationRegression() {
+  const formal = "FORMAL";
+  const specFile = `.agent-core/plans/${formal}/spec.md`;
+  const verify = () => {
+    assert.equal(work("check-run", "--task-id", formal, "--check", "regression").status, "PASS");
+    work("requirement-verify", "--task-id", formal, "--id", "REQ-001", "--result", "PASS",
+      "--check-script", "regression", "--evidence", "Required regression assertion passed.");
+  };
+  const approvePlan = () => work("plan-validate", "--task-id", formal, "--result", "APPROVED",
+    "--validator", "plan-validator", "--evidence", "Plan covers the current specification.");
+  const approveSpec = () => work("spec-validate", "--task-id", formal, "--result", "APPROVED",
+    "--validator", "spec-validator", "--evidence", "The specification has a testable acceptance criterion.");
+
+  write(specFile, "# Spec A\nREQ-001: Enable the fixture for the original scenario.\n");
+  assert.equal(git("check-ignore", specFile).stdout.trim(), specFile, "Exercise the documented ignored specification location.");
+  work("start", "--task-id", formal, "--classification", "LARGE", "--pr-bound");
+  work("update", "--task-id", formal, "--status", "PLANNING", "--agent", "builder", "--plan-bullets", "2", "--plan-version", "1");
+  run(process.execPath, [guard, "start", "--project", project, "--task-id", formal, "--base", "main",
+    "--intent", "Enable the fixture against the approved specification", "--allow", "src/feature.mjs"]);
+  work("spec-set", "--task-id", formal, "--file", specFile);
+  work("requirement-add", "--task-id", formal, "--id", "REQ-001", "--description", "Enable fixture",
+    "--acceptance", "The exported enabled value is true.");
+  work("check-require", "--task-id", formal, "--id", "regression", "--command", process.execPath,
+    "--arg", "--input-type=module", "--arg", "-e", "--arg", "import assert from 'node:assert/strict'; import {enabled} from './src/feature.mjs'; assert.equal(enabled,true);");
+  approveSpec(); approvePlan();
+  work("update", "--task-id", formal, "--status", "REVIEWING");
+  verify();
+  work("quality-review", "--task-id", formal, "--reviewer", "external-reviewer", "--result", "FAIL",
+    "--evidence", "Check the fixture's documented acceptance scenario.");
+  const knownFindings = job(formal).quality.known_findings;
+
+  // A material plan change supersedes active work without erasing unresolved findings.
+  const beforePlan = begin(formal);
+  const beforePlanPath = artifact(beforePlan, resolvedReport(beforePlan));
+  work("update", "--task-id", formal, "--status", "PLANNING", "--plan-version", "2");
+  assert.equal(job(formal).quality.review_attempt.status, "SUPERSEDED");
+  assert.deepEqual(job(formal).quality.known_findings, knownFindings);
+  approvePlan();
+  work("update", "--task-id", formal, "--status", "REVIEWING");
+  assert.match(fail("quality-review", "--task-id", formal, "--report", beforePlanPath).stderr, /stale|superseded/i);
+
+  // Keep the registered REQs, source, diff, check definition and check evidence identical.
+  const specA = begin(formal);
+  const specAPath = artifact(specA, resolvedReport(specA));
+  const requirementsA = job(formal).quality.requirements;
+  const checksA = job(formal).quality.checks.map(({ at, elapsed_ms, ...evidence }) => evidence);
+  assert.equal(specA.snap.specification.file, specFile);
+  assert.equal(specA.snap.specification.current_digest, specA.snap.specification.approved_digest);
+  assert(!specA.snap.files.includes(specFile), "The ignored specification must be bound independently of Git's changed files.");
+  assert.equal(validateReviewReport({ ...resolvedReport(specA), files_reviewed: specA.snap.files }, specA.snap, job(formal)).verdict,
+    "VERIFICATION BLOCKED", "A reviewer must inspect the active specification, even when Git ignores it.");
+  work("update", "--task-id", formal, "--status", "PLANNING");
+  write(specFile, "# Spec B\nREQ-001: Enable the fixture for the revised scenario.\n");
+  const unapproved = snapshot(formal);
+  assert.equal(unapproved.specification.approved_digest, specA.snap.specification.approved_digest);
+  assert.notEqual(unapproved.specification.current_digest, specA.snap.specification.current_digest);
+  assert(!sameReviewSnapshot(specA.snap, unapproved), "An unapproved direct spec edit must invalidate the reviewer snapshot.");
+  approveSpec();
+  assert.equal(job(formal).quality.review_attempt.status, "SUPERSEDED", "Spec reapproval must supersede an older in-flight review.");
+  assert.deepEqual(job(formal).quality.known_findings, knownFindings);
+  approvePlan();
+  work("update", "--task-id", formal, "--status", "REVIEWING");
+  verify();
+  const specB = snapshot(formal);
+  assert.equal(specB.source_digest, specA.snap.source_digest);
+  assert.equal(specB.change_digest, specA.snap.change_digest);
+  assert.deepEqual(job(formal).quality.requirements.map(({ verification: { at, ...verification }, ...requirement }) => ({ ...requirement, verification })),
+    requirementsA.map(({ verification: { at, ...verification }, ...requirement }) => ({ ...requirement, verification })));
+  assert.deepEqual(job(formal).quality.checks.slice(-1).map(({ at, elapsed_ms, ...evidence }) => evidence), checksA.slice(-1));
+  assert.notEqual(specB.specification.approved_digest, specA.snap.specification.approved_digest);
+  assert(!sameReviewSnapshot(specA.snap, specB));
+  assert.throws(() => validateReviewArtifact(project, specAPath, job(formal), specB), /stale/);
+  assert.match(fail("quality-review", "--task-id", formal, "--report", specAPath).stderr, /stale|superseded/i);
+  fail("update", "--task-id", formal, "--status", "DONE", "--final-validation", "PASS");
+
+  // Switching to an identically worded specification also changes its authoritative identity.
+  const beforeMove = begin(formal);
+  const beforeMovePath = artifact(beforeMove, resolvedReport(beforeMove));
+  const movedSpecFile = `.agent-core/plans/${formal}/replacement-spec.md`;
+  write(movedSpecFile, fs.readFileSync(path.join(project, specFile), "utf8"));
+  work("update", "--task-id", formal, "--status", "PLANNING");
+  work("spec-set", "--task-id", formal, "--file", movedSpecFile);
+  assert.equal(job(formal).quality.review_attempt.status, "SUPERSEDED");
+  approveSpec(); approvePlan();
+  work("update", "--task-id", formal, "--status", "REVIEWING");
+  verify();
+  const moved = snapshot(formal);
+  assert.equal(moved.specification.current_digest, specB.specification.current_digest);
+  assert.notEqual(moved.specification.file, specB.specification.file);
+  assert(!sameReviewSnapshot(beforeMove.snap, moved));
+  assert.match(fail("quality-review", "--task-id", formal, "--report", beforeMovePath).stderr, /stale|superseded/i);
+  assert.deepEqual(job(formal).quality.known_findings, knownFindings);
+
+  const fresh = begin(formal);
+  importReport(artifact(fresh, resolvedReport(fresh)), formal);
+  assert.equal(work("report", "--task-id", formal).engineering_quality.gate, "PASS", "A fresh review of specification B must pass.");
+  assert.deepEqual(job(formal).quality.known_findings, []);
+  work("update", "--task-id", formal, "--status", "DONE", "--final-validation", "PASS");
+  assert.equal(job(formal).status, "DONE");
+}
 
 try {
   write("src/feature.mjs", "export const enabled = false;\n");
   write("notes.md", "Original docs\n");
+  write(".gitignore", ".agent-core/plans/\n");
   write("package.json", JSON.stringify({ private: true, type: "module", scripts: { unrelated: "node -e \"process.exit(0)\"" } }) + "\n");
   fs.mkdirSync(path.join(project, ".agent-core/rules"), { recursive: true });
   fs.copyFileSync(guard, path.join(project, ".agent-core/rules/scope-guard.mjs"));
+  fs.copyFileSync(path.join(repo, "pack/rules/project-paths.mjs"), path.join(project, ".agent-core/rules/project-paths.mjs"));
   git("init", "-b", "main"); git("config", "user.name", "Review Contract"); git("config", "user.email", "contract@example.invalid");
   git("add", "."); git("commit", "-m", "baseline"); git("switch", "-c", "feat/review");
 
@@ -176,6 +286,8 @@ try {
   assert(!sameReviewSnapshot(beforeStage, snapshot()));
   assert.equal(work("report", "--task-id", task).engineering_quality.gate, "BLOCKED");
   git("update-ref", "refs/heads/main", base, newBase); // Restore only the disposable fixture ref.
+
+  formalSpecificationRegression();
 
   // Markdown and acceptance changes cannot retain an earlier approval.
   write("notes.md", "Changed after review\n");

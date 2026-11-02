@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { repositoryContext, sameDirectory } from "./project-paths.mjs";
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -47,17 +48,17 @@ function fileDigest(file) {
   } finally { fs.closeSync(fd); }
   return hash.digest("hex");
 }
-function trackedStateFiles(project, comparisonBase = null) {
+function trackedStateFiles(project, comparisonBase = null, statePrefix = ".agent-core/state/") {
   // Generated state is exempt only while untracked. A tracked state file is real
   // repository content and must not be hidden from the scope fence.
   return new Set([
-    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ".agent-core/state"]),
-    ...(comparisonBase ? gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", comparisonBase, "--", ".agent-core/state"]) : []),
-    ...gitPaths(project, ["ls-files", "--cached", "-z", "--", ".agent-core/state"]),
+    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", statePrefix]),
+    ...(comparisonBase ? gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", comparisonBase, "--", statePrefix]) : []),
+    ...gitPaths(project, ["ls-files", "--cached", "-z", "--", statePrefix]),
   ]);
 }
-function isGeneratedState(file, tracked = new Set()) {
-  return file.startsWith(".agent-core/state/") && !tracked.has(file);
+function isGeneratedState(file, tracked = new Set(), statePrefix = ".agent-core/state/") {
+  return file.startsWith(statePrefix) && !tracked.has(file);
 }
 
 function validPath(file) {
@@ -65,7 +66,8 @@ function validPath(file) {
     throw new Error(`Scope requires an exact relative file path, not a glob: ${file}`);
   }
   const parts = file.split("/");
-  if (parts.some(p => !p || p === "." || p === "..") || file === ".git" || file.startsWith(".git/") || file.startsWith(".agent-core/state/")) {
+  if (parts.some(p => !p || p === "." || p === ".." || p === ".git")
+    || parts.some((p, i) => p === ".agent-core" && parts[i + 1] === "state")) {
     throw new Error(`Unsafe or generated-state path in task scope: ${file}`);
   }
   return file;
@@ -75,13 +77,13 @@ function currentBranch(project) {
   return gitText(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
 }
 
-function statusEntries(project) {
+function statusEntries(project, statePrefix) {
   const entries = new Map();
-  const tracked = trackedStateFiles(project);
+  const tracked = trackedStateFiles(project, null, statePrefix);
   for (const record of gitPaths(project, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])) {
     if (record.length < 4 || record[2] !== " ") throw new Error("Could not parse git status safely");
     const file = record.slice(3);
-    if (!isGeneratedState(file, tracked)) entries.set(file, record.slice(0, 2));
+    if (!isGeneratedState(file, tracked, statePrefix)) entries.set(file, record.slice(0, 2));
   }
   return entries;
 }
@@ -132,14 +134,14 @@ function workingFingerprint(project, file, indexEntries) {
   }
   if (info.isDirectory() && index?.startsWith("160000 ")) {
     const actualRoot = gitText(fullPath, ["rev-parse", "--show-toplevel"]);
-    if (path.resolve(actualRoot) !== fullPath) throw new Error(`Submodule is not checked out: ${file}`);
+    if (!sameDirectory(actualRoot, fullPath)) throw new Error(`Submodule is not checked out: ${file}`);
     return `gitlink:160000 ${gitText(fullPath, ["rev-parse", "--verify", "HEAD"])}`;
   }
   throw new Error(`Cannot safely fingerprint changed non-file path: ${file}`);
 }
 
-function snapshotExisting(project) {
-  const entries = statusEntries(project);
+function snapshotExisting(project, statePrefix) {
+  const entries = statusEntries(project, statePrefix);
   const indexEntries = indexSnapshot(project);
   return Object.fromEntries([...entries].map(([file, status]) => {
     const snapshot = { status, fingerprint: fingerprint(project, file, status) };
@@ -150,21 +152,21 @@ function snapshotExisting(project) {
   }));
 }
 
-function changePaths(project, base) {
+function changePaths(project, base, statePrefix) {
   const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
   const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, "HEAD"]);
   const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]);
   const unstaged = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]);
   // A committed deletion is still a real PR change even after the path vanished
   // from HEAD and the index. Preserve paths tracked at the comparison baseline.
-  const tracked = trackedStateFiles(project, mergeBase);
+  const tracked = trackedStateFiles(project, mergeBase, statePrefix);
   const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
-    .filter(file => !isGeneratedState(file, tracked));
+    .filter(file => !isGeneratedState(file, tracked, statePrefix));
   return [...new Set([...committed, ...staged, ...unstaged, ...untracked])]
-    .filter(file => !isGeneratedState(file, tracked)).sort();
+    .filter(file => !isGeneratedState(file, tracked, statePrefix)).sort();
 }
 
-function changeDigest(project, base) {
+function changeDigest(project, base, statePrefix) {
   const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
   const hash = crypto.createHash("sha256");
   hash.update("web-kit-pr-diff-v2\0");
@@ -172,7 +174,7 @@ function changeDigest(project, base) {
   // A content-equivalent `git add` or `git commit` must NOT invalidate a prior
   // review. Hash the effective working tree once, irrespective of whether a
   // changed file is committed, staged, or untracked.
-  const paths = changePaths(project, base);
+  const paths = changePaths(project, base, statePrefix);
   const indexEntries = indexSnapshot(project);
   for (const file of paths) {
     hash.update(file);
@@ -221,12 +223,20 @@ function manifestPath(project, taskId) {
   return file;
 }
 
-function readManifest(file) {
+function readManifest(file, context) {
   const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
   if (!Array.isArray(manifest.allowed_paths) || !manifest.preexisting || !manifest.base || !manifest.branch) {
     throw new Error("Invalid or incomplete scope manifest");
   }
   manifest.allowed_paths.forEach(validPath);
+  if (manifest.version === 3) {
+    if (manifest.project_prefix !== context.projectPrefix || typeof manifest.repository_root !== "string"
+      || !sameDirectory(manifest.repository_root, context.repositoryRoot)) {
+      throw new Error("Scope belongs to a different project or Git repository; create a task scope for this project.");
+    }
+  } else if (context.projectPrefix) {
+    throw new Error("A nested project requires a scope created with repository-relative paths.");
+  }
   return manifest;
 }
 
@@ -235,10 +245,10 @@ function writeManifest(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
 }
 
-function check(project, manifest) {
+function check(project, manifest, statePrefix) {
   if (currentBranch(project) !== manifest.branch) throw new Error(`Task is locked to branch ${manifest.branch}`);
-  const changed = changePaths(project, manifest.base);
-  const status = statusEntries(project);
+  const changed = changePaths(project, manifest.base, statePrefix);
+  const status = statusEntries(project, statePrefix);
   const indexEntries = indexSnapshot(project);
   const preexistingChanged = [];
   for (const [file, before] of Object.entries(manifest.preexisting)) {
@@ -265,7 +275,7 @@ function check(project, manifest) {
     task_id: manifest.task_id,
     branch: manifest.branch,
     base: manifest.base,
-    change_digest: changeDigest(project, manifest.base),
+    change_digest: changeDigest(project, manifest.base, statePrefix),
     intended_changes: taskChanges.filter(file => allowed.has(file)),
     unexpected_paths: unexpected,
     preexisting_changed: preexistingChanged,
@@ -280,23 +290,23 @@ function main() {
   if (!(["start", "extend", "check"].includes(command))) {
     throw new Error("Usage: scope-guard.mjs start --task-id ID --base main --intent TEXT --allow path [--allow path] | extend --task-id ID --allow path --reason TEXT --evidence REF | check --task-id ID");
   }
-  const project = path.resolve(options.project || ".");
-  const root = gitText(project, ["rev-parse", "--show-toplevel"]);
-  if (path.resolve(root) !== project) throw new Error("--project must be the Git repository root");
+  const context = repositoryContext(options.project || ".");
+  const { projectRoot: project, repositoryRoot: root, projectPrefix, statePrefix } = context;
   const file = manifestPath(project, options["task-id"]);
 
   if (command === "start") {
     if (fs.existsSync(file)) throw new Error("Scope already locked for this task; do not overwrite its baseline");
     const base = options.base;
-    const branch = currentBranch(project);
+    const branch = currentBranch(root);
     if (!base || !options.intent?.trim() || !options.allow.length) throw new Error("start requires --base, --intent, and one or more --allow paths");
     if (branch === base || branch === base.replace(/^origin\//, "")) throw new Error("Use a feature branch, not the base branch");
-    gitText(project, ["rev-parse", "--verify", `${base}^{commit}`]);
-    gitText(project, ["merge-base", base, "HEAD"]);
+    gitText(root, ["rev-parse", "--verify", `${base}^{commit}`]);
+    gitText(root, ["merge-base", base, "HEAD"]);
     const allowed = [...new Set(options.allow.map(validPath))];
     const manifest = {
-      version: 2, task_id: options["task-id"], intent: options.intent, branch, base,
-      allowed_paths: allowed, preexisting: snapshotExisting(project), extensions: [],
+      version: 3, task_id: options["task-id"], intent: options.intent, branch, base,
+      repository_root: root, project_prefix: projectPrefix,
+      allowed_paths: allowed, preexisting: snapshotExisting(root, statePrefix), extensions: [],
     };
     writeManifest(file, manifest);
     process.stdout.write(`${JSON.stringify({ verdict: "LOCKED", task_id: manifest.task_id, branch, base, allowed_paths: allowed, preexisting_count: Object.keys(manifest.preexisting).length }, null, 2)}\n`);
@@ -311,11 +321,11 @@ function main() {
     try { fs.mkdirSync(lock); } catch { throw new Error("Scope update already in progress or a stale lock needs investigation"); }
     const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
-      const latest = readManifest(file);
+      const latest = readManifest(file, context);
       const extra = validPath(options.allow[0]);
-      if (currentBranch(project) !== latest.branch) throw new Error("Branch changed since scope was locked");
+      if (currentBranch(root) !== latest.branch) throw new Error("Branch changed since scope was locked");
       if (latest.allowed_paths.includes(extra)) throw new Error("Path is already allowed");
-      if (extra in latest.preexisting || changePaths(project, latest.base).includes(extra)) {
+      if (extra in latest.preexisting || changePaths(root, latest.base, statePrefix).includes(extra)) {
         throw new Error("Cannot retroactively approve an already dirty/changed path");
       }
       latest.allowed_paths.push(extra);
@@ -330,8 +340,8 @@ function main() {
     return;
   }
 
-  const manifest = readManifest(file);
-  const report = check(project, manifest);
+  const manifest = readManifest(file, context);
+  const report = check(root, manifest, statePrefix);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (report.verdict !== "PASS") process.exitCode = 1;
 }

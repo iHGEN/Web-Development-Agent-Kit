@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { repositoryContext } from "../rules/project-paths.mjs";
 
 export const REVIEW_SCHEMA = 1;
 const PREFIX = ".agent-core/state/code-reviews/";
@@ -59,19 +60,58 @@ export function reviewArtifactDigest(project, relative) {
   return hash(fs.readFileSync(artifactPath(project, relative)));
 }
 
-export function reviewRequirementsDigest(job) {
+export function readSpecificationFile(project, file) {
+  if (!file) throw new Error("--file is required");
+  const root = fs.realpathSync.native(project);
+  const actual = fs.realpathSync.native(path.resolve(project, file));
+  if (actual === root || !actual.startsWith(root + path.sep)) throw new Error("Specification must be a file within the project.");
+  const stat = fs.statSync(actual);
+  if (!stat.isFile() || stat.size > 262144) throw new Error("Specification must be a file of at most 256 KiB.");
+  return { relative: path.relative(root, actual).split(path.sep).join("/"), content: fs.readFileSync(actual, "utf8") };
+}
+
+function specificationContentDigest(job, content) {
+  const requirements = (job.quality?.requirements || []).map(r => [r.id, r.description, r.acceptance]);
+  return hash(content + "\n" + JSON.stringify(requirements));
+}
+
+export function specificationDigest(job, project) {
+  const file = job.quality?.spec?.file;
+  return file ? specificationContentDigest(job, readSpecificationFile(project, file).content) : null;
+}
+
+function reviewSpecification(job, project) {
+  const specification = job.quality?.spec;
+  const file = specification?.file ? readSpecificationFile(project, specification.file) : null;
+  return {
+    required: Boolean(job.quality?.required), file: file?.relative || null,
+    approval_status: specification?.validator?.status || null,
+    approved_digest: specification?.validator?.digest || null,
+    current_digest: file ? specificationContentDigest(job, file.content) : null,
+  };
+}
+
+export function reviewRequirementsDigest(job, project) {
   return hash(JSON.stringify({
     task_id: job.task_id, title: job.title, pr_bound: Boolean(job.pr_bound),
     requirements: (job.quality?.requirements || []).map(r => [r.id, r.description, r.acceptance]),
     required_checks: job.quality?.required_checks || [],
+    specification: reviewSpecification(job, project),
+    plan: job.governance?.plan_required ? {
+      version: job.plan?.version, bullets: job.plan?.bullets, status: job.plan?.status,
+      validator: job.governance.plan_validator_required ? {
+        status: job.plan?.validator?.status, plan_version: job.plan?.validator?.plan_version,
+        spec_digest: job.plan?.validator?.spec_digest,
+      } : null,
+    } : null,
   }));
 }
 
-export function reviewContextDigest(job) {
+export function reviewContextDigest(job, project) {
   const latest = new Map();
   for (const check of job.quality?.checks || []) latest.set(check.script, check);
   return hash(JSON.stringify({
-    requirements_digest: reviewRequirementsDigest(job),
+    requirements_digest: reviewRequirementsDigest(job, project),
     verification: (job.quality?.requirements || []).map(r => [r.id, r.verification?.status,
       r.verification?.method, r.verification?.check_script, r.verification?.evidence,
       r.verification?.source_digest, r.verification?.change_digest]),
@@ -82,6 +122,9 @@ export function reviewContextDigest(job) {
 
 export function captureReviewSnapshot(project, job, sourceDigest) {
   if (!safeId(job.task_id) || typeof sourceDigest !== "function") throw new Error("Review needs a valid task and source fingerprint function.");
+  const layout = repositoryContext(project);
+  project = layout.projectRoot;
+  const repository = layout.repositoryRoot;
   const scopePath = safeStatePath(project, `.agent-core/state/scope/${job.task_id}.json`);
   const scope = JSON.parse(fs.readFileSync(scopePath, "utf8"));
   if (!text(scope.base) || scope.base.startsWith("-")) throw new Error("Review has no safe comparison base.");
@@ -92,26 +135,26 @@ export function captureReviewSnapshot(project, job, sourceDigest) {
   if (r.error || r.status !== 0) throw new Error("Review requires a passing current scope check: " + (r.error?.message || r.stdout || r.stderr));
   const checked = JSON.parse(r.stdout);
   if (checked.verdict !== "PASS" || !/^[a-f0-9]{64}$/.test(checked.change_digest || "")) throw new Error("Scope guard supplied no valid review fingerprint.");
-  const branch = git(project, ["branch", "--show-current"]).trim();
-  const head = git(project, ["rev-parse", "--verify", "HEAD"]).trim();
-  const baseCommit = git(project, ["rev-parse", "--verify", `${scope.base}^{commit}`]).trim();
-  const mergeBase = git(project, ["merge-base", scope.base, "HEAD"]).trim();
-  const index = git(project, ["ls-files", "--stage", "-z"]);
+  const branch = git(repository, ["branch", "--show-current"]).trim();
+  const head = git(repository, ["rev-parse", "--verify", "HEAD"]).trim();
+  const baseCommit = git(repository, ["rev-parse", "--verify", `${scope.base}^{commit}`]).trim();
+  const mergeBase = git(repository, ["merge-base", scope.base, "HEAD"]).trim();
+  const index = git(repository, ["ls-files", "--stage", "-z"]);
   const tracked = new Set([
-    ...git(project, ["ls-files", "-z"]).split("\0"),
-    ...git(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ".agent-core/state"]).split("\0"),
-    ...git(project, ["ls-tree", "-r", "--name-only", "-z", mergeBase, "--", ".agent-core/state"]).split("\0"),
+    ...git(repository, ["ls-files", "-z"]).split("\0"),
+    ...git(repository, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", layout.statePrefix]).split("\0"),
+    ...git(repository, ["ls-tree", "-r", "--name-only", "-z", mergeBase, "--", layout.statePrefix]).split("\0"),
   ].filter(Boolean));
-  const generated = file => file.startsWith(".agent-core/state/") && !tracked.has(file);
+  const generated = file => file.startsWith(layout.statePrefix) && !tracked.has(file);
   const lists = [
     ["diff", "--name-only", "--no-renames", "-z", mergeBase, "HEAD"],
     ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"],
     ["diff", "--name-only", "--no-renames", "-z"],
     ["ls-files", "--others", "--exclude-standard", "-z"],
   ];
-  const files = [...new Set(lists.flatMap(args => git(project, args).split("\0").filter(Boolean)))].filter(f => !generated(f)).sort();
+  const files = [...new Set(lists.flatMap(args => git(repository, args).split("\0").filter(Boolean)))].filter(f => !generated(f)).sort();
   if (!files.length || files.length > 5000 || files.some(f => !safeRelative(f))) throw new Error("Review change list is empty, unsafe, or too large.");
-  const status = git(project, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+  const status = git(repository, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])
     .split("\0").filter(entry => entry && !generated(entry.slice(3))).join("\0");
   const source = sourceDigest(project);
   let priorFindings = job.quality?.known_findings || [];
@@ -120,10 +163,14 @@ export function captureReviewSnapshot(project, job, sourceDigest) {
     if (previous.task_id !== job.task_id) throw new Error("Previous review belongs to another task.");
     priorFindings = previous.report?.findings || [];
   }
+  const specification = reviewSpecification(job, project);
+  if (specification.file && layout.projectPrefix) specification.file = layout.projectPrefix + "/" + specification.file;
   return {
     task_id: job.task_id, source_digest: source, change_digest: checked.change_digest,
-    requirements_digest: reviewRequirementsDigest(job), evidence_digest: reviewContextDigest(job),
-    scope_digest: hash(JSON.stringify([scope.intent, scope.allowed_paths, scope.extensions, scope.base])),
+    repository_root: repository, project_root: project, project_prefix: layout.projectPrefix,
+    requirements_digest: reviewRequirementsDigest(job, project), evidence_digest: reviewContextDigest(job, project),
+    specification,
+    scope_digest: hash(JSON.stringify([scope.intent, scope.allowed_paths, scope.extensions, scope.base, scope.repository_root, scope.project_prefix])),
     base: scope.base, base_commit: baseCommit, branch, merge_base: mergeBase, files,
     prior_findings: priorFindings,
     readonly_digest: hash(JSON.stringify([head, branch, index, status, source, checked.change_digest])),
@@ -131,9 +178,10 @@ export function captureReviewSnapshot(project, job, sourceDigest) {
 }
 
 export function sameReviewSnapshot(a, b, readOnly = false) {
-  const fields = ["task_id", "source_digest", "change_digest", "requirements_digest", "evidence_digest", "scope_digest", "base", "base_commit", "branch", "merge_base"];
+  const fields = ["task_id", "source_digest", "change_digest", "requirements_digest", "evidence_digest", "scope_digest", "base", "base_commit", "branch", "merge_base", "repository_root", "project_root"];
   if (readOnly) fields.push("readonly_digest");
-  return fields.every(key => a?.[key] && a[key] === b?.[key]) && JSON.stringify(a.files) === JSON.stringify(b.files);
+  return fields.every(key => a?.[key] && a[key] === b?.[key]) && a?.project_prefix === b?.project_prefix && JSON.stringify(a.files) === JSON.stringify(b.files)
+    && JSON.stringify(a.specification) === JSON.stringify(b.specification);
 }
 
 function requireText(value, label) { if (!text(value)) throw new Error(`Review report requires ${label}.`); }
@@ -148,6 +196,9 @@ export function validateReviewReport(report, snapshot, job) {
   gaps.forEach(value => requireText(value, "verification gap details"));
   report.files_reviewed.forEach(requirePath);
   for (const file of snapshot.files) if (!report.files_reviewed.includes(file)) gaps.push("Changed file was not reviewed: " + file);
+  if (snapshot.specification?.file && !report.files_reviewed.includes(snapshot.specification.file)) {
+    gaps.push("Active specification was not reviewed: " + snapshot.specification.file);
+  }
   const required = new Set((job.quality?.requirements || []).map(r => r.id));
   if (!required.size) gaps.push("No acceptance criteria registered.");
   const seen = new Set();
@@ -230,7 +281,7 @@ export function validateReviewArtifact(project, relative, job, snapshot, expecte
   if (relative !== `${PREFIX}${job.task_id}/${envelope.run_id}.json`) throw new Error("Review artifact location does not match its run.");
   const digest = reviewArtifactDigest(project, relative);
   if (expectedHash && digest !== expectedHash) throw new Error("Stored review evidence was modified.");
-  if (!sameReviewSnapshot(envelope.snapshot, snapshot)) throw new Error("Review evidence is stale against the code, base, requirements, or checks.");
+  if (!sameReviewSnapshot(envelope.snapshot, snapshot)) throw new Error("Review evidence is stale against the code, base, specification, plan, requirements, or checks.");
   const result = validateReviewReport(envelope.report, envelope.snapshot, job);
   if (envelope.verdict !== result.verdict) throw new Error("Review verdict disagrees with its evidence.");
   return { envelope, digest, ...result };

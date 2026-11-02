@@ -9,12 +9,14 @@ import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-pre-pr-"));
+const providerHome = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-pre-pr-provider-"));
 const progress = path.join(repo, "pack/runtime/work-progress.mjs");
 const guard = path.join(repo, "pack/rules/scope-guard.mjs");
 const runner = path.join(repo, "pack/runtime/code-review.mjs");
 const fixture = path.join(repo, "tests/fixtures/mock-code-review-provider.mjs");
+const fixtureEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("CODEX_EXEC_SERVER_")));
 function invoke(bin, args, expected = 0) {
-  const run = spawnSync(bin, args, { cwd: project, encoding: "utf8", env: { ...process.env, WEB_KIT_CODE_REVIEW_CODEX_BIN: fixture } });
+  const run = spawnSync(bin, args, { cwd: project, encoding: "utf8", env: { ...fixtureEnv, CODEX_HOME: providerHome, WEB_KIT_CODE_REVIEW_CODEX_BIN: fixture } });
   assert.equal(run.status, expected, `${bin} ${args.join(" ")}\n${run.stdout}\n${run.stderr}`);
   if (expected !== 0) return run;
   return JSON.parse(run.stdout);
@@ -47,6 +49,7 @@ function job(taskId) {
 try {
   fs.mkdirSync(path.join(project, ".agent-core/rules"), { recursive: true });
   fs.copyFileSync(guard, path.join(project, ".agent-core/rules/scope-guard.mjs"));
+  fs.copyFileSync(path.join(repo, "pack/rules/project-paths.mjs"), path.join(project, ".agent-core/rules/project-paths.mjs"));
   write("src/feature.js", "export const enabled = false;\n");
   write("docs/feature.md", "# Original behavior\n");
   write("tests/feature.test.mjs", 'import assert from "node:assert/strict"; import { enabled } from "../src/feature.js"; assert.equal(enabled, true);\n');
@@ -136,4 +139,5 @@ try {
 } finally {
   // The entire fixture is created by this test; no user project is removed.
   fs.rmSync(project, { recursive: true, force: true });
+  fs.rmSync(providerHome, { recursive: true, force: true });
 }

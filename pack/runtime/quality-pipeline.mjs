@@ -5,7 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { captureReviewSnapshot, reviewContextDigest, validateReviewArtifact } from "./review-contract.mjs";
+import { captureReviewSnapshot, reviewContextDigest, validateReviewArtifact,
+  readSpecificationFile as relativeSafeFile, specificationDigest as specDigest } from "./review-contract.mjs";
+import { resolveCheckCommand } from "./check-command.mjs";
 
 // Runtime and deployment inputs, not just conventional JS/TS suffixes.
 const SOURCE_EXTENSIONS = new Set([
@@ -81,23 +83,6 @@ function assertPlanning(job) {
     throw new Error("Formal specification changes require returning the job to PLANNING and revalidating the plan.");
   }
 }
-function relativeSafeFile(project, file) {
-  if (!file) throw new Error("--file is required");
-  const root = fs.realpathSync(project);
-  const candidate = path.resolve(project, file);
-  const actual = fs.realpathSync(candidate);
-  if (actual === root || !actual.startsWith(root + path.sep)) throw new Error("Specification must be a file within the project.");
-  const stat = fs.statSync(actual);
-  if (!stat.isFile() || stat.size > 262144) throw new Error("Specification must be a file of at most 256 KiB.");
-  return { relative: path.relative(root, actual).split(path.sep).join("/"), content: fs.readFileSync(actual, "utf8") };
-}
-function specDigest(job, project) {
-  const relative = job.quality?.spec?.file;
-  if (!relative) return null;
-  const spec = relativeSafeFile(project, relative);
-  const requirements = job.quality.requirements.map((r) => [r.id, r.description, r.acceptance]);
-  return hash(spec.content + "\n" + JSON.stringify(requirements));
-}
 function invalidatePlan(job) {
   if (!job.governance?.plan_validator_required) return;
   job.plan.status = "PENDING";
@@ -105,6 +90,7 @@ function invalidatePlan(job) {
     required: true, status: "PENDING", source: null, evidence: [], plan_version: null,
     validated_at: null, spec_digest: null,
   };
+  invalidateReview(job);
 }
 export function createQuality(governance) {
   const required = Boolean(governance?.plan_validator_required);
@@ -127,6 +113,14 @@ export function ensureQuality(job) {
   }
   job.quality.required_checks ??= [];
   return job.quality;
+}
+export function invalidateReview(job) {
+  const quality = ensureQuality(job);
+  // Keep prior reports and known findings available for the next reviewer.
+  quality.code_review = { ...quality.code_review, status: "PENDING" };
+  if (quality.review_attempt && quality.review_attempt.status !== "SUPERSEDED") {
+    quality.review_attempt = { ...quality.review_attempt, status: "SUPERSEDED", completed_at: now() };
+  }
 }
 export function specificationReady(job, project) {
   const quality = ensureQuality(job);
@@ -470,7 +464,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     quality.spec.file = spec.relative;
     quality.spec.validator = { status: "PENDING", source: null, digest: null, evidence: [] };
     for (const req of quality.requirements) req.verification = { status: "PENDING", method: null, source_digest: null, evidence: [] };
-    quality.code_review = { status: "PENDING", source: null, evidence: [], source_digest: null };
+    invalidateReview(job);
     invalidatePlan(job);
   } else if (command === "requirement-add") {
     assertPlanning(job);
@@ -486,7 +480,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     }
     quality.requirements.push({ id, description, acceptance, verification: { status: "PENDING", method: null, evidence: [], source_digest: null } });
     quality.spec.validator = { status: "PENDING", source: null, digest: null, evidence: [] };
-    quality.code_review = { status: "PENDING", source: null, evidence: [], source_digest: null };
+    invalidateReview(job);
     invalidatePlan(job);
   } else if (command === "spec-validate") {
     assertPlanning(job);
@@ -505,11 +499,11 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     if (result !== "APPROVED" || approvedDigest !== job.plan?.validator?.spec_digest) {
       invalidatePlan(job);
     }
-    if (specificationChanged) {
+    if (specificationChanged || result !== "APPROVED") {
       for (const requirement of quality.requirements) {
         requirement.verification = { status: "PENDING", method: null, source_digest: null, evidence: [] };
       }
-      quality.code_review = { status: "PENDING", source: null, evidence: [], source_digest: null };
+      invalidateReview(job);
     }
     quality.spec.validator = {
       status: result, source: validator, evidence, digest: approvedDigest, validated_at: now(),
@@ -559,10 +553,19 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     const started = Date.now();
     const commandName = npmScript ? (process.platform === "win32" ? "npm.cmd" : "npm") : definition.command;
     const commandArgs = npmScript ? ["run", "--", npmScript] : definition.args;
-    const child = spawnSync(commandName, commandArgs, {
-      cwd: project, windowsHide: true, shell: Boolean(npmScript) && process.platform === "win32",
-      encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024,
-    });
+    let child;
+    try {
+      const launch = npmScript ? { command: commandName, args: commandArgs, shell: process.platform === "win32" }
+        : resolveCheckCommand(commandName, commandArgs, { cwd: project });
+      child = spawnSync(launch.command, launch.args, {
+        cwd: project, windowsHide: true, shell: launch.shell,
+        encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024,
+      });
+    } catch (error) {
+      // A failed setup/retry must supersede an earlier PASS just as a spawn
+      // failure does. Record why nothing ran; never leave old success current.
+      child = { status: null, error, stdout: "", stderr: "" };
+    }
     const fingerprint = sourceDigest(project);
     const scopeAfter = job.pr_bound ? scopeState(project, job.task_id, true) : null;
     const status = fingerprintBefore !== fingerprint || (job.pr_bound && (scopeAfter.status !== "PASS" || scopeAfter.change_digest !== scopeBefore.change_digest)) ? "STALE"
@@ -626,7 +629,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
     if (has(args, "--begin")) {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,119}$/.test(runId || "") || reportPath || arg(args, "--result")) throw new Error("Review begin requires only a new --run-id.");
       if (quality.review_attempt?.run_id === runId) throw new Error("Review run IDs cannot be reused.");
-      quality.review_attempt = { run_id: runId, status: "RUNNING", started_at: now(), context_digest: reviewContextDigest(job) };
+      quality.review_attempt = { run_id: runId, status: "RUNNING", started_at: now(), context_digest: reviewContextDigest(job, project) };
       quality.code_review = { ...quality.code_review, status: "PENDING" };
     } else if (reportPath) {
       if (arg(args, "--result") || arg(args, "--reviewer")) throw new Error("The actual reviewer artifact determines its verdict and provenance.");
@@ -634,7 +637,7 @@ export function runQualityCommand(project, command, args, loadJob, writeJob) {
       const result = validateReviewArtifact(project, reportPath, job, snapshot);
       const attempt = quality.review_attempt;
       if (attempt?.status !== "RUNNING" || attempt.run_id !== result.envelope.run_id
-        || attempt.context_digest !== reviewContextDigest(job)
+        || attempt.context_digest !== reviewContextDigest(job, project)
         || Date.parse(result.envelope.provenance.started_at) < Date.parse(attempt.started_at)) throw new Error("Review attempt is stale, superseded, or was not started by the review runner.");
       const known = new Map((snapshot.prior_findings || []).map(f => [f.id, f]));
       if (result.verdict !== "VERIFICATION BLOCKED") {

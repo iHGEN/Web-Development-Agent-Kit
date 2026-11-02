@@ -8,6 +8,7 @@ import { rolesMarkdown } from "../scripts/ai-compat.mjs";
 
 const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../pack/rules/scope-guard.mjs");
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-scope-guard-"));
+const projectAlias = project + "-alias";
 const run = (bin, args, expected = 0) => {
   const result = spawnSync(bin, args, { cwd: project, encoding: "utf8" });
   assert.equal(result.status, expected, `${bin} ${args.join(" ")}\n${result.stdout}\n${result.stderr}`);
@@ -33,9 +34,12 @@ try {
   assert.equal(git("commit", "-m", "baseline").status, 0);
   assert.equal(git("switch", "-c", "feat/scoped-change").status, 0);
   write("private-notes.txt", "Do not touch\n");
+  // A symlink/junction reproduces macOS /var aliases and Windows alternate
+  // physical spellings. State and Git scope must identify the same directory.
+  fs.symlinkSync(project, projectAlias, process.platform === "win32" ? "junction" : "dir");
 
   const args = ["--task-id", "TASK-001", "--project", project];
-  const start = run("node", [script, "start", ...args, "--base", "main", "--intent", "Implement feature", "--allow", "src/feature.js"]);
+  const start = run("node", [script, "start", "--task-id", "TASK-001", "--project", projectAlias, "--base", "main", "--intent", "Implement feature", "--allow", "src/feature.js"]);
   assert.equal(start.verdict, "LOCKED");
   assert.equal(start.preexisting_count, 1);
   assert.equal(run("node", [script, "check", ...args], 1).verdict, "FAIL", "An empty task should not pass pre-PR readiness");
@@ -198,5 +202,6 @@ try {
   console.log("Scope guard smoke: PASS");
 } finally {
   // The fixture is entirely created by this test and contains no user files.
+  fs.rmSync(projectAlias, { recursive: true, force: true });
   fs.rmSync(project, { recursive: true, force: true });
 }

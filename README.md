@@ -153,6 +153,8 @@ node .agent-core/rules/scope-guard.mjs extend \
 node .agent-core/rules/scope-guard.mjs check --task-id TASK-042
 ```
 
+Nested installations are supported. Use the same project directory for progress, scope and review commands, such as `--project apps/web` when invoking them from the Git root. Scope `--allow` paths and review report source paths are always relative to that Git root: `apps/web/src/feature.js` or `packages/shared/contract.js`. Task state stays under `apps/web/.agent-core/state/`, checks run in `apps/web`, and scope/review evidence covers changes throughout the repository, including shared packages and unrelated user edits.
+
 Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work. A scope snapshot additionally makes the existing `DONE` command fail on scope violations.
 
 After implementation, execute the required checks and link the acceptance evidence:
@@ -167,13 +169,17 @@ node .agent-core/bin/code-review.mjs --task-id TASK-042 --provider codex
 npx @ihgen/web-kit code-review --task-id TASK-042 --provider codex
 ```
 
-`code-review` uses the installed runtime without installing or updating the project during review. Update Web Kit separately before beginning a task. It requires an existing PR-bound job, its pre-change scope snapshot, registered acceptance criteria and declared checks. The active code-review adapters are Codex and Claude; provider selection defaults to `auto`, which considers those two providers. `--provider gemini` is recognized but returns `VERIFICATION BLOCKED` before launching a provider until a safe read-only Gemini integration is available. The configured model and reasoning settings are preserved. `--timeout <seconds>` bounds the provider call and `--json` prints its result.
+`code-review` uses the installed runtime without installing or updating the project during review. Update Web Kit separately before beginning a task. It requires an existing PR-bound job, its pre-change scope snapshot, registered acceptance criteria and declared checks. The supported independent-review adapter is Codex; the default `--provider auto` selects Codex. The configured model and reasoning settings are preserved. `--timeout <seconds>` bounds the complete provider preflight and review, and `--json` prints its result.
 
-Restrictions apply to the review process only. Codex uses a read-only command sandbox with apps, plugins and configured MCP servers disabled; failure to inspect its MCP configuration blocks the run. Claude exposes only Read, Glob and Grep, with MCP tools denied. The runner supplies a private complete diff and untracked-file inventory so the reviewer can inspect the changes with those restricted tools.
+Restrictions apply to the review process only. Codex uses a read-only command sandbox with automatic approvals, lifecycle hooks, legacy notifications, apps, plugins and configured MCP servers disabled. Before inference, the runner checks the effective configuration and managed requirements, including settings that can override ordinary command-line restrictions. Unsupported inspection, conflicting policy or incomplete configuration evidence blocks the run. The runner supplies a private complete diff and untracked-file inventory so the reviewer can inspect changes with the restricted tools.
+
+Configured execution-rule files (`.rules`) and remote execution environments currently block this automated review: they can run commands outside the requested sandbox or during provider startup. The runner leaves those settings intact. It also blocks managed permission-profile modes it cannot verify. Windows requires an explicit existing `CODEX_HOME` and a verified supported sandbox. These restrictions apply to this independent review step; a blocked result explains the configuration that needs attention. Configuration inspection starts no model session, although the provider may maintain its own local state/cache.
+
+`--provider claude` and `--provider gemini` are recognized but return `VERIFICATION BLOCKED` before launching either provider. Claude's per-run hook setting cannot suppress managed hooks, and its documented CLI does not provide a pre-inference effective-policy check. Gemini's read-only headless mode cannot preserve configured user policies safely. Use Codex for this review step until those restrictions can be enforced; other Web Kit workflows remain provider-neutral.
 
 The existing reviewer actively searches for credible bugs, without a finding quota. Its structured report records examined files, requirement cases, boundary checks, demonstrated P0–P3 findings and verification gaps. The runner saves the actual invocation and report under `.agent-core/state/code-reviews/` and imports it through `work-progress.mjs quality-review --report`. A free-text reviewer name and PASS claim no longer approve PR-bound work.
 
-The gate requires all declared checks and acceptance criteria to pass, supported review coverage, and evidence matching the final diff. Code, doc, staged, untracked or relevant requirement/evidence changes invalidate the affected approval. Previous findings must be addressed on re-review. Missing providers, incomplete/malformed reports, timeouts or essential verification gaps are `VERIFICATION BLOCKED`; confirmed blockers are `NOT READY`. The command exits `0` only for `READY TO OPEN PR`, `4` for non-ready/blocked outcomes and `2` for invalid invocation. An optional quality score never overrides a blocker.
+The gate requires all declared checks and acceptance criteria to pass, supported review coverage, and evidence matching the final diff. Code, doc, staged, untracked or relevant requirement/evidence changes invalidate the affected approval. The current spec path, contents, approval and material plan state are also bound to the review, including specs ignored by Git. Changing or revoking that approval supersedes an in-progress review; reapproval cannot revive its old result. The reviewer must read the full registered spec and address previous findings on re-review. Missing providers, incomplete/malformed reports, timeouts or essential verification gaps are `VERIFICATION BLOCKED`; confirmed blockers are `NOT READY`. The command exits `0` only for `READY TO OPEN PR`, `4` for non-ready/blocked outcomes and `2` for invalid invocation. An optional quality score never overrides a blocker.
 
 For a non-npm project, register and execute a named command with separate arguments:
 
@@ -182,6 +188,8 @@ node .agent-core/bin/work-progress.mjs check-require \
   --task-id TASK-042 --id regression --command node --arg tests/regression.mjs
 node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --check regression
 ```
+
+External check arguments are passed literally. On Windows, recognized standard npm Node `.cmd` shims launch their actual JavaScript entry point without a shell. Custom `.bat` files and unsupported `.cmd` wrappers stop before launch with setup instructions: register the real Node entry point or an explicit interpreter and its documented arguments. Existing npm `--script` checks retain their normal execution path.
 
 Link that result using `requirement-verify --check-script regression`. Manual acceptance evidence can document non-automatable behavior, but cannot replace an unexecuted required check. The reviewer must judge whether the checks actually cover the behavior; structural validation and provenance do not prove model conclusions correct or make local records tamper-proof.
 

@@ -9,13 +9,16 @@ import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-review-cli-"));
+const providerHome = path.join(root, "provider-home");
+fs.mkdirSync(providerHome);
 const harness = path.join(root, "cli");
 const project = path.join(root, "project with spaces");
 const setupAudit = path.join(root, "unexpected-setup.txt");
 const runtimeAudit = path.join(root, "review-invocations.jsonl");
 const progressAudit = path.join(root, "progress-invocations.jsonl");
 const cli = path.join(harness, "web-kit-entry.js");
-const env = { ...process.env, WEB_KIT_TEST_SETUP_AUDIT: setupAudit, WEB_KIT_TEST_REVIEW_AUDIT: runtimeAudit, WEB_KIT_TEST_PROGRESS_AUDIT: progressAudit };
+const fixtureEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("CODEX_EXEC_SERVER_")));
+const env = { ...fixtureEnv, CODEX_HOME: providerHome, WEB_KIT_TEST_SETUP_AUDIT: setupAudit, WEB_KIT_TEST_REVIEW_AUDIT: runtimeAudit, WEB_KIT_TEST_PROGRESS_AUDIT: progressAudit };
 
 function invoke(args, expected = 0, cwd = root, extraEnv = {}) {
   const result = spawnSync(process.execPath, [cli, "code-review", ...args], {
@@ -47,8 +50,8 @@ try {
 
   const help = invoke(["--help", "--project", project]);
   assert.match(help.stdout, /code-review --task-id/);
-  assert.match(help.stdout, /Active adapters: Codex and Claude/);
-  assert.match(help.stdout, /--provider gemini is recognized but returns VERIFICATION BLOCKED without launching Gemini/);
+  assert.match(help.stdout, /Active adapter: Codex; auto selects Codex/);
+  assert.match(help.stdout, /--provider claude and --provider gemini return VERIFICATION BLOCKED without launching either/);
   assert.equal(fs.existsSync(project), false, "help must not create an installation");
 
   fs.mkdirSync(project);

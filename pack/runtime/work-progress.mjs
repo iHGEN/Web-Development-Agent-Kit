@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { createQuality, ensureQuality, assertSpecificationReady, evaluateQuality, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
+import { createQuality, ensureQuality, assertSpecificationReady, evaluateQuality, invalidateReview, QUALITY_COMMANDS, runQualityCommand } from "./quality-pipeline.mjs";
 
 const CLASSIFICATIONS = new Set(["SMALL", "MEDIUM", "LARGE"]);
 const JOB_STATUSES = new Set([
@@ -492,9 +492,10 @@ function update(project, args) {
   const planVersion = numberArg(args, "--plan-version");
   if (planVersion !== null) job.plan.version = Math.max(0, Math.floor(planVersion));
 
-  if (job.governance.plan_validator_required && (Number(job.plan.bullets) !== previousBullets || Number(job.plan.version) !== previousVersion)) {
+  if (job.governance.plan_required && (Number(job.plan.bullets) !== previousBullets || Number(job.plan.version) !== previousVersion)) {
     job.plan.status = "PENDING";
-    job.plan.validator = defaultValidator(job.governance);
+    if (job.governance.plan_validator_required) job.plan.validator = defaultValidator(job.governance);
+    invalidateReview(job);
   }
 
   const planStatus = getArg(args, "--plan-status");
@@ -508,6 +509,7 @@ function update(project, args) {
         throw new Error(`${job.classification} plan requires at least ${job.governance.min_plan_bullets} bullets before approval.`);
       }
     }
+    if (job.governance.plan_required && normalizedPlan !== job.plan.status && normalizedPlan !== "APPROVED") invalidateReview(job);
     job.plan.status = normalizedPlan;
   }
 
@@ -586,6 +588,7 @@ function planValidate(project, args) {
   };
   job.plan.status = result;
   if (result !== "APPROVED") {
+    invalidateReview(job);
     job.status = "PLANNING";
     job.current_phase = "PLANNING";
     job.next_action = result === "REVISE" ? "Revise only the validator findings, then request independent plan validation again." : "Plan rejected. Resolve the blocking evidence before implementation.";
