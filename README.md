@@ -45,6 +45,7 @@ npx @ihgen/web-kit graphify
 npx @ihgen/web-kit status
 npx @ihgen/web-kit status --task-id TASK-042
 npx @ihgen/web-kit progress help
+npx @ihgen/web-kit code-review --task-id TASK-042
 npx @ihgen/web-kit security-review
 ```
 
@@ -107,7 +108,7 @@ LARGE / HIGH-RISK
   -> implementation -> specialist/final gates
 ```
 
-For any feature that will become a pull request, the **existing independent Code Review** must cover the complete final diff, requirements, affected integration points and test evidence. Fix verified findings and re-review affected changes before `READY TO OPEN PR`. An unchanged approved diff reuses the existing review; there is no extra duplicate review stage. This applies to SMALL, MEDIUM and LARGE tasks and remains separate from later external PR reviews or CI/CD.
+For any feature that will become a pull request, the **existing independent Code Review** runs in a fresh read-only provider process and challenges the implementation against the original requirements. It examines the full final diff, relevant failure cases, affected integrations and test evidence. Fix verified findings and re-review affected behavior before `READY TO OPEN PR`. Current unchanged evidence is reused; this adds no duplicate review stage. It applies to SMALL, MEDIUM and LARGE tasks and remains separate from later human PR review and CI/CD.
 
 After initial discovery, two consecutive planning/routing/prose-only cycles without concrete implementation/verification evidence trigger the anti-slop guard. Plan-required work keeps its required approval gate; plan-free/approved work is pushed back to implementation.
 
@@ -127,7 +128,13 @@ At the beginning of PR-bound work, mark the existing job once so completion requ
 ```bash
 node .agent-core/bin/work-progress.mjs start \
   --task-id TASK-042 --classification SMALL --title "Implement REQ-001" --pr-bound
+node .agent-core/bin/work-progress.mjs requirement-add \
+  --task-id TASK-042 --id REQ-001 --description "Enable the feature" \
+  --acceptance "The requested behavior works and the affected existing consumer remains compatible"
+node .agent-core/bin/work-progress.mjs check-require --task-id TASK-042 --script test
 ```
+
+New jobs on detected Git feature branches default to PR-bound. Use `--local-only` or `--review-only` for explicitly local/read-only tasks; elsewhere, pass `--pr-bound` when a PR is intended. The acceptance checklist and declared checks are required for PR-bound work of every size. SMALL still needs no formal spec or Plan Validator. Choose checks that exercise the changed behavior, not an arbitrary available script.
 
 Before editing on a Git feature branch, the Captain names the exact permitted files and captures existing user changes:
 
@@ -146,11 +153,45 @@ node .agent-core/rules/scope-guard.mjs extend \
 node .agent-core/rules/scope-guard.mjs check --task-id TASK-042
 ```
 
+Nested installations are supported. Use the same project directory for progress, scope and review commands, such as `--project apps/web` when invoking them from the Git root. Scope `--allow` paths and review report source paths are always relative to that Git root: `apps/web/src/feature.js` or `packages/shared/contract.js`. Task state stays under `apps/web/.agent-core/state/`, checks run in `apps/web`, and scope/review evidence covers changes throughout the repository, including shared packages and unrelated user edits.
+
 Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work. A scope snapshot additionally makes the existing `DONE` command fail on scope violations.
 
-PR-bound completion also requires a current executed npm test (or an available build/lint/typecheck when there is no test script). The reviewer documents verification of behavior not represented by npm scripts.
+After implementation, execute the required checks and link the acceptance evidence:
 
-The existing Code Reviewer audits the complete intended diff and affected dependencies, scores **Security 25%, Architecture 20%, Correctness 20%, Testing 15%, Performance 10%, Maintainability 10%**, records evidence-based P0–P3 findings, and returns `READY TO OPEN PR`, `NOT READY` or `VERIFICATION BLOCKED`. Record this same review using `work-progress.mjs quality-review`. For `--pr-bound` jobs the review is fingerprinted against the full Git diff; a later code, doc, staged or untracked change invalidates approval until focused re-review. A score cannot override an unresolved blocker.
+```bash
+node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --script test
+node .agent-core/bin/work-progress.mjs requirement-verify \
+  --task-id TASK-042 --id REQ-001 --result PASS --check-script test \
+  --evidence "Normal behavior, relevant failure cases and existing consumer tests passed"
+node .agent-core/bin/code-review.mjs --task-id TASK-042 --provider codex
+# Equivalent public command:
+npx @ihgen/web-kit code-review --task-id TASK-042 --provider codex
+```
+
+`code-review` uses the installed runtime without installing or updating the project during review. Update Web Kit separately before beginning a task. It requires an existing PR-bound job, its pre-change scope snapshot, registered acceptance criteria and declared checks. The supported independent-review adapter is Codex; the default `--provider auto` selects Codex. The configured model and reasoning settings are preserved. `--timeout <seconds>` bounds the complete provider preflight and review, and `--json` prints its result.
+
+Restrictions apply to the review process only. Codex uses a read-only command sandbox with automatic approvals, lifecycle hooks, legacy notifications, shell snapshots, apps, plugins and configured MCP servers disabled. Both `shell_snapshot` and `shell_snapshot_v2` are disabled for the review process; legacy snapshot initialization can execute outside the command sandbox. Before inference, the runner checks the effective feature values, configuration and managed requirements, including settings that can override ordinary command-line restrictions. Unsupported inspection, conflicting policy or incomplete configuration evidence blocks the run. The runner supplies a private complete diff and untracked-file inventory so the reviewer can inspect changes with the restricted tools.
+
+Configured execution-rule files (`.rules`) and remote execution environments currently block this automated review: they can run commands outside the requested sandbox or during provider startup. The runner leaves those settings intact. It also blocks managed permission-profile modes it cannot verify. Windows requires an explicit existing `CODEX_HOME` and a verified supported sandbox. These restrictions apply to this independent review step; a blocked result explains the configuration that needs attention. Configuration inspection starts no model session, although the provider may maintain its own local state/cache.
+
+`--provider claude` and `--provider gemini` are recognized but return `VERIFICATION BLOCKED` before launching either provider. Claude's per-run hook setting cannot suppress managed hooks, and its documented CLI does not provide a pre-inference effective-policy check. Gemini's read-only headless mode cannot preserve configured user policies safely. Use Codex for this review step until those restrictions can be enforced; other Web Kit workflows remain provider-neutral.
+
+The existing reviewer actively searches for credible bugs, without a finding quota. Its structured report records examined files, requirement cases, boundary checks, demonstrated P0–P3 findings and verification gaps. The runner saves the actual invocation and report under `.agent-core/state/code-reviews/` and imports it through `work-progress.mjs quality-review --report`. A free-text reviewer name and PASS claim no longer approve PR-bound work.
+
+The gate requires all declared checks and acceptance criteria to pass, supported review coverage, and evidence matching the final diff. Code, doc, staged, untracked or relevant requirement/evidence changes invalidate the affected approval. The current spec path, contents, approval and material plan state are also bound to the review, including specs ignored by Git. Changing or revoking that approval supersedes an in-progress review; reapproval cannot revive its old result. The reviewer must read the full registered spec and address previous findings on re-review. Missing providers, incomplete/malformed reports, timeouts or essential verification gaps are `VERIFICATION BLOCKED`; confirmed blockers are `NOT READY`. The command exits `0` only for `READY TO OPEN PR`, `4` for non-ready/blocked outcomes and `2` for invalid invocation. An optional quality score never overrides a blocker.
+
+For a non-npm project, register and execute a named command with separate arguments:
+
+```bash
+node .agent-core/bin/work-progress.mjs check-require \
+  --task-id TASK-042 --id regression --command node --arg tests/regression.mjs
+node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --check regression
+```
+
+External check arguments are passed literally. On Windows, recognized standard npm Node `.cmd` shims launch their actual JavaScript entry point without a shell. Custom `.bat` files and unsupported `.cmd` wrappers stop before launch with setup instructions: register the real Node entry point or an explicit interpreter and its documented arguments. Existing npm `--script` checks retain their normal execution path.
+
+Link that result using `requirement-verify --check-script regression`. Manual acceptance evidence can document non-automatable behavior, but cannot replace an unexecuted required check. The reviewer must judge whether the checks actually cover the behavior; structural validation and provenance do not prove model conclusions correct or make local records tamper-proof.
 
 See `.agent-core/rules/pre-pr-review.md` and `.agent-core/agents/code-reviewer.md`. The review is not a claim that later reviewers will find no issues. CI/CD remains with the project's authorized owner; this feature does not dispatch GitHub Actions.
 
@@ -158,22 +199,23 @@ See `.agent-core/rules/pre-pr-review.md` and `.agent-core/agents/code-reviewer.m
 
 For new LARGE/high-risk jobs, Web Kit now adds a Spec Writer and independent Spec Validator ahead of the existing Plan Validator. SMALL keeps its direct-implementation path; MEDIUM normally stays at one short plan.
 
-A formal task can use these Node-only commands from inside an installed project:
+A formal PR-bound task additionally uses these Node-only commands from inside an installed project:
 
 ```bash
 node .agent-core/bin/work-progress.mjs spec-set --task-id TASK-042 --file .agent-core/plans/TASK-042/spec.md
 node .agent-core/bin/work-progress.mjs requirement-add --task-id TASK-042 --id REQ-001 --description "Booking approval" --acceptance "Owner decision is persisted and customer is notified"
 node .agent-core/bin/work-progress.mjs spec-validate --task-id TASK-042 --result APPROVED --validator spec-validator --evidence "REQ-001 matches original intent"
 node .agent-core/bin/work-progress.mjs plan-validate --task-id TASK-042 --result APPROVED --validator plan-validator --evidence "Dependencies and checks verified"
+node .agent-core/bin/work-progress.mjs check-require --task-id TASK-042 --script test
 # After implementation: execute the real project script, then link passing evidence
 node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --script test
 node .agent-core/bin/work-progress.mjs requirement-verify --task-id TASK-042 --id REQ-001 --result PASS --check-script test --evidence "Targeted acceptance test passed"
-node .agent-core/bin/work-progress.mjs quality-review --task-id TASK-042 --result PASS --reviewer code-reviewer --evidence "Independent diff review passed"
+node .agent-core/bin/code-review.mjs --task-id TASK-042
 node .agent-core/bin/work-progress.mjs report --task-id TASK-042
 node .agent-core/bin/work-progress.mjs audit --task-id TASK-042
 ```
 
-Formal DONE requires a current independently approved spec, verified requirements, successful executed checks when the project supplies test/build/lint scripts, current source evidence, independent code review and final validation. Stale code or spec changes block completion until reverified. Manual acceptance evidence is allowed for behavior not automatable by npm scripts; it must be recorded explicitly.
+Formal DONE requires a current independently approved spec, verified requirements, successful executed checks, current source evidence, independent code review and final validation. PR-bound tasks use the fresh reviewer and report contract above; formal non-PR tasks retain explicit review attestation. Stale code or spec changes block completion until reverified. Manual acceptance evidence for behavior not automatable by scripts must be recorded explicitly.
 
 The report exposes three independent dimensions: requirements fidelity, engineering quality and execution efficiency. Actual check exit status and elapsed time are captured by the runtime; token/tool/time measurements reported from AI providers are optional and never fabricated. Benchmark comparisons reject incomplete or unmeasured jobs.
 

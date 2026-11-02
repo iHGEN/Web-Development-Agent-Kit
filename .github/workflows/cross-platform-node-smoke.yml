@@ -12,6 +12,9 @@ on:
       - "tests/quality-pipeline-smoke.mjs"
       - "tests/scope-guard-smoke.mjs"
       - "tests/pre-pr-readiness-smoke.mjs"
+      - "tests/code-review-runner-smoke.mjs"
+      - "tests/check-command-smoke.mjs"
+      - "tests/fixtures/mock-code-review-provider.mjs"
       - ".github/workflows/cross-platform-node-smoke.yml"
   pull_request:
     paths:
@@ -24,6 +27,9 @@ on:
       - "tests/quality-pipeline-smoke.mjs"
       - "tests/scope-guard-smoke.mjs"
       - "tests/pre-pr-readiness-smoke.mjs"
+      - "tests/code-review-runner-smoke.mjs"
+      - "tests/check-command-smoke.mjs"
+      - "tests/fixtures/mock-code-review-provider.mjs"
       - ".github/workflows/cross-platform-node-smoke.yml"
   workflow_dispatch:
 
@@ -41,7 +47,8 @@ jobs:
           - windows-latest
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # The full reviewer suite launches many subprocesses on Windows.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -77,6 +84,9 @@ jobs:
           node --check tests/quality-pipeline-smoke.mjs
           node --check tests/scope-guard-smoke.mjs
           node --check tests/pre-pr-readiness-smoke.mjs
+          node --check tests/code-review-runner-smoke.mjs
+          node --check tests/check-command-smoke.mjs
+          node --check tests/fixtures/mock-code-review-provider.mjs
           node --check pack/runtime/session-controller.mjs
           node --check pack/runtime/context-supervisor.mjs
           node --check pack/runtime/provider-bridge.mjs
@@ -96,6 +106,14 @@ jobs:
           set -euo pipefail
           node tests/scope-guard-smoke.mjs
           node tests/pre-pr-readiness-smoke.mjs
+
+      - name: Test external command arguments on each OS
+        shell: bash
+        run: node tests/check-command-smoke.mjs
+
+      - name: Test reviewer startup restrictions on each OS
+        shell: bash
+        run: node tests/code-review-runner-smoke.mjs
 
       - name: Pack npm CLI
         id: pack

@@ -8,6 +8,7 @@ import { rolesMarkdown } from "../scripts/ai-compat.mjs";
 
 const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../pack/rules/scope-guard.mjs");
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-scope-guard-"));
+const projectAlias = project + "-alias";
 const run = (bin, args, expected = 0) => {
   const result = spawnSync(bin, args, { cwd: project, encoding: "utf8" });
   assert.equal(result.status, expected, `${bin} ${args.join(" ")}\n${result.stdout}\n${result.stderr}`);
@@ -33,9 +34,12 @@ try {
   assert.equal(git("commit", "-m", "baseline").status, 0);
   assert.equal(git("switch", "-c", "feat/scoped-change").status, 0);
   write("private-notes.txt", "Do not touch\n");
+  // A symlink/junction reproduces macOS /var aliases and Windows alternate
+  // physical spellings. State and Git scope must identify the same directory.
+  fs.symlinkSync(project, projectAlias, process.platform === "win32" ? "junction" : "dir");
 
   const args = ["--task-id", "TASK-001", "--project", project];
-  const start = run("node", [script, "start", ...args, "--base", "main", "--intent", "Implement feature", "--allow", "src/feature.js"]);
+  const start = run("node", [script, "start", "--task-id", "TASK-001", "--project", projectAlias, "--base", "main", "--intent", "Implement feature", "--allow", "src/feature.js"]);
   assert.equal(start.verdict, "LOCKED");
   assert.equal(start.preexisting_count, 1);
   assert.equal(run("node", [script, "check", ...args], 1).verdict, "FAIL", "An empty task should not pass pre-PR readiness");
@@ -170,8 +174,34 @@ try {
   fs.writeFileSync(path.join(scopeDir, `${legacyId}.json`), `${JSON.stringify(legacyManifest)}\n`);
   const legacyResult = run("node", [script, "check", "--task-id", legacyId, "--project", project], 2);
   assert.match(legacyResult.error, /lacks the staged baseline/);
+
+  // A tracked bookkeeping file remains PR content after its deletion is committed.
+  // HEAD/index alone cannot decide whether a state path is generated.
+  const deletedProject = path.join(project, "committed-state-deletion");
+  fs.mkdirSync(deletedProject);
+  const deletedGit = (...values) => {
+    const result = spawnSync("git", values, { cwd: deletedProject, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  deletedGit("init", "-b", "main");
+  deletedGit("config", "user.name", "State deletion regression");
+  deletedGit("config", "user.email", "state-delete@example.invalid");
+  fs.mkdirSync(path.join(deletedProject, ".agent-core/state"), { recursive: true });
+  fs.writeFileSync(path.join(deletedProject, ".agent-core/state/history.md"), "Tracked baseline history\n");
+  fs.writeFileSync(path.join(deletedProject, "feature.mjs"), "export const enabled = false;\n");
+  deletedGit("add", "."); deletedGit("commit", "-m", "baseline"); deletedGit("switch", "-c", "feat/delete-state");
+  const deletionArgs = ["--task-id", "STATE-DELETE", "--project", deletedProject];
+  const locked = spawnSync(process.execPath, [script, "start", ...deletionArgs, "--base", "main", "--intent", "Enable feature only", "--allow", "feature.mjs"], { encoding: "utf8" });
+  assert.equal(locked.status, 0, locked.stdout + locked.stderr);
+  fs.unlinkSync(path.join(deletedProject, ".agent-core/state/history.md"));
+  fs.writeFileSync(path.join(deletedProject, "feature.mjs"), "export const enabled = true;\n");
+  deletedGit("add", "feature.mjs", ".agent-core/state/history.md"); deletedGit("commit", "-m", "feature with accidental deletion");
+  const deleted = spawnSync(process.execPath, [script, "check", ...deletionArgs], { encoding: "utf8" });
+  assert.equal(deleted.status, 1, deleted.stdout + deleted.stderr);
+  assert.deepEqual(JSON.parse(deleted.stdout).unexpected_paths, [".agent-core/state/history.md"]);
   console.log("Scope guard smoke: PASS");
 } finally {
   // The fixture is entirely created by this test and contains no user files.
+  fs.rmSync(projectAlias, { recursive: true, force: true });
   fs.rmSync(project, { recursive: true, force: true });
 }

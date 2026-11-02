@@ -16,7 +16,24 @@ node .agent-core/bin/work-progress.mjs start \
   --title "Implement REQ-001"
 ```
 
-`--pr-bound` is an explicit completion contract, not an additional planning/review phase. Use the task's actual classification. Local-only/read-only jobs do not need this flag. An ongoing job can be upgraded with `work-progress.mjs update --task-id TASK-042 --pr-bound`, but the earlier pre-change snapshot must still exist; do not silently backfill one after editing.
+`--pr-bound` is a completion contract, not an additional planning/review phase. New jobs on detected Git feature branches enable it by default; use `--local-only` or `--review-only` only for an explicitly local or read-only task. These opt-outs cannot be combined with `--pr-bound`. Elsewhere, pass `--pr-bound` when a PR is intended; detached HEAD requires an explicit intent flag. Use the task's actual classification. An ongoing job can be upgraded with `work-progress.mjs update --task-id TASK-042 --pr-bound`, but the earlier pre-change snapshot must still exist; do not silently backfill one after editing.
+
+Register a short acceptance checklist and the required checks before implementation, for every PR-bound size. SMALL needs testable criteria, not a formal specification or another planning stage:
+
+```bash
+node .agent-core/bin/work-progress.mjs requirement-add \
+  --task-id TASK-042 --id REQ-001 \
+  --description "Owner can cancel a booking" \
+  --acceptance "The owner can cancel; another user is denied; repeating cancellation is safe"
+node .agent-core/bin/work-progress.mjs check-require --task-id TASK-042 --script test
+```
+
+Choose actual checks that exercise the changed behavior and its affected boundaries. All declared checks must pass; an unrelated passing test cannot replace a missing required check. For a non-npm check, register an executable and separate arguments:
+
+```bash
+node .agent-core/bin/work-progress.mjs check-require \
+  --task-id TASK-042 --id regression --command node --arg tests/regression.mjs
+```
 
 Before the first write, on a dedicated feature branch, create the task's scope snapshot. Use the actual PR base; do not assume that `main` is always the target:
 
@@ -28,6 +45,8 @@ node .agent-core/rules/scope-guard.mjs start \
 ```
 
 The guard captures pre-existing staged, unstaged and untracked changes without modifying them. Exact file paths are required: no blanket `src/**`, whole-repository patterns or broad directory exemptions. Generated untracked state lives in `.agent-core/state/scope/` and is not a deliverable; staged or committed changes to state files are not silently exempt.
+
+For a kit installed in a nested application, keep `--project` consistent across task, scope and review commands. All allowed/source paths are relative to the Git repository root, such as `apps/web/src/feature.js` and `packages/shared/contract.js`. Task state and check execution stay in the selected application; the scope fence and review diff span the entire repository. Canonical directory resolution handles filesystem aliases without requiring the user to move task state to the Git root.
 
 - Never amend, stage, discard or overwrite pre-existing user changes merely to finish a task. If work overlaps an already-dirty file, stop and request direction.
 - Do not edit unrelated files for aesthetic cleanup, naming consistency, warnings discovered elsewhere, dependency upgrades, broad formatting, or opportunistic refactors.
@@ -55,11 +74,15 @@ For jobs marked `--pr-bound`, the existing work-progress runtime rejects a passi
 
 If Git, the declared base, the task scope, or the pre-change snapshot is unavailable, do not claim the scope gate passed. Clearly report `VERIFICATION BLOCKED` before proposing a PR.
 
-## 2. One professional independent Code Review, reused for PR readiness
+## 2. One strict independent Code Review, reused for PR readiness
 
-Use the workflow's **existing Code Reviewer and quality-review evidence**. The Captain routes that reviewer independently of the implementer once the implementation, relevant local checks, affected integration validation and specialist/security checks are sufficiently complete. Review the full eventual PR change set: merge base to feature HEAD, staged/unstaged work, relevant untracked files, and any scope extensions. Use the scope-guard result and inspect diff hunks even inside allowed files; an allowed path can still contain an unrelated change.
+Use the workflow's **existing Code Reviewer and quality-review evidence**. After implementation, required checks and applicable specialist validation, the Captain runs the dedicated review command. It launches a fresh read-only provider process and does not resume the builder's conversation. The configured model is preserved; a different role name alone is not proof that a separate review executed.
 
-Do **not** schedule another full pre-PR review when the existing independent Code Review already covered the same final diff and requirements. Reuse its current evidence. If implementation, tests, documentation, staged files or committed branch changes change afterward, re-review only affected areas and downstream risks, then record a fresh approval bound to the new full diff.
+Review the full eventual PR change set: merge base to feature HEAD, staged/unstaged work, relevant untracked files, and scope extensions. Use the scope result and inspect hunks even inside allowed files. Read the original intent and acceptance criteria, then examine actual source and affected callers independently of the builder's explanation.
+
+Reuse a current report instead of scheduling another full review. If code, tests, documentation, requirements, declared checks or relevant verification evidence change, re-review the affected behavior and downstream risks, then record a report for the current snapshot.
+
+The reviewer's task is to find credible counterexamples: wrong inputs, unauthorized actions, empty/boundary data, failures, retries, concurrency, incompatible callers and incorrect state transitions as applicable. Verify that tests would expose those failures. Explain non-applicable cases. Do not demand a minimum number of findings, invent bugs, or turn personal style preferences into blockers.
 
 The review must examine applicable areas:
 
@@ -70,31 +93,48 @@ The review must examine applicable areas:
 5. **Performance (10%)** — affected hot paths, I/O, queries, memory, resource lifetime and unnecessary work.
 6. **Maintainability (10%)** — clarity, duplication, typed contracts, observability, UX/accessibility when relevant.
 
-Score each applicable category **0–5**, mark genuinely irrelevant categories `N/A`, and normalize weights over evaluated categories. The overall score never overrides a blocker. Review actual source and relevant callers, not only the developer's summary. Avoid speculative stylistic findings.
+When a quality score is requested, score applicable categories **0–5**, mark genuinely irrelevant categories `N/A`, and normalize weights. Scores are explanatory; they do not replace the structured report or override a blocker.
 
-For PR-bound jobs, execute a current npm test script when one exists; if there is no test script, execute an available build/lint/typecheck script. The completion gate requires actual `check-run` evidence, not a claimed pass. For non-npm projects, record real verification commands and limitations in the review report.
-
-For each actionable finding, report `P0` critical / `P1` high / `P2` medium / `P3` low, exact path and line/symbol, impact, evidence/reproduction, and smallest safe fix. Separate verified defects from hypotheses. Record validation as `PASS`, `FAIL`, `NOT RUN`, or `BLOCKED`, with real commands and outcomes. Never fabricate a pass or silently weaken/delete checks.
-
-Record **this same review** using the existing quality evidence command, for all PR-bound sizes (including SMALL):
+Execute every declared check through the existing evidence runner and link acceptance criteria to the relevant results:
 
 ```bash
-node .agent-core/bin/work-progress.mjs quality-review \
-  --task-id TASK-042 --reviewer code-reviewer --result PASS \
-  --evidence "Full diff, acceptance cases, scope and test results independently verified"
+node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --script test
+node .agent-core/bin/work-progress.mjs requirement-verify \
+  --task-id TASK-042 --id REQ-001 --result PASS --check-script test \
+  --evidence "Owner, cross-user and repeated-cancellation cases passed"
+# For the registered non-npm command:
+node .agent-core/bin/work-progress.mjs check-run --task-id TASK-042 --check regression
 ```
 
-Only record `PASS` if the real review supports it. The runtime stores a fingerprint of the complete Git change set and checks that it is still current at `DONE`; this also catches doc changes that a source-only fingerprint could miss. A claimed review or a `--review PASS` summary is not a substitute.
+Use `--check-script regression` to link an acceptance criterion to that named external check. Manual acceptance evidence must state what was observed and where the evidence can be inspected; it does not replace an unexecuted required check. Dot remains responsible for CI/CD; these commands provide local verification records and do not dispatch GitHub Actions.
+
+On Windows, external checks resolve recognized standard npm Node `.cmd` shims to their actual Node entry point and preserve literal arguments without shell interpolation. Unsupported/custom `.cmd` or `.bat` scripts require an explicitly registered interpreter or entry point and block before execution with setup instructions. npm package-script checks retain their existing execution route.
+
+For each actionable finding, report `P0` critical / `P1` high / `P2` medium / `P3` low, exact path and line/symbol, triggering conditions, impact, evidence/reproduction, and smallest safe fix. Investigate suspected issues before reporting them as confirmed. Record verification honestly and distinguish source reasoning from executed checks. Never fabricate a pass or weaken/delete checks to obtain approval.
+
+Run **this same review**, for all PR-bound sizes:
+
+```bash
+node .agent-core/bin/code-review.mjs --task-id TASK-042 --provider codex
+# Public CLI equivalent, using the installed runtime without an update:
+npx @ihgen/web-kit code-review --task-id TASK-042 --provider codex
+```
+
+`--provider auto` is the default and selects Codex. Per-run restrictions disable automatic approvals, lifecycle hooks, legacy notifications, both shell snapshot modes (`shell_snapshot` and `shell_snapshot_v2`), apps, plugins and configured MCP tools. Legacy shell snapshot startup can execute shell initialization outside the command sandbox. Before inference, preflights must verify effective feature values, configuration and managed requirements; missing or enabled snapshot flags block the review. Configured `.rules` files, remote execution environments and unsupported managed permission-profile modes block the review; the runner does not remove or replace those policies. Windows additionally requires explicit existing `CODEX_HOME` and a verified supported sandbox. Configuration inspection starts no model session, though provider-owned state/cache may be maintained. `--provider claude` is blocked because managed lifecycle hooks cannot be disabled or inspected safely before inference. `--provider gemini` remains blocked because its read-only headless mode cannot preserve configured user policies. Neither blocked provider is launched. Missing providers, timeouts, malformed reports, incomplete essential coverage or changed source during review block verification. The runner records the actual invocation and returned report, then imports it through `work-progress.mjs quality-review --report <generated-path>`. A free-text `--reviewer code-reviewer --result PASS` cannot approve PR-bound work.
+
+The report records examined files, requirement cases, affected boundaries, supported findings and verification gaps. The completion gate checks structural completeness, recorded execution, required check results and snapshot freshness. These checks make the evidence inspectable; they do not prove the model's conclusions correct or make local records tamper-proof. The full Git fingerprint still protects docs and staged content as well as source files.
+
+The review also binds the registered spec's path, current contents and approval digest, plus material plan state. Read the complete specification even when it is ignored by Git or absent from the diff, and include its repository-relative path in `files_reviewed`. A changed/revoked spec or plan approval supersedes the current review attempt while preserving prior findings. After reapproval, start a fresh review; an old report cannot finish the new task state.
 
 ## 3. Fix, re-test, re-review
 
-The independent reviewer is **read-only**. Route verified, in-scope findings to the original responsible implementation worker. Fix P0/P1, material P2, regressions, and missing required coverage; treat P3 as optional unless it violates an acceptance criterion. Each fix must stay within the scope fence and pass targeted checks plus affected broader checks, security review and final integration validation when the change warrants them.
+The independent reviewer is **read-only**. Route verified, in-scope findings to the original responsible implementation worker. Fix P0/P1/P2 findings, regressions, and missing required coverage; treat P3 as optional unless it violates an acceptance criterion. Each fix must stay within the scope fence and pass targeted checks plus affected broader checks, security review and final integration validation when the change warrants them.
 
-Re-run `scope-guard.mjs check`, inspect the affected new diff and downstream dependencies, and update the independent review evidence after fixes. Keep unchanged, already verified findings valid. Limit one invocation to three review/fix passes, then report unresolved issues instead of looping indefinitely. An unchanged final diff **does not** require another review.
+Re-run `scope-guard.mjs check`, rerun affected required checks, update acceptance evidence and invoke the independent reviewer on the resulting changes. The reviewer must explicitly address prior findings; omission is not resolution. Keep unchanged, already verified work valid. Limit one invocation to three review/fix passes, then report unresolved issues instead of looping indefinitely. A current unchanged report can be reused.
 
 The result is one of:
 
-- `READY TO OPEN PR`: no unresolved P0/P1/material P2, requirements satisfied, relevant checks passed, scope check passed, independent re-review current.
+- `READY TO OPEN PR`: no unresolved blocking findings, registered requirements satisfied, all required checks passed, scope check passed, structured independent review current.
 - `NOT READY`: known defect, failing applicable check, unapproved scope, or incomplete requirement.
 - `VERIFICATION BLOCKED`: essential source, base, permission, tool or test evidence unavailable.
 
@@ -104,12 +144,14 @@ Only `READY TO OPEN PR` permits opening or marking a PR ready, and only when the
 
 ```text
 Verdict: READY TO OPEN PR | NOT READY | VERIFICATION BLOCKED
-Branch -> base | Overall X.X/5
+Branch -> base | Reviewed snapshot and run ID
 Scope: PASS/FAIL/BLOCKED | exact changed files | extensions/non-goals
 Fixed: severity + finding + fix + validation
 Remaining: severity + evidence + owner/next action, or none
+Coverage: requirements, normal/failure/integration cases, affected boundaries
 Checks: PASS/FAIL/NOT RUN/BLOCKED + actual command/result
-Scores: Security | Architecture | Correctness | Testing | Performance | Maintainability
+Gaps: missing essential evidence, or none
+Scores: optional requested rubric; never override the gate
 Handoff: current diff/dirty worktree, limitations, suggested PR summary
 ```
 

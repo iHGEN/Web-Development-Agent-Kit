@@ -62,11 +62,12 @@ Adaptive execution, focused Git maintenance, no-progress recovery, proportional 
 .agent-core/rules/efficiency-policy.md
 ```
 
-Every code-changing Git feature branch must protect its intended change surface and pre-existing user edits. Start PR-bound jobs with `work-progress.mjs start ... --pr-bound`: the existing independent Code Review doubles as professional PR readiness evidence, and the runtime blocks `DONE` when the scope or full-diff review becomes stale. Do not add a duplicate Code Reviewer stage:
+Every code-changing Git feature branch must protect its intended change surface and pre-existing user edits. Start PR-bound jobs with `work-progress.mjs start ... --pr-bound`, register the short acceptance checklist and required checks, and run the existing Code Review through `code-review.mjs --task-id <id>`. The runner launches a fresh read-only provider process, records its actual report, and feeds the existing readiness gate. `DONE` requires current scope, requirement, check and review evidence. Do not add a duplicate Code Reviewer stage:
 
 ```text
 .agent-core/rules/pre-pr-review.md
 .agent-core/rules/scope-guard.mjs
+.agent-core/bin/code-review.mjs
 ```
 
 Machine-readable project metadata is:
@@ -264,7 +265,7 @@ Transparent context rollover is an **outer provider-session overlay**, never a s
 
 Material new evidence that invalidates an approved plan requires a Plan Delta and independent revalidation before affected work continues. Ordinary implementation discoveries do not restart planning.
 
-Before writing on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound work, the independent Code Reviewer must report `READY TO OPEN PR` on the current full diff after verified findings have been fixed and re-reviewed. Required specialist/security review and final integration validation remain intact.
+Before writing on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound work, the Captain runs `code-review.mjs` after required checks. The fresh reviewer actively investigates realistic failure cases and records evidence for its findings and coverage. A renamed role or claimed PASS cannot replace that execution. Fix verified findings and re-review affected behavior; `READY TO OPEN PR` requires the current report, verified acceptance criteria and declared checks to pass. Required specialist/security review and final integration validation remain intact.
 
 ## Efficiency and backwards compatibility
 
