@@ -11,6 +11,7 @@ import { captureReviewSnapshot, sameReviewSnapshot, validateReviewReport, storeR
 import { sourceDigest } from "./quality-pipeline.mjs";
 
 const PROVIDERS = ["codex", "claude", "gemini"];
+const CODEX_DISABLED_FEATURES = ["apps", "plugins", "hooks", "shell_snapshot", "shell_snapshot_v2"];
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_CHANGE_EVIDENCE_BYTES = 8 * 1024 * 1024;
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -216,9 +217,9 @@ function validateCodexConfiguration(response, codexHome) {
   if (config.approval_policy !== "never" || config.approvals_reviewer !== "user" || config.sandbox_mode !== "read-only") {
     throw new Error("Codex read-only permission preflight could not confirm never/user/read-only under the effective policy.");
   }
-  if (!plainObject(config.features) || ["apps", "plugins", "hooks"].some(name => config.features[name] !== false)
+  if (!plainObject(config.features) || CODEX_DISABLED_FEATURES.some(name => config.features[name] !== false)
       || (config.notify != null && (!Array.isArray(config.notify) || config.notify.length !== 0))) {
-    throw new Error("Codex read-only permission preflight could not confirm disabled hooks, notifications and remote tools under the effective policy.");
+    throw new Error("Codex read-only permission preflight could not confirm disabled hooks, shell snapshots, notifications and remote tools under the effective policy.");
   }
   if (config.mcp_servers != null && (!plainObject(config.mcp_servers)
       || Object.values(config.mcp_servers).some(server => !plainObject(server) || server.enabled !== false))) {
@@ -445,23 +446,25 @@ async function invokeProvider(provider, project, contextFile, timeoutMs, runId) 
   const deadline = Date.now() + timeoutMs;
   const configuration = [];
   if (provider.name === "codex") {
-    // Lifecycle hooks and legacy notifications execute outside the command
-    // sandbox. Restrict only these capabilities and remote tools for this run;
+    // Lifecycle hooks, legacy notifications and legacy shell snapshot startup
+    // execute outside the command sandbox. Disable both independent snapshot
+    // modes and remote tools for this run, with the same feature set verified
+    // by both preflights before inference. Restrict only these capabilities;
     // retain the user's unrelated model, authentication and transport settings.
-    configuration.push("--config", "features.apps=false", "--config", "features.plugins=false", "--config", "features.hooks=false", "--config", "notify=[]", "--config", 'approval_policy="never"', "--config", 'approvals_reviewer="user"', "--config", 'sandbox_mode="read-only"');
+    configuration.push(...CODEX_DISABLED_FEATURES.flatMap(name => ["--config", `features.${name}=false`]), "--config", "notify=[]", "--config", 'approval_policy="never"', "--config", 'approvals_reviewer="user"', "--config", 'sandbox_mode="read-only"');
     if (process.platform === "win32") configuration.push("--config", 'windows.sandbox="elevated"', "--config", "windows.allow_mxc=false");
     // `features list` loads effective configuration without starting a session.
     // A missing/renamed flag, malformed result or managed requirement must not
-    // silently turn this supposedly read-only invocation into a hook launcher.
+    // silently allow startup side effects in a supposedly read-only invocation.
     const featureInspection = launchSpec(provider.executable, [...configuration, "features", "list"]);
     const features = await providerProcess(featureInspection, project, env, Math.max(1, deadline - Date.now()));
-    if (features.error) throw new Error(`Codex read-only hook preflight failed: ${features.error}`);
-    if (features.status !== 0) throw new Error("Codex read-only hook preflight failed; hook restrictions may be unsupported or prevented by managed policy.");
+    if (features.error) throw new Error(`Codex read-only startup preflight failed: ${features.error}`);
+    if (features.status !== 0) throw new Error("Codex read-only startup preflight failed; startup restrictions may be unsupported or prevented by managed policy.");
     const featureLines = features.stdout.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
-    if (Buffer.byteLength(features.stdout) > MAX_JSON_BYTES || ["apps", "plugins", "hooks"].some(name => {
+    if (Buffer.byteLength(features.stdout) > MAX_JSON_BYTES || CODEX_DISABLED_FEATURES.some(name => {
       const entries = featureLines.filter(parts => parts[0] === name);
       return entries.length !== 1 || entries[0].length < 3 || entries[0].at(-1) !== "false";
-    })) throw new Error("Codex read-only hook preflight could not confirm disabled hooks, apps and plugins under the effective policy.");
+    })) throw new Error("Codex read-only startup preflight could not confirm disabled hooks, shell snapshots, apps and plugins under the effective policy.");
     features.stdout = "";
     // A command sandbox also does not constrain remote tools. Disable every
     // effective configured MCP server after disabling connector/plugin discovery.

@@ -12,7 +12,8 @@ const project = process.env.WEB_KIT_CODE_REVIEW_PROJECT_ROOT;
 const contextFile = process.env.WEB_KIT_CODE_REVIEW_CONTEXT_FILE;
 const runId = process.env.WEB_KIT_CODE_REVIEW_RUN_ID;
 const mode = process.env.WEB_KIT_TEST_CODE_REVIEW_MODE || "normal";
-const restrictedConfiguration = ["--config", "features.apps=false", "--config", "features.plugins=false", "--config", "features.hooks=false", "--config", "notify=[]", "--config", 'approval_policy="never"', "--config", 'approvals_reviewer="user"', "--config", 'sandbox_mode="read-only"'];
+const restrictedConfiguration = ["--config", "features.apps=false", "--config", "features.plugins=false", "--config", "features.hooks=false", "--config", "features.shell_snapshot=false", "--config", "features.shell_snapshot_v2=false", "--config", "notify=[]", "--config", 'approval_policy="never"', "--config", 'approvals_reviewer="user"', "--config", 'sandbox_mode="read-only"'];
+const snapshotFeatures = ["shell_snapshot", "shell_snapshot_v2"];
 if (process.platform === "win32") restrictedConfiguration.push("--config", 'windows.sandbox="elevated"', "--config", "windows.allow_mxc=false");
 const servers = mode === "empty-servers" ? [] : ["workspace", "docs.tools", 'quoted"server'];
 const home = process.env.CODEX_HOME ? fs.realpathSync.native(path.resolve(process.env.CODEX_HOME)) : path.join(process.env.HOME || "", ".codex");
@@ -33,6 +34,25 @@ function configuredValue(name, fallback) {
     if (configured) value = JSON.parse(configured);
   }
   return configOverrides.has(name) ? JSON.parse(configOverrides.get(name)) : value;
+}
+function configuredFeature(name, fallback) {
+  let value = fallback;
+  for (const file of [path.join(home, "config.toml"), path.join(process.cwd(), ".codex/config.toml")]) {
+    if (!fs.existsSync(file)) continue;
+    const configured = fs.readFileSync(file, "utf8").match(new RegExp(`^${name}\\s*=\\s*(true|false)\\s*$`, "m"))?.[1];
+    if (configured) value = configured === "true";
+  }
+  const override = configOverrides.get(`features.${name}`);
+  return override === undefined ? value : JSON.parse(override);
+}
+function shellSnapshot() {
+  const startup = process.env.WEB_KIT_TEST_SHELL_STARTUP_SCRIPT;
+  if (!startup || (!configuredFeature("shell_snapshot", true) && !configuredFeature("shell_snapshot_v2", false))) return;
+  // Model snapshot startup with a disposable command, never a real login
+  // shell or the user's shell initialization files. The command really writes
+  // outside the reviewed project, before any inference output is produced.
+  const result = spawnSync(process.execPath, [startup], { cwd: process.cwd(), env: process.env, encoding: "utf8", windowsHide: true, timeout: 5000 });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
 }
 function permissionProbe() {
   const command = ["node", ".codex/write-permission-marker.cjs"];
@@ -85,6 +105,7 @@ if (args.includes("--fixture-startup-only")) {
 }
 if (args.includes("--fixture-notify-only")) { legacyNotification(); process.exit(0); }
 if (args.includes("--fixture-permission-only")) { permissionProbe(); process.exit(0); }
+if (args.includes("--fixture-snapshot-only")) { shellSnapshot(); process.exit(0); }
 const recordAudit = (entry) => {
   if (process.env.WEB_KIT_TEST_CODE_REVIEW_AUDIT) fs.appendFileSync(process.env.WEB_KIT_TEST_CODE_REVIEW_AUDIT, JSON.stringify(entry) + "\n");
 };
@@ -138,7 +159,12 @@ if (args.includes("app-server")) {
     } else if (step === 2) {
       assert.deepEqual(request, { id: 2, method: "config/read", params: { includeLayers: true, cwd: project } });
       if (mode === "configuration-preflight-missing-response") process.exit(0);
-      const config = { approval_policy: configuredValue("approval_policy", "on-request"), approvals_reviewer: configuredValue("approvals_reviewer", "user"), sandbox_mode: configuredValue("sandbox_mode", "workspace-write"), features: { apps: false, plugins: false, hooks: false }, notify: [], mcp_servers: Object.fromEntries(servers.map(name => [name, { enabled: false }])), windows: { sandbox: "elevated", allow_mxc: false }, model: "preserved-user-model", model_providers: { fixture: { api_key: "DO_NOT_LEAK_PREFLIGHT_SECRET" } } };
+      const config = { approval_policy: configuredValue("approval_policy", "on-request"), approvals_reviewer: configuredValue("approvals_reviewer", "user"), sandbox_mode: configuredValue("sandbox_mode", "workspace-write"), features: { apps: false, plugins: false, hooks: false, ...Object.fromEntries(snapshotFeatures.map(name => [name, configuredFeature(name, name === "shell_snapshot")])) }, notify: [], mcp_servers: Object.fromEntries(servers.map(name => [name, { enabled: false }])), windows: { sandbox: "elevated", allow_mxc: false }, model: "preserved-user-model", model_providers: { fixture: { api_key: "DO_NOT_LEAK_PREFLIGHT_SECRET" } } };
+      for (const name of snapshotFeatures) {
+        if (mode === `configuration-preflight-${name}-missing`) delete config.features[name];
+        if (mode === `configuration-preflight-${name}-enabled`) config.features[name] = true;
+        if (mode === `configuration-preflight-${name}-malformed`) config.features[name] = "false";
+      }
       if (mode === "configuration-preflight-approval") config.approval_policy = "on-request";
       if (mode === "configuration-preflight-reviewer") config.approvals_reviewer = "auto_review";
       if (mode === "configuration-preflight-sandbox") config.sandbox_mode = "workspace-write";
@@ -171,7 +197,7 @@ if (args.includes("app-server")) {
   process.exit(0);
 }
 if (args.includes("features") && args.includes("list")) {
-  assert.deepEqual(args, [...restrictedConfiguration, "features", "list"], "Codex must restrict hooks before inspecting effective feature policy.");
+  assert.deepEqual(args, [...restrictedConfiguration, "features", "list"], "Codex must restrict hooks and shell snapshots before inspecting effective feature policy.");
   assert.equal(process.env.WEB_KIT_CONTEXT_SUPERVISOR_BYPASS, "1");
   assert.equal(process.env.WEB_KIT_CODE_REVIEW_ACTIVE, "1");
   assert.equal(process.cwd(), project);
@@ -182,6 +208,11 @@ if (args.includes("features") && args.includes("list")) {
   console.log("apps stable false\nplugins stable false");
   if (mode !== "hook-preflight-missing") console.log(`hooks stable ${mode === "hook-preflight-enabled" ? "true" : "false"}`);
   if (mode === "hook-preflight-duplicate") console.log("hooks stable true");
+  for (const name of snapshotFeatures) {
+    if (mode === `hook-preflight-${name}-missing`) continue;
+    const enabled = mode === `hook-preflight-${name}-enabled` ? true : configuredFeature(name, name === "shell_snapshot");
+    console.log(`${name} stable ${mode === `hook-preflight-${name}-malformed` ? '"false"' : enabled}`);
+  }
   process.exit(0);
 }
 if (args.includes("mcp") && args.includes("list")) {
@@ -208,6 +239,7 @@ const provider = args.includes("exec") ? "codex" : args.includes("--permission-m
 assert.notEqual(provider, "unsupported", "An unsupported provider was launched.");
 startupHooks(provider);
 if (provider === "codex") {
+  shellSnapshot();
   permissionProbe();
   assert.deepEqual(args.slice(0, args.indexOf("exec")), finalConfiguration, "Codex must disable every listed MCP server and prevent approvals without model or effort overrides.");
   assert(args.includes("--strict-config"), "Inference must reject unsupported protection settings just like its preflights.");

@@ -14,12 +14,15 @@ const project = path.join(root, "project with spaces");
 const audit = path.join(root, "provider-audit.jsonl");
 const hookMarker = path.join(root, "startup-hook-marker");
 const permissionMarker = path.join(root, "permission-marker");
+const snapshotMarker = path.join(root, "shell-snapshot-marker");
+const shellStartup = path.join(root, "shell-startup.cjs");
 const managedHooks = path.join(root, "managed-settings.json");
 const providerHome = path.join(root, "provider-home");
 const systemHome = path.join(root, "provider-system");
 const task = "REVIEW-RUNNER";
+const snapshotEvidenceFailures = ["shell_snapshot", "shell_snapshot_v2"].flatMap(name => ["missing", "enabled", "malformed"].map(failure => `${name}-${failure}`));
 const fixtureEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("CODEX_EXEC_SERVER_")));
-const env = { ...fixtureEnv, CODEX_HOME: providerHome, WEB_KIT_CODE_REVIEW_CODEX_BIN: fixture, WEB_KIT_CODE_REVIEW_CLAUDE_BIN: fixture, WEB_KIT_CODE_REVIEW_GEMINI_BIN: fixture, WEB_KIT_TEST_CODE_REVIEW_AUDIT: audit, WEB_KIT_TEST_CODE_REVIEW_DIFF_MARKERS: "1", WEB_KIT_TEST_HOOK_MARKER: hookMarker, WEB_KIT_TEST_PERMISSION_MARKER: permissionMarker, WEB_KIT_TEST_CODE_REVIEW_SYSTEM_HOME: systemHome, GIT_EXTERNAL_DIFF: path.join(root, "external-diff-must-not-run") };
+const env = { ...fixtureEnv, CODEX_HOME: providerHome, WEB_KIT_CODE_REVIEW_CODEX_BIN: fixture, WEB_KIT_CODE_REVIEW_CLAUDE_BIN: fixture, WEB_KIT_CODE_REVIEW_GEMINI_BIN: fixture, WEB_KIT_TEST_CODE_REVIEW_AUDIT: audit, WEB_KIT_TEST_CODE_REVIEW_DIFF_MARKERS: "1", WEB_KIT_TEST_HOOK_MARKER: hookMarker, WEB_KIT_TEST_PERMISSION_MARKER: permissionMarker, WEB_KIT_TEST_SHELL_SNAPSHOT_MARKER: snapshotMarker, WEB_KIT_TEST_SHELL_STARTUP_SCRIPT: shellStartup, WEB_KIT_TEST_CODE_REVIEW_SYSTEM_HOME: systemHome, GIT_EXTERNAL_DIFF: path.join(root, "external-diff-must-not-run") };
 const write = (relative, content) => { const file = path.join(project, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); };
 const readJob = () => JSON.parse(fs.readFileSync(path.join(project, `.agent-core/state/jobs/${task}.json`), "utf8"));
 const readAudit = () => fs.readFileSync(audit, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
@@ -35,6 +38,7 @@ function review(provider = "codex", mode = "normal", expected = 0, extra = [], e
   for (const secret of ["DO_NOT_LEAK_PROVIDER_DETAIL", "DO_NOT_LEAK_PREFLIGHT_SECRET"]) assert(!result.stdout.includes(secret) && !result.stderr.includes(secret), "Raw provider or tool-configuration secrets leaked.");
   assert(!fs.existsSync(hookMarker), "The read-only runner allowed a configured hook to write outside the project.");
   assert(!fs.existsSync(permissionMarker), "The read-only runner allowed an approval or rule to bypass the sandbox.");
+  assert(!fs.existsSync(snapshotMarker), "The read-only runner allowed shell snapshot startup to write outside the project before inference.");
   return JSON.parse(result.stdout);
 }
 function verify() {
@@ -46,6 +50,18 @@ try {
   fs.mkdirSync(project);
   fs.mkdirSync(providerHome);
   fs.mkdirSync(systemHome);
+  fs.writeFileSync(shellStartup, 'require("node:fs").writeFileSync(process.env.WEB_KIT_TEST_SHELL_SNAPSHOT_MARKER, "shell snapshot startup executed\\n");\n');
+  command(process.execPath, [fixture, "--fixture-snapshot-only"]);
+  assert.equal(fs.readFileSync(snapshotMarker, "utf8"), "shell snapshot startup executed\n", "Default-enabled shell snapshots must really execute the disposable startup command.");
+  fs.rmSync(snapshotMarker);
+  const snapshotRestriction = ["--config", "features.shell_snapshot=false", "--config", "features.shell_snapshot_v2=false"];
+  command(process.execPath, [fixture, "--fixture-snapshot-only", ...snapshotRestriction]);
+  assert(!fs.existsSync(snapshotMarker), "Disabling both snapshot implementations must suppress the startup command.");
+  for (const feature of ["shell_snapshot", "shell_snapshot_v2"]) {
+    command(process.execPath, [fixture, "--fixture-snapshot-only", ...snapshotRestriction, "--config", `features.${feature}=true`]);
+    assert.equal(fs.readFileSync(snapshotMarker, "utf8"), "shell snapshot startup executed\n", `An enabled ${feature} must execute the disposable startup command.`);
+    fs.rmSync(snapshotMarker);
+  }
   fs.writeFileSync(path.join(providerHome, "config.toml"), 'model = "preserved-user-model"\napproval_policy = "on-request"\napprovals_reviewer = "auto_review"\nsandbox_mode = "read-only"\n');
   write("src/feature.js", "export function canCancel() { return false; }\n");
   write("docs/change-evidence.md", "baseline-evidence-marker\n");
@@ -56,7 +72,7 @@ try {
   write(".codex/write-permission-marker.cjs", 'require("node:fs").writeFileSync(process.env.WEB_KIT_TEST_PERMISSION_MARKER, "permission bypass executed\\n");\n');
   const hooks = { SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "node .codex/write-hook-marker.cjs" }] }] };
   write(".codex/hooks.json", JSON.stringify({ hooks }) + "\n");
-  write(".codex/config.toml", 'model = "preserved-user-model"\nmodel_provider = "preserved-auth-provider"\nnotify = ["node", ".codex/write-hook-marker.cjs"]\n[features]\nhooks = true\n');
+  write(".codex/config.toml", 'model = "preserved-user-model"\nmodel_provider = "preserved-auth-provider"\nnotify = ["node", ".codex/write-hook-marker.cjs"]\n[features]\nhooks = true\nshell_snapshot = true\nshell_snapshot_v2 = true\n');
   write(".claude/settings.json", JSON.stringify({ model: "preserved-user-model", env: { PRESERVED_PROVIDER_SETTING: "unchanged" }, hooks }) + "\n");
   fs.writeFileSync(managedHooks, JSON.stringify({ hooks }) + "\n");
   const configurationFiles = [".codex/hooks.json", ".codex/config.toml", ".claude/settings.json"].map(file => path.join(project, file)).concat(path.join(providerHome, "config.toml"));
@@ -178,15 +194,15 @@ try {
   assert.equal(readJob().quality.code_review.status, "BLOCKED", "Missing provider must invalidate earlier approval.");
   assert.equal(review("codex", "exit", 4).verdict, "VERIFICATION BLOCKED");
   assert.equal(review("codex", "timeout", 4, ["--timeout", "1"]).verdict, "VERIFICATION BLOCKED");
-  for (const mode of ["hook-preflight-exit", "hook-preflight-malformed", "hook-preflight-missing", "hook-preflight-enabled", "hook-preflight-duplicate", "hook-preflight-timeout"]) {
+  for (const mode of ["hook-preflight-exit", "hook-preflight-malformed", "hook-preflight-missing", "hook-preflight-enabled", "hook-preflight-duplicate", "hook-preflight-timeout", ...snapshotEvidenceFailures.map(failure => `hook-preflight-${failure}`)]) {
     const previousRecords = readAudit();
     const failedPreflight = review("codex", mode, 4, mode === "hook-preflight-timeout" ? ["--timeout", "1"] : []);
     assert.equal(failedPreflight.verdict, "VERIFICATION BLOCKED");
-    assert(failedPreflight.reasons.some(reason => reason.includes("read-only hook preflight")), "A failed effective hook-policy check must explain its block.");
+    assert(failedPreflight.reasons.some(reason => reason.includes("read-only startup preflight")), "A failed effective startup-feature check must explain its block.");
     assert.equal(readJob().quality.code_review.status, "BLOCKED");
     const launched = readAudit().slice(previousRecords.length);
     assert.equal(launched.length, 1);
-    assert.equal(launched[0].kind, "hook-preflight", "Unconfirmed hook isolation must block before MCP inspection or inference.");
+    assert.equal(launched[0].kind, "hook-preflight", "Unconfirmed hook or snapshot isolation must block before MCP inspection or inference.");
   }
   for (const mode of ["preflight-exit", "preflight-malformed", "preflight-unsupported", "preflight-duplicate", "preflight-timeout"]) {
     const inferenceCount = readAudit().filter(entry => entry.kind === "review").length;
@@ -204,7 +220,7 @@ try {
     assert.equal(readJob().quality.code_review.status, "BLOCKED");
     assert(!readAudit().slice(before).some(entry => ["configuration-preflight", "review"].includes(entry.kind)), "Unverified managed requirements must stop before app-server inspection and inference.");
   }
-  for (const mode of ["configuration-preflight-exit", "configuration-preflight-malformed", "configuration-preflight-wrong-id", "configuration-preflight-home-mismatch", "configuration-preflight-platform-mismatch", "configuration-preflight-missing-response", "configuration-preflight-missing-layers", "configuration-preflight-missing-system", "configuration-preflight-unknown-layer", "configuration-preflight-approval", "configuration-preflight-reviewer", "configuration-preflight-sandbox", "configuration-preflight-notify", "configuration-preflight-mcp", "configuration-preflight-late-policy", "configuration-preflight-timeout", ...(process.platform === "win32" ? ["configuration-preflight-windows", "configuration-preflight-mxc"] : [])]) {
+  for (const mode of ["configuration-preflight-exit", "configuration-preflight-malformed", "configuration-preflight-wrong-id", "configuration-preflight-home-mismatch", "configuration-preflight-platform-mismatch", "configuration-preflight-missing-response", "configuration-preflight-missing-layers", "configuration-preflight-missing-system", "configuration-preflight-unknown-layer", "configuration-preflight-approval", "configuration-preflight-reviewer", "configuration-preflight-sandbox", "configuration-preflight-notify", "configuration-preflight-mcp", "configuration-preflight-late-policy", "configuration-preflight-timeout", ...snapshotEvidenceFailures.map(failure => `configuration-preflight-${failure}`), ...(process.platform === "win32" ? ["configuration-preflight-windows", "configuration-preflight-mxc"] : [])]) {
     const inferenceCount = readAudit().filter(entry => entry.kind === "review").length;
     const blocked = review("codex", mode, 4, mode.endsWith("timeout") ? ["--timeout", "1"] : []);
     assert.equal(blocked.verdict, "VERIFICATION BLOCKED");
@@ -263,7 +279,7 @@ try {
   const clients = records.filter(entry => entry.kind === "configuration-client");
   assert.equal(new Set(clients.map(entry => entry.name)).size, clients.length, "Each inspection must have a unique client name without persisted remote-control enrollment.");
   assert(invocations.every(item => item.provider === "codex"), "Providers without an enforceable read-only hook policy must not launch.");
-  assert.deepEqual(configurationFiles.map(file => fs.readFileSync(file, "utf8")), originalConfiguration, "Per-run restrictions must preserve configured hooks, automatic reviewer, model, auth provider and unrelated settings.");
+  assert.deepEqual(configurationFiles.map(file => fs.readFileSync(file, "utf8")), originalConfiguration, "Per-run restrictions must preserve configured hooks, shell snapshots, automatic reviewer, model, auth provider and unrelated settings.");
   assert(!fs.readFileSync(audit, "utf8").includes("DO_NOT_LEAK_PREFLIGHT_SECRET"));
   const reportDirectory = path.join(project, ".agent-core/state/code-reviews", task);
   for (const report of fs.readdirSync(reportDirectory)) assert(!fs.readFileSync(path.join(reportDirectory, report), "utf8").includes("DO_NOT_LEAK_PREFLIGHT_SECRET"), "Raw MCP transport configuration must not be persisted in review artifacts.");
