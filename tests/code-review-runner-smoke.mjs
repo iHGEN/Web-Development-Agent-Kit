@@ -34,6 +34,7 @@ function command(bin, args, expected = 0, extraEnv = {}) {
 const git = (...args) => command("git", args);
 const progress = (...args) => JSON.parse(command(process.execPath, [path.join(runtime, "work-progress.mjs"), ...args, "--project", project]).stdout);
 function review(provider = "codex", mode = "normal", expected = 0, extra = [], extraEnv = {}) {
+  if (process.env.CI) console.log(`Review runner case: ${provider}/${mode}`);
   const result = command(process.execPath, [path.join(runtime, "code-review.mjs"), "--project", project, "--task-id", task, "--provider", provider, "--json", ...extra], expected, { WEB_KIT_TEST_CODE_REVIEW_MODE: mode, ...extraEnv });
   for (const secret of ["DO_NOT_LEAK_PROVIDER_DETAIL", "DO_NOT_LEAK_PREFLIGHT_SECRET"]) assert(!result.stdout.includes(secret) && !result.stderr.includes(secret), "Raw provider or tool-configuration secrets leaked.");
   assert(!fs.existsSync(hookMarker), "The read-only runner allowed a configured hook to write outside the project.");
