@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
-const fixture = path.join(repo, "tests", "fixtures", "mock-transparent-provider.mjs");
-if (process.platform !== "win32") fs.chmodSync(fixture, 0o755);
+const fixtureSource = path.join(repo, "tests", "fixtures", "mock-transparent-provider.mjs");
+const fixtureSourceBytes = fs.readFileSync(fixtureSource);
+const fixtureSourceMode = fs.statSync(fixtureSource).mode;
 
 function run(command, args, options = {}) {
   const shell = options.shell ?? (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command));
@@ -28,6 +29,10 @@ function calls(project, provider) {
 }
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-transparent-home-"));
+// Never change a tracked test fixture: run an executable copy in the disposable home.
+const fixture = path.join(tempHome, "mock-transparent-provider.mjs");
+fs.copyFileSync(fixtureSource, fixture);
+if (process.platform !== "win32") fs.chmodSync(fixture, 0o755);
 const webKitHome = path.join(tempHome, ".web-kit");
 const commonEnv = {
   ...process.env,
@@ -149,4 +154,6 @@ const pass = run(shimPath("codex"), ["hello"], { cwd: outside, env: outsideEnv }
 assert(pass.stdout.includes("codex passthrough"), "outside Web-Kit project did not pass through to real provider");
 assert(!fs.existsSync(path.join(outside, ".agent-core")), "outside pass-through created Web-Kit project state");
 
+assert(fs.readFileSync(fixtureSource).equals(fixtureSourceBytes), "transparent smoke modified tracked fixture bytes");
+assert(fs.statSync(fixtureSource).mode === fixtureSourceMode, "transparent smoke modified tracked fixture mode");
 console.log(`Transparent Context Supervisor smoke: PASS (${process.platform})`);
