@@ -185,6 +185,7 @@ if (args.join(' ') === 'view @ihgen/web-kit version --json') {
   console.log(JSON.stringify(scenario.latest)); process.exit(0);
 }
 if (args.length === 4 && args[0] === 'view' && args[1].startsWith('@ihgen/web-kit@') && args[2] === 'version' && args[3] === '--json') {
+  if (Object.hasOwn(scenario, 'rawVersion')) { process.stdout.write(scenario.rawVersion); process.exit(0); }
   if (scenario.lookup === 'published') { console.log(JSON.stringify(args[1].slice('@ihgen/web-kit@'.length))); process.exit(0); }
   console.error(scenario.lookup === 'missing' ? 'npm error code E404: No match found for version' : 'npm error code EAI_AGAIN: registry unavailable');
   process.exit(scenario.lookup === 'missing' ? 1 : 7);
@@ -243,7 +244,41 @@ console.error('Unexpected npm operation: ' + args.join(' ')); process.exit(97);
   succeeded(tagCheck(newRelease));
   assert.equal(git("ls-remote", "--tags", "origin", "refs/tags/v1.5.1*"), newTag);
 
-  console.log("npm release intent smoke passed: unchanged-version validation, explicit releases, multi-commit push baselines, invalid evidence rejection, workflow gates, registry safeguards and immutable local tags.");
+  // Exercise the actual final workflow step. Replace only its wait command so
+  // rejected registry responses still exhaust the real bounded retry loop.
+  fs.writeFileSync(path.join(bin, "sleep"), '#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "5" ] || exit 97\nexit 0\n', { mode: 0o755 });
+  const verification = step("Verify published package and release tag").script;
+  function verifyPublished(rawVersion, expectedSha = newRelease) {
+    fs.writeFileSync(scenarioFile, JSON.stringify(rawVersion === undefined ? { lookup: "network" } : { rawVersion }));
+    fs.writeFileSync(npmLog, "");
+    const result = run("bash", ["-c", verification], { env: {
+      ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+      GITHUB_SHA: expectedSha, WEB_KIT_RELEASE_TEST_NPM_LOG: npmLog,
+      WEB_KIT_RELEASE_TEST_SCENARIO: scenarioFile,
+    } });
+    const calls = fs.readFileSync(npmLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(calls.every(args => args.join(" ") === "view @ihgen/web-kit@1.5.1 version --json"), "Final verification must only query the exact release version.");
+    return { result, calls };
+  }
+  for (const raw of ['"1.5.1"\n', '[\n  "1.5.1"\n]\n']) {
+    const verified = verifyPublished(raw);
+    succeeded(verified.result);
+    assert.equal(verified.calls.length, 1, "Both supported npm JSON shapes should verify immediately.");
+    assert.match(verified.result.stdout, /Verified @ihgen\/web-kit@1\.5\.1 on npm/);
+  }
+  for (const raw of ['"1.5.0"', '[]', '["1.5.1","1.5.1"]', '["1.5.1","1.5.0"]', '[["1.5.1"]]', '{"version":"1.5.1"}', 'null', '{', "", undefined]) {
+    const rejected = verifyPublished(raw);
+    assert.equal(rejected.result.status, 1, "Unmatched or malformed registry evidence must not verify a release.");
+    assert.equal(rejected.calls.length, 12, "Verification retries must remain bounded and must not publish again.");
+    assert.match(rejected.result.stderr, /npm registry verification did not observe release 1\.5\.1/);
+  }
+  const wrongTag = verifyPublished('["1.5.1"]', base);
+  assert.notEqual(wrongTag.result.status, 0, "A valid registry response must not bypass the exact tag SHA check.");
+  assert.equal(wrongTag.calls.length, 1);
+  assert.doesNotMatch(wrongTag.result.stdout, /Verified @ihgen\/web-kit/);
+  assert.equal(git("ls-remote", "--tags", "origin", "refs/tags/v1.5.1*"), newTag, "Final verification must leave the release tag unchanged.");
+
+  console.log("npm release intent smoke passed: unchanged-version validation, explicit releases, multi-commit push baselines, invalid evidence rejection, workflow gates, registry safeguards, immutable local tags and string/array publication verification.");
   console.log("Registry responses were mocked; tag operations used a disposable local bare repository. No hosted workflow or npm publication was executed.");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

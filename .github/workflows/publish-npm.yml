@@ -174,7 +174,7 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "Web Kit $TAG — indexed repository search and Graphify improvements"
+            git tag -a "$TAG" -m "Web Kit $TAG"
             git push origin "refs/tags/$TAG"
             echo "Created tag $TAG at $GITHUB_SHA."
           fi
@@ -202,7 +202,13 @@ jobs:
           VERSION="$(tr -d '\r\n' < VERSION)"
           for attempt in $(seq 1 12); do
             if FOUND="$(npm view "@ihgen/web-kit@$VERSION" version --json 2>/dev/null)"; then
-              if [ "$FOUND" = "\"$VERSION\"" ]; then
+              if node - "$VERSION" "$FOUND" <<'NODE'
+          let found;
+          try { found = JSON.parse(process.argv[3]); } catch { process.exit(1); }
+          if (Array.isArray(found) && found.length === 1) found = found[0];
+          process.exit(found === process.argv[2] ? 0 : 1);
+          NODE
+              then
                 test "$(git rev-list -n1 "v$VERSION")" = "$GITHUB_SHA"
                 echo "Verified @ihgen/web-kit@$VERSION on npm and v$VERSION at $GITHUB_SHA."
                 exit 0
