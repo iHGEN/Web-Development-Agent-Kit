@@ -14,8 +14,10 @@ const SEATBELT = "/usr/bin/sandbox-exec";
 const PROBE = fileURLToPath(new URL("./review-sandbox-probe.mjs", import.meta.url));
 const MAX_FILES = 1024;
 const MAX_READ_BYTES = 32 * 1024 * 1024;
-const MAX_REPOSITORY_ENTRIES = 100000;
-const MAX_REPOSITORY_DIRECTORIES = 10000;
+// Only directory paths/frontier consume space as the scan grows. Bound
+// those, and bound traversal time with the review's existing shared deadline.
+const MAX_REPOSITORY_DIRECTORIES = 100000;
+const DEFAULT_REPOSITORY_SCAN_TIMEOUT_MS = 180000;
 const PROBE_FIELDS = Object.freeze([
   "reads_ok", "writable_opens_denied", "file_create_denied", "scratch_writable",
   "symlink_write_denied", "hardlink_denied", "descendant_write_denied",
@@ -172,35 +174,49 @@ export function checkExistingInstallationId({ codexHome, repositoryRoot }) {
 }
 
 function assertNoRepositoryAlias(repository, installationId, reviewDeadline) {
-  const deadline = Math.min(Date.now() + 10000, reviewDeadline || Infinity);
+  const startedAt = Date.now();
   const pending = [];
   const visitedDirectories = new Set();
   let entries = 0;
+  const exhausted = (reason, directory) => {
+    throw new Error(`Outer sandbox repository alias scan exceeded its verification limits: ${reason}; `
+      + `${entries} entries, ${visitedDirectories.size} unique directories, ${Math.max(0, Date.now() - startedAt)} ms elapsed; `
+      + `directory ${JSON.stringify(directory)}. Review remains blocked; no incomplete scan can approve review.`);
+  };
+  const checkDeadline = directory => {
+    if (Date.now() >= reviewDeadline) exhausted("review deadline exhausted", directory);
+  };
   const queueDirectory = directory => {
+    checkDeadline(directory);
     const canonical = fs.realpathSync.native(directory);
-    if (!fs.statSync(canonical).isDirectory()) {
+    const stat = fs.statSync(canonical);
+    if (!stat.isDirectory()) {
       throw new Error("Outer sandbox repository alias scan encountered a changed directory; review remains blocked.");
     }
+    // Inspect every incoming edge before deduplicating canonical paths. Do not
+    // deduplicate by inode: mount aliases can share an inode while relative
+    // symlink targets resolve differently through their different parents.
+    if (within(installationId, canonical)) {
+      throw new Error("Codex installation_id is reachable through a repository symlink; the operational-file exception is blocked.");
+    }
+    checkDeadline(canonical);
     if (visitedDirectories.has(canonical)) return;
-    if (visitedDirectories.size >= MAX_REPOSITORY_DIRECTORIES || Date.now() >= deadline) {
-      throw new Error("Outer sandbox repository alias scan exceeded its verification limits; review remains blocked.");
+    if (visitedDirectories.size >= MAX_REPOSITORY_DIRECTORIES) {
+      exhausted(`unique-directory limit (${MAX_REPOSITORY_DIRECTORIES})`, canonical);
     }
     visitedDirectories.add(canonical);
     pending.push(canonical);
   };
   queueDirectory(repository);
   while (pending.length) {
-    if (Date.now() >= deadline) {
-      throw new Error("Outer sandbox repository alias scan exceeded its verification limits; review remains blocked.");
-    }
     const directory = pending.pop();
-    const opened = fs.opendirSync(directory);
+    checkDeadline(directory);
+    const opened = fs.opendirSync(directory, { bufferSize: 256 });
     try {
       let entry;
       while ((entry = opened.readSync()) !== null) {
-        if (++entries > MAX_REPOSITORY_ENTRIES || Date.now() >= deadline) {
-          throw new Error("Outer sandbox repository alias scan exceeded its verification limits; review remains blocked.");
-        }
+        entries++;
+        checkDeadline(directory);
         const file = path.join(directory, entry.name);
         // Recheck the leaf instead of trusting a stale directory entry's type.
         const current = fs.lstatSync(file);
@@ -222,6 +238,9 @@ function assertNoRepositoryAlias(repository, installationId, reviewDeadline) {
         }
       }
     } finally { opened.closeSync(); }
+    // A slow final read/close (including an empty directory) must not turn an
+    // expired review into a successful verification.
+    checkDeadline(directory);
   }
 }
 
@@ -236,6 +255,7 @@ export function captureRuntimeInstallation({ codexHome, repositoryRoot, evidence
   }
   const file = existing.path;
   const snapshot = existing.snapshot;
+  const scanDeadline = deadline ?? Date.now() + DEFAULT_REPOSITORY_SCAN_TIMEOUT_MS;
   if (within(file, evidence)) throw new Error("Codex installation_id must be outside the review evidence.");
   for (const policyFile of policyFiles) {
     let policy;
@@ -251,14 +271,20 @@ export function captureRuntimeInstallation({ codexHome, repositoryRoot, evidence
   // Only its exact data permission is granted; creation, rename, unlink and
   // permission changes remain denied. The exception is operational metadata,
   // never repository/configuration/rules access.
-  const assertUnchanged = () => {
+  const assertInstallationUnchanged = () => {
     let current;
     try { current = runtimeSnapshot(file, readBoundedRecord(file, 256)); }
     catch { throw new Error("Codex operational installation_id changed during review; the result cannot approve the task."); }
     if (Object.keys(snapshot).some(key => current[key] !== snapshot[key])) {
       throw new Error("Codex operational installation_id changed during review; the result cannot approve the task.");
     }
-    assertNoRepositoryAlias(repository, file, deadline);
+  };
+  const assertUnchanged = () => {
+    assertInstallationUnchanged();
+    assertNoRepositoryAlias(repository, file, scanDeadline);
+    // A large repository may take time to traverse. Do not accept an ID that
+    // changed after the first read while its aliases were being inspected.
+    assertInstallationUnchanged();
   };
   assertUnchanged();
   return Object.freeze({ path: file, snapshot, assertUnchanged });

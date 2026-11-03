@@ -119,6 +119,147 @@ function inspectRealCodex(spec, childEnv) {
   });
 }
 
+function verifyAliasScanScalability(stateOptions, resetInstallation) {
+  const originalNow = Date.now;
+  const originalOpenDirectory = fs.opendirSync;
+  const slowRepository = path.join(root, "slow repository");
+  const emptyRepository = path.join(root, "empty repository");
+  fs.mkdirSync(slowRepository);
+  fs.mkdirSync(emptyRepository);
+  for (let index = 0; index < 24; index++) fs.writeFileSync(path.join(slowRepository, `source-${index}.txt`), "");
+  try {
+    // Model a slow filesystem without sleeping. The caller has budget left
+    // after ten seconds, so the old private ten-second cap must not reject it.
+    let now = originalNow();
+    const started = now;
+    Date.now = () => (now += 1000);
+    assert.doesNotThrow(() => captureRuntimeInstallation({
+      ...stateOptions, repositoryRoot: slowRepository, deadline: started + 120000,
+    }), "A complete scan taking more than ten seconds may use the caller's remaining review budget.");
+    assert(now - started > 10000, "The simulated scan must actually cross the former ten-second boundary.");
+    assert.throws(() => captureRuntimeInstallation({
+      ...stateOptions, repositoryRoot: slowRepository, deadline: now + 6000,
+    }), /repository alias scan.*review deadline exhausted/i, "An exhausted shared review deadline must still block the scan.");
+  } finally { Date.now = originalNow; }
+
+  try {
+    let now = originalNow();
+    const deadline = now + 5000;
+    Date.now = () => now;
+    fs.opendirSync = (...args) => {
+      const directory = originalOpenDirectory(...args);
+      if (args[0] === emptyRepository) {
+        const read = directory.readSync.bind(directory);
+        directory.readSync = () => {
+          const entry = read();
+          if (entry === null) now = deadline;
+          return entry;
+        };
+      }
+      return directory;
+    };
+    assert.throws(() => captureRuntimeInstallation({
+      ...stateOptions, repositoryRoot: emptyRepository, deadline,
+    }), /repository alias scan.*review deadline exhausted/i, "A final directory read finishing after the deadline must not produce a passing scan.");
+  } finally { Date.now = originalNow; fs.opendirSync = originalOpenDirectory; }
+
+  try {
+    let changed = false;
+    fs.opendirSync = (...args) => {
+      const directory = originalOpenDirectory(...args);
+      if (args[0] === emptyRepository) {
+        const read = directory.readSync.bind(directory);
+        directory.readSync = () => {
+          const entry = read();
+          if (!changed) {
+            changed = true;
+            fs.writeFileSync(installationFile, crypto.randomUUID());
+          }
+          return entry;
+        };
+      }
+      return directory;
+    };
+    assert.throws(() => captureRuntimeInstallation({
+      ...stateOptions, repositoryRoot: emptyRepository,
+    }), /installation_id changed during review/i, "An ID modified while a longer scan is running must invalidate that scan.");
+    assert.equal(changed, true, "The simulated concurrent write must reach the scan.");
+  } finally { fs.opendirSync = originalOpenDirectory; resetInstallation(); }
+  console.log("Alias scan shared deadlines, slow final reads and concurrent runtime-state protection: PASS");
+
+  const originalStat = fs.statSync;
+  const missingInodeRepository = path.join(root, "repository with ambiguous inode IDs");
+  const nestedDirectory = path.join(missingInodeRepository, "first", "second");
+  fs.mkdirSync(nestedDirectory, { recursive: true });
+  fs.symlinkSync(installationFile, path.join(nestedDirectory, "id-alias"));
+  try {
+    for (const reportedIdentity of [
+      { dev: 0, ino: 0 }, { dev: 1, ino: undefined }, { dev: 1, ino: -1 }, { dev: -1, ino: 1 }, { dev: 7, ino: 99 },
+    ]) {
+      const inspected = new Set();
+      fs.statSync = (...args) => {
+        const stat = originalStat(...args);
+        if (stat.isDirectory() && typeof args[0] === "string"
+            && (args[0] === missingInodeRepository || args[0].startsWith(missingInodeRepository + path.sep))) {
+          inspected.add(args[0]);
+          for (const [key, value] of Object.entries(reportedIdentity)) {
+            stat[key] = args[1]?.bigint && typeof value === "number" ? BigInt(value) : value;
+          }
+        }
+        return stat;
+      };
+      assert.throws(() => captureRuntimeInstallation({
+        ...stateOptions, repositoryRoot: missingInodeRepository,
+      }), /installation_id.*repository symlink/i, "Unavailable or colliding filesystem inode IDs must not collapse distinct canonical paths and hide a nested alias.");
+      for (const directory of [missingInodeRepository, path.dirname(nestedDirectory), nestedDirectory]) {
+        assert(inspected.has(directory), "The scan must reach every real directory despite ambiguous inode identities.");
+      }
+    }
+  } finally {
+    fs.statSync = originalStat;
+    fs.rmSync(missingInodeRepository, { recursive: true, force: true });
+  }
+  console.log("Alias scan canonical paths with unavailable or colliding inode IDs: PASS");
+
+  const largeRepository = path.join(root, "large repository");
+  const dependencies = path.join(largeRepository, "node_modules");
+  const externalDirectory = path.join(root, "large-external-cache");
+  const externalAlias = path.join(externalDirectory, "nested-id-alias");
+  const largeSource = path.join(largeRepository, "source.txt");
+  const protectedFiles = [source, ruleFile, installationFile].map(file => [file, fs.readFileSync(file)]);
+  try {
+    fs.mkdirSync(dependencies, { recursive: true });
+    fs.mkdirSync(externalDirectory);
+    fs.writeFileSync(path.join(largeRepository, ".gitignore"), "node_modules/\n");
+    fs.writeFileSync(largeSource, sourceText);
+    // A real dependency-shaped filesystem exceeds both former caps:
+    // 10,010 package directories and 100,100 regular files. Empty files keep
+    // the fixture inexpensive; no filesystem mocks hide an omitted subtree.
+    let lastPackage;
+    for (let index = 0; index < 10010; index++) {
+      lastPackage = path.join(dependencies, `package-${index}`);
+      fs.mkdirSync(lastPackage);
+      for (let file = 0; file < 10; file++) fs.writeFileSync(path.join(lastPackage, `source-${file}.js`), "");
+    }
+    fs.symlinkSync(externalDirectory, path.join(lastPackage, "external-cache"));
+    const options = { ...stateOptions, repositoryRoot: largeRepository, deadline: Date.now() + 120000 };
+    const captured = captureRuntimeInstallation(options);
+    fs.symlinkSync(installationFile, externalAlias);
+    assert.throws(() => captured.assertUnchanged(), /installation_id.*repository symlink/i,
+      "A new external alias inside ignored dependencies must invalidate a previously successful large scan.");
+    assert.throws(() => captureRuntimeInstallation(options), /installation_id.*repository symlink/i,
+      "A fresh large scan must reject the alias rather than skipping ignored or external directories.");
+    fs.unlinkSync(externalAlias);
+    assert.doesNotThrow(() => captured.assertUnchanged(), "Removing only the fixture's alias restores its original safe state.");
+    assert.equal(fs.readFileSync(largeSource, "utf8"), sourceText);
+    for (const [file, bytes] of protectedFiles) assert.deepEqual(fs.readFileSync(file), bytes, `${file} changed during alias verification.`);
+    console.log("Large ignored dependency tree, late external aliases and preserved files: PASS");
+  } finally {
+    fs.rmSync(largeRepository, { recursive: true, force: true });
+    fs.rmSync(externalDirectory, { recursive: true, force: true });
+  }
+}
+
 try {
   for (const directory of [project, rulesDirectory, evidence]) fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(source, sourceText);
@@ -260,6 +401,7 @@ try {
     assert.equal(fs.existsSync(installationFile), false, "Validation must not create the runtime ID itself.");
     resetInstallation();
     console.log("Runtime installation ID validity, identity and alias protection: PASS");
+    verifyAliasScanScalability(stateOptions, resetInstallation);
 
     const unprotectedScratch = path.join(root, "unprotected-probe-scratch");
     fs.mkdirSync(unprotectedScratch);
