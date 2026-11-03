@@ -187,7 +187,19 @@ The filesystem restrictions are inherited by descendants. Process-group cleanup 
 
 Linux and Windows reviews with `.rules` remain blocked until a native backend can enforce and verify that contract. Reviews without rule files keep the existing command sandbox; the macOS startup identity guard still applies. Remote execution environments and unsupported managed permission-profile modes remain blocked, and Windows still requires an explicit existing `CODEX_HOME` plus a verified supported Codex sandbox. Do not delete rules or supply a claimed verification flag to get past these checks. Configuration inspection starts no model session, although the provider may maintain its own local state/cache before outer isolation is established.
 
-Runner regression commands are `node tests/review-sandbox-proxy-smoke.mjs`, `node tests/review-sandbox-smoke.mjs` and `node tests/review-rules-isolation-smoke.mjs`. Portable assertions and protocol fixtures are separate from native verification: the latter reports `BLOCKED` on other platforms. Actual Codex coverage includes `execpolicy check` classification and contained app-server initialization/configuration without model inference; it reports `NOT RUN` when the required binary or native boundary is unavailable. A passing portable suite does not establish native sandbox enforcement. For mandatory native acceptance on macOS with Codex on `PATH`, run both sandbox and rules-isolation suites with `WEB_KIT_REQUIRE_NATIVE_SANDBOX_TEST=1`; unavailable native protection or required real-Codex coverage then causes a nonzero exit.
+For ongoing validation, run `npm run test:review-isolation` from the Web Kit source checkout. It runs the acceptance-command checks and all three isolation suites: `review-sandbox-proxy-smoke.mjs`, `review-sandbox-smoke.mjs` and `review-rules-isolation-smoke.mjs`. This is portable regression coverage, not native acceptance. Actual Codex coverage includes `execpolicy check` classification and contained app-server initialization/configuration without model inference; missing required native execution or Codex remains explicitly unverified.
+
+For complete acceptance, Dot or a macOS maintainer runs the following from a clean checkout of the reviewed Web Kit commit, with the real Codex CLI on `PATH`:
+
+```bash
+npm run verify:review-isolation -- \
+  --project /absolute/path/to/affected-project \
+  --task-id assigned-multiplayer-origins
+```
+
+First install that exact kit revision in the affected project and refresh its registered check evidence through the normal workflow. The acceptance command verifies the installed review runtime and instructions match the checkout; it does not install the kit, recreate task state, alter policies or execute the target project's tests. It requires the native suites with `WEB_KIT_REQUIRE_NATIVE_SANDBOX_TEST=1`, then runs the actual task review using the installed runner. A missing native case, real provider, matching runtime, fresh report or verified outer boundary prevents acceptance. A valid `NOT READY` task report remains `NOT READY`; it is not converted into a passing acceptance result.
+
+The command records the tested revision, platform and runtime versions, suite outputs and actual review result in a newly created report directory whose location it prints. Attach that report and logs to the PR. Portable success does not close the native acceptance gap. These npm commands run under the configured CI/CD owner; they do not dispatch GitHub Actions.
 
 `--provider claude` and `--provider gemini` are recognized but return `VERIFICATION BLOCKED` before launching either provider. Claude's per-run hook setting cannot suppress managed hooks, and its documented CLI does not provide a pre-inference effective-policy check. Gemini's read-only headless mode cannot preserve configured user policies safely. Use Codex for this review step until those restrictions can be enforced; other Web Kit workflows remain provider-neutral.
 

@@ -6,6 +6,10 @@
   "bin": {
     "web-kit": "bin/web-kit-entry.js"
   },
+  "scripts": {
+    "test:review-isolation": "node scripts/verify-review-isolation.mjs --portable",
+    "verify:review-isolation": "node scripts/verify-review-isolation.mjs"
+  },
   "files": [
     "bin",
     "bootstrap/remote-install.mjs"
