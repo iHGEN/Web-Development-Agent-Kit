@@ -36,6 +36,8 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      WEB_KIT_TEST_REF: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout
@@ -130,9 +132,9 @@ jobs:
           SAMPLE="$RUNNER_TEMP/web-kit-sample"
           TARBALL="./${{ steps.pack.outputs.tarball }}"
 
-          npx --yes "$TARBALL" scan --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE"
+          npx --yes "$TARBALL" scan --ref "$WEB_KIT_TEST_REF" --project "$SAMPLE"
           INSTALL_LOG="$RUNNER_TEMP/install.log"
-          npx --yes "$TARBALL" install --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE" | tee "$INSTALL_LOG"
+          npx --yes "$TARBALL" install --ref "$WEB_KIT_TEST_REF" --project "$SAMPLE" | tee "$INSTALL_LOG"
 
           test -f "$SAMPLE/AGENTS.md"
           test -f "$SAMPLE/CLAUDE.md"
@@ -180,6 +182,8 @@ jobs:
           const profile = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/index/project-profile.json'), 'utf8'));
           const cfg = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit.json'), 'utf8'));
           const policy = JSON.parse(fs.readFileSync(path.join(sample, '.agent-core/routing/context-policy.json'), 'utf8'));
+          const source = JSON.parse(fs.readFileSync(path.join(sample, '.agent-kit-source.json'), 'utf8'));
+          if (source.ref !== process.env.WEB_KIT_TEST_REF) throw new Error('installed source revision differs from the tested commit');
           if (profile.capabilities.graphify.detected !== false) process.exit(1);
           if (profile.capabilities.graphify.graph_ready !== false) process.exit(1);
           if (profile.capabilities.graphify.routing_mode !== 'standard') process.exit(1);
@@ -199,7 +203,7 @@ jobs:
           TARBALL="./${{ steps.pack.outputs.tarball }}"
           echo 'PROJECT OWNED CLAUDE RULE' >> "$SAMPLE/CLAUDE.md"
           BEFORE="$(sed '/WEB-AGENT-KIT:AI-ROLES:START/,/WEB-AGENT-KIT:AI-ROLES:END/d' "$SAMPLE/CLAUDE.md")"
-          npx --yes "$TARBALL" update --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE"
+          npx --yes "$TARBALL" update --ref "$WEB_KIT_TEST_REF" --project "$SAMPLE"
           AFTER="$(sed '/WEB-AGENT-KIT:AI-ROLES:START/,/WEB-AGENT-KIT:AI-ROLES:END/d' "$SAMPLE/CLAUDE.md")"
           test "$BEFORE" = "$AFTER"
           grep -q 'PROJECT OWNED CLAUDE RULE' "$SAMPLE/CLAUDE.md"
@@ -228,7 +232,7 @@ jobs:
           cat > "$SAMPLE/.mcp.json" <<'JSON'
           {"mcpServers":{"graphify":{"command":"managed-by-uv","args":["graphify-out/graph.json"]}}}
           JSON
-          npx --yes "$TARBALL" update --ref "${GITHUB_HEAD_REF:-main}" --project "$SAMPLE"
+          npx --yes "$TARBALL" update --ref "$WEB_KIT_TEST_REF" --project "$SAMPLE"
 
           MOCK="$RUNNER_TEMP/mock-graphify"
           LOG="$RUNNER_TEMP/graphify-calls.log"
