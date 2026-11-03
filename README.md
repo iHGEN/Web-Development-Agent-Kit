@@ -803,3 +803,7 @@ iHGEN/Web-Development-Agent-Kit@vX.Y.Z
 ```
 
 Create the matching GitHub tag before publishing the npm release.
+
+The npm workflow validates package identity, contents and release tests for ordinary changes even when `VERSION` is unchanged. These non-release pull requests and main-branch pushes skip npm availability checks and the tag/publish job. A version increase, compared with the pull request's base commit or the push event's previous commit, starts release validation. Missing comparison evidence or a version decrease fails validation.
+
+An explicit workflow dispatch requests release validation; publication remains restricted to `main` and retains the registry and immutable-tag safeguards. Changing package scripts or metadata alone does not request a release. Run `node tests/npm-release-intent-smoke.mjs` locally to check this routing and the existing release guards without publishing.

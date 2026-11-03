@@ -5,12 +5,16 @@ on:
     paths:
       - "VERSION"
       - "package.json"
+      - "scripts/npm-release-intent.mjs"
+      - "tests/npm-release-intent-smoke.mjs"
       - ".github/workflows/publish-npm.yml"
   push:
     branches: [main]
     paths:
       - "VERSION"
       - "package.json"
+      - "scripts/npm-release-intent.mjs"
+      - "tests/npm-release-intent-smoke.mjs"
       - ".github/workflows/publish-npm.yml"
   workflow_dispatch:
 
@@ -27,6 +31,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
+      release_requested: ${{ steps.release_intent.outputs.release_requested }}
       already_published: ${{ steps.registry.outputs.already_published }}
     steps:
       - name: Checkout candidate source
@@ -55,6 +60,10 @@ jobs:
           node --check pack/runtime/repository-search.mjs
           node --check pack/rules/graphify-refresh.mjs
 
+      - name: Detect release intent
+        id: release_intent
+        run: node scripts/npm-release-intent.mjs
+
       - name: Validate published package contents
         shell: bash
         run: |
@@ -78,9 +87,11 @@ jobs:
           set -euo pipefail
           node tests/repository-search-smoke.mjs
           node tests/work-progress-smoke.mjs
+          node tests/npm-release-intent-smoke.mjs
 
       - name: Confirm npm release availability
         id: registry
+        if: steps.release_intent.outputs.release_requested == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -122,7 +133,9 @@ jobs:
 
   publish:
     needs: validate
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: >-
+      needs.validate.outputs.release_requested == 'true' &&
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
