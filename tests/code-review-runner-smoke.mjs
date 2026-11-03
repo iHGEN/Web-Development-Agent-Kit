@@ -141,6 +141,9 @@ try {
   assert.equal(fixedArtifact.report.prior_findings[0].status, "RESOLVED", "Actual resolution evidence must survive a blocked attempt.");
   assert.equal(readJob().quality.review_attempt.status, "COMPLETE");
   const allowRule = 'prefix_rule(pattern = ["node", ".codex/write-permission-marker.cjs"], decision = "allow")\n';
+  // This legacy fixture uses a custom model transport. It must remain blocked
+  // with rules on every OS. Standard-transport native enforcement is covered
+  // separately in review-rules-isolation-smoke.mjs, without a mock OS bypass.
   for (const directory of [path.join(providerHome, "rules"), path.join(systemHome, "rules"), path.join(project, ".codex/rules")]) {
     fs.mkdirSync(directory, { recursive: true });
     const policy = path.join(directory, "review-probe.rules");
@@ -160,7 +163,7 @@ try {
   const disabledProject = path.join(root, "disabled-project", ".codex");
   fs.mkdirSync(path.join(disabledProject, "rules"), { recursive: true });
   fs.writeFileSync(path.join(disabledProject, "rules", "deny.rules"), 'prefix_rule(pattern = ["delete"], decision = "forbidden")\n');
-  assert.equal(review("codex", "normal", 4, [], { WEB_KIT_TEST_CODE_REVIEW_DISABLED_PROJECT: disabledProject }).verdict, "VERIFICATION BLOCKED", "All reported rule folders, including disabled layers and deny-only rules, are conservatively blocked.");
+  assert.equal(review("codex", "normal", 4, [], { WEB_KIT_TEST_CODE_REVIEW_DISABLED_PROJECT: disabledProject }).verdict, "VERIFICATION BLOCKED", "Rules from every reported layer require supported outer isolation, including disabled layers and deny-only rules.");
   assert.equal(review("codex", "permission-allowed").verdict, "READY TO OPEN PR", "Managed allowlists admitting never/user/read-only must remain usable.");
   assert.equal(review("codex", "configuration-preflight-user-profile").verdict, "READY TO OPEN PR", "An explicit read-only legacy sandbox takes precedence over a user's default profile.");
 

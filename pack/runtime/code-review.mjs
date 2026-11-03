@@ -9,6 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { captureReviewSnapshot, sameReviewSnapshot, validateReviewReport, storeReviewArtifact } from "./review-contract.mjs";
 import { sourceDigest } from "./quality-pipeline.mjs";
+import { checkExistingInstallationId, createReviewSandbox } from "./review-sandbox.mjs";
 
 const PROVIDERS = ["codex", "claude", "gemini"];
 const CODEX_DISABLED_FEATURES = ["apps", "plugins", "hooks", "shell_snapshot", "shell_snapshot_v2"];
@@ -178,6 +179,93 @@ function plainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function stableDigest(value) {
+  const ordered = item => Array.isArray(item) ? item.map(ordered)
+    : plainObject(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, ordered(item[key])])) : item;
+  return crypto.createHash("sha256").update(JSON.stringify(ordered(value))).digest("hex");
+}
+
+function capturePolicyFiles(ruleDirectories, configurationFiles) {
+  const records = [];
+  const ruleFiles = [];
+  const files = new Set();
+  let bytes = 0;
+  let entriesSeen = 0;
+  const inspectFile = (file, optional = false) => {
+    let descriptor;
+    try {
+      const resolved = fs.realpathSync.native(file);
+      const extraFlags = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+      descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | extraFlags);
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile() || stat.size > MAX_JSON_BYTES || (bytes += stat.size) > MAX_CHANGE_EVIDENCE_BYTES) throw new Error();
+      const buffer = Buffer.alloc(stat.size + 1);
+      let size = 0;
+      while (size < buffer.length) {
+        const read = fs.readSync(descriptor, buffer, size, buffer.length - size, size);
+        if (!read) break;
+        size += read;
+      }
+      const after = fs.fstatSync(descriptor);
+      if (size !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) throw new Error();
+      const content = buffer.subarray(0, size);
+      records.push([file, resolved, stat.mode, crypto.createHash("sha256").update(content).digest("hex")]);
+      files.add(resolved);
+    } catch (error) {
+      if (optional && error.code === "ENOENT") { records.push([file, null]); return; }
+      throw new Error("Codex read-only permission preflight could not capture bounded regular policy files.");
+    } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  };
+  for (const file of [...configurationFiles].sort()) inspectFile(file, true);
+  for (const directory of [...ruleDirectories].sort()) {
+    let entries;
+    try { entries = fs.opendirSync(directory); }
+    catch (error) {
+      if (error.code === "ENOENT") { records.push([directory, null]); continue; }
+      throw new Error("Codex read-only permission preflight could not inspect a configured rule directory.");
+    }
+    const names = [];
+    try {
+      let entry;
+      while ((entry = entries.readSync()) !== null) {
+        if (++entriesSeen > 4096) throw new Error("Codex read-only permission preflight rule inventory exceeds its verification limit.");
+        if (/\.rules$/i.test(entry.name)) names.push(entry.name);
+      }
+    } finally { try { entries.closeSync(); } catch {} }
+    names.sort();
+    records.push([directory, fs.realpathSync.native(directory), names]);
+    for (const name of names) {
+      const file = path.join(directory, name);
+      inspectFile(file);
+      ruleFiles.push(file);
+    }
+  }
+  return { digest: stableDigest(records), files: [...files].sort(), ruleFiles };
+}
+
+function assertOuterTransport(configuration, env) {
+  // Native policy and authentication discovery remain in the host OS. The
+  // bounded CONNECT broker supports the standard OpenAI HTTPS transport only;
+  // never silently reroute a configured gateway or mandatory upstream proxy.
+  if ((configuration.model_provider || "openai") !== "openai") {
+    throw new Error("Configured .rules files require a verified outer sandbox; this backend supports only the standard OpenAI model transport.");
+  }
+  if (Object.entries(env).some(([key, value]) => /^(?:https?|all)_proxy$/i.test(key) && value)) {
+    throw new Error("Configured .rules files require a verified outer sandbox; an existing upstream proxy cannot be preserved by this backend.");
+  }
+  const endpoints = [configuration.model_providers?.openai?.base_url, configuration.chatgpt_base_url,
+    env.OPENAI_BASE_URL, env.OPENAI_API_BASE, env.CODEX_CHATGPT_BASE_URL];
+  for (const value of endpoints) {
+    if (value == null || value === "") continue;
+    let endpoint;
+    try { endpoint = new URL(value); } catch {}
+    if (!endpoint || endpoint.protocol !== "https:" || endpoint.username || endpoint.password
+        || (endpoint.port && endpoint.port !== "443") || !["api.openai.com", "chatgpt.com", "auth.openai.com"].includes(endpoint.hostname)) {
+      throw new Error("Configured .rules files require a verified outer sandbox; a custom model endpoint is not supported by the restricted transport.");
+    }
+  }
+}
+
 function validateCodexRequirements(startup) {
   const failure = "Codex read-only permission preflight returned unsupported or malformed managed requirements.";
   if (!plainObject(startup) || typeof startup.appServerVersion !== "string" || !startup.appServerVersion.trim()
@@ -209,7 +297,7 @@ function validateCodexRequirements(startup) {
   }
 }
 
-function validateCodexConfiguration(response, codexHome) {
+function validateCodexConfiguration(response, codexHome, outerSandbox = null) {
   const failure = "Codex read-only permission preflight returned unsupported or malformed effective configuration.";
   if (!plainObject(response) || !plainObject(response.config) || !Array.isArray(response.layers)
       || response.layers.length === 0 || response.layers.length > 512) throw new Error(failure);
@@ -229,6 +317,7 @@ function validateCodexConfiguration(response, codexHome) {
     throw new Error("Codex read-only permission preflight could not confirm an enabled Windows sandbox.");
   }
   const directories = new Set();
+  const configurationFiles = new Set();
   const known = new Set(["packagedDefaults", "mdm", "enterpriseManaged", "sessionFlags", "legacyManagedConfigTomlFromFile", "legacyManagedConfigTomlFromMdm"]);
   let system = false;
   let user = false;
@@ -239,6 +328,7 @@ function validateCodexConfiguration(response, codexHome) {
     if (["system", "user"].includes(source.type)) {
       if (typeof source.file !== "string" || source.file.includes("\0") || !path.isAbsolute(source.file)) throw new Error(failure);
       directory = path.dirname(source.file);
+      configurationFiles.add(source.file);
       system ||= source.type === "system";
       if (source.type === "user" && source.profile == null) {
         if (!sameProviderDirectory(directory, codexHome)) throw new Error(failure);
@@ -247,35 +337,40 @@ function validateCodexConfiguration(response, codexHome) {
     } else if (source.type === "project") {
       if (typeof source.dotCodexFolder !== "string" || source.dotCodexFolder.includes("\0") || !path.isAbsolute(source.dotCodexFolder)) throw new Error(failure);
       directory = source.dotCodexFolder;
+      configurationFiles.add(path.join(directory, "config.toml"));
     } else if (!known.has(source.type)) throw new Error(failure);
+    else if (["legacyManagedConfigTomlFromFile", "packagedDefaults"].includes(source.type)) {
+      if (typeof source.file !== "string" || !path.isAbsolute(source.file) || source.file.includes("\0")) throw new Error(failure);
+      configurationFiles.add(source.file);
+    }
     if (directory) directories.add(path.join(directory, "rules"));
   }
   // Current Codex always reports its System and base User layers, even when
   // their config.toml files are absent. Without them rule discovery is partial.
   if (!system || !user) throw new Error(failure);
-  for (const directory of directories) {
-    let entries;
-    try { entries = fs.opendirSync(directory); }
-    catch (error) {
-      if (error.code === "ENOENT") continue;
-      throw new Error("Codex read-only permission preflight could not inspect a configured rule directory.");
+  if (outerSandbox) {
+    const expected = Object.fromEntries(outerSandbox.configuration.flatMap((arg, i, args) => {
+      if (arg !== "--config") return [];
+      const value = args[i + 1];
+      const split = value.indexOf("=");
+      return [[value.slice(0, split), JSON.parse(value.slice(split + 1))]];
+    }));
+    if (config.sqlite_home !== expected.sqlite_home || config.log_dir !== expected.log_dir) {
+      throw new Error("Codex outer sandbox could not confirm private runtime database and log locations under the effective policy.");
     }
-    try {
-      let entry;
-      let count = 0;
-      while ((entry = entries.readSync()) !== null) {
-        if (++count > 4096) throw new Error("Codex read-only permission preflight rule inventory exceeds its verification limit.");
-        // Allow rules may launch a command outside the read-only sandbox even
-        // with approval_policy=never. Do not remove, override, or interpret the
-        // user's policy; conservatively block every immediate .rules entry,
-        // including entries in disabled layers and symlinked rule files.
-        if (/\.rules$/i.test(entry.name)) throw new Error("Codex read-only permission preflight is blocked: configured .rules files prevent this runner from proving read-only enforcement.");
-      }
-    } catch (error) {
-      if (error.message.startsWith("Codex read-only permission preflight")) throw error;
-      throw new Error("Codex read-only permission preflight could not inspect a configured rule directory.");
-    } finally { try { entries.closeSync(); } catch {} }
   }
+  // Allow rules may escape Codex's inner sandbox. Keep their original files
+  // and effective layers, and require a separately verified OS boundary before
+  // launching inference with any such rule. Hash inputs again after the run.
+  const policy = capturePolicyFiles(directories, configurationFiles);
+  const effective = { ...config };
+  delete effective.sqlite_home;
+  delete effective.log_dir;
+  return {
+    codexHome, ruleDirectories: [...directories], configurationFiles: [...configurationFiles], policy,
+    effectiveDigest: stableDigest([effective, response.layers.filter(layer => layer.name.type !== "sessionFlags")]),
+    transport: { model_provider: config.model_provider, model_providers: { openai: { base_url: config.model_providers?.openai?.base_url } }, chatgpt_base_url: config.chatgpt_base_url },
+  };
 }
 
 function sameProviderDirectory(left, right) {
@@ -313,7 +408,7 @@ function codexInspectionHome(project, env) {
   throw new Error("Codex read-only permission preflight is blocked: configured remote environments may run commands during inspection.");
 }
 
-function providerProcess(spec, project, env, timeoutMs, exchange = null) {
+function providerProcess(spec, project, env, timeoutMs, exchange = null, containProcessGroup = false) {
   return new Promise((resolve) => {
     const child = spawn(spec.command, spec.args, { cwd: project, env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: [exchange ? "pipe" : "ignore", "pipe", "pipe"] });
     child.stdout.setEncoding("utf8");
@@ -344,6 +439,14 @@ function providerProcess(spec, project, env, timeoutMs, exchange = null) {
       clearTimeout(timer);
       process.removeListener("SIGINT", interrupt);
       process.removeListener("SIGTERM", interrupt);
+      // A completed parent must not leave ordinary reviewer children using
+      // the per-review proxy after it closes. Native sandbox restrictions also
+      // remain inherited by descendants; this is process-group cleanup, not a
+      // claim that macOS provides a PID namespace for independently daemonized
+      // processes.
+      if (containProcessGroup && child.pid && process.platform !== "win32") {
+        try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      }
       resolve({ pid: child.pid, status, error: failure || error, stdout });
     };
     child.stdout.on("data", (chunk) => {
@@ -382,13 +485,17 @@ function providerProcess(spec, project, env, timeoutMs, exchange = null) {
   });
 }
 
-async function inspectCodexPermissions(provider, project, env, configuration, deadline) {
+async function inspectCodexPermissions(provider, project, env, configuration, deadline, outerSandbox = null) {
   const remaining = () => {
     const value = deadline - Date.now();
     if (value <= 0) throw new Error("Reviewer timed out during read-only permission preflight.");
     return value;
   };
-  const printed = await providerProcess(launchSpec(provider.executable, [...configuration, "app-server", "--strict-config", "--print-startup-config"]), project, env, remaining());
+  const launch = args => {
+    const spec = launchSpec(provider.executable, args);
+    return outerSandbox ? outerSandbox.wrap(spec) : spec;
+  };
+  const printed = await providerProcess(launch([...configuration, "app-server", "--strict-config", "--print-startup-config"]), project, env, remaining(), null, Boolean(outerSandbox));
   if (printed.error) throw new Error(`Codex read-only permission preflight failed: ${printed.error}`);
   if (printed.status !== 0) throw new Error("Codex read-only permission preflight could not inspect managed requirements.");
   let startup;
@@ -430,79 +537,122 @@ async function inspectCodexPermissions(provider, project, env, configuration, de
     },
     complete: () => step === 3,
   };
-  const inspected = await providerProcess(launchSpec(provider.executable, [...configuration, "app-server", "--strict-config", "--listen", "stdio://"]), project, env, remaining(), exchange);
+  const inspected = await providerProcess(launch([...configuration, "app-server", "--strict-config", "--listen", "stdio://"]), project, env, remaining(), exchange, Boolean(outerSandbox));
   if (inspected.error) throw new Error(`Codex read-only permission preflight failed: ${inspected.error}`);
   if (inspected.status !== 0) throw new Error("Codex read-only permission preflight could not inspect effective configuration.");
   validateCodexRequirements({ appServerVersion: startup.appServerVersion, configRequirements: requirementsResult });
-  validateCodexConfiguration(configurationResult, codexHome);
+  const evidence = validateCodexConfiguration(configurationResult, codexHome, outerSandbox);
+  evidence.requirementsDigest = stableDigest(requirementsResult);
   // Raw configuration and layer contents may carry credentials. They are used
   // only for this decision and never enter review artifacts, context or logs.
   startup = configurationResult = requirementsResult = null;
+  return evidence;
 }
 
-async function invokeProvider(provider, project, contextFile, timeoutMs, runId) {
+async function invokeProvider(provider, project, repositoryRoot, contextFile, timeoutMs, runId) {
   const prompt = reviewerPrompt(contextFile, provider.name);
-  const env = { ...process.env, WEB_KIT_CODE_REVIEW_ACTIVE: "1", WEB_KIT_CODE_REVIEW_PROJECT_ROOT: project, WEB_KIT_CODE_REVIEW_CONTEXT_FILE: contextFile, WEB_KIT_CODE_REVIEW_RUN_ID: runId, WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
+  let env = { ...process.env, WEB_KIT_CODE_REVIEW_ACTIVE: "1", WEB_KIT_CODE_REVIEW_PROJECT_ROOT: project, WEB_KIT_CODE_REVIEW_CONTEXT_FILE: contextFile, WEB_KIT_CODE_REVIEW_RUN_ID: runId, WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
   const deadline = Date.now() + timeoutMs;
   const configuration = [];
-  if (provider.name === "codex") {
-    // Lifecycle hooks, legacy notifications and legacy shell snapshot startup
-    // execute outside the command sandbox. Disable both independent snapshot
-    // modes and remote tools for this run, with the same feature set verified
-    // by both preflights before inference. Restrict only these capabilities;
-    // retain the user's unrelated model, authentication and transport settings.
-    configuration.push(...CODEX_DISABLED_FEATURES.flatMap(name => ["--config", `features.${name}=false`]), "--config", "notify=[]", "--config", 'approval_policy="never"', "--config", 'approvals_reviewer="user"', "--config", 'sandbox_mode="read-only"');
-    if (process.platform === "win32") configuration.push("--config", 'windows.sandbox="elevated"', "--config", "windows.allow_mxc=false");
-    // `features list` loads effective configuration without starting a session.
-    // A missing/renamed flag, malformed result or managed requirement must not
-    // silently allow startup side effects in a supposedly read-only invocation.
-    const featureInspection = launchSpec(provider.executable, [...configuration, "features", "list"]);
-    const features = await providerProcess(featureInspection, project, env, Math.max(1, deadline - Date.now()));
-    if (features.error) throw new Error(`Codex read-only startup preflight failed: ${features.error}`);
-    if (features.status !== 0) throw new Error("Codex read-only startup preflight failed; startup restrictions may be unsupported or prevented by managed policy.");
-    const featureLines = features.stdout.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
-    if (Buffer.byteLength(features.stdout) > MAX_JSON_BYTES || CODEX_DISABLED_FEATURES.some(name => {
-      const entries = featureLines.filter(parts => parts[0] === name);
-      return entries.length !== 1 || entries[0].length < 3 || entries[0].at(-1) !== "false";
-    })) throw new Error("Codex read-only startup preflight could not confirm disabled hooks, shell snapshots, apps and plugins under the effective policy.");
-    features.stdout = "";
-    // A command sandbox also does not constrain remote tools. Disable every
-    // effective configured MCP server after disabling connector/plugin discovery.
-    const inspection = launchSpec(provider.executable, [...configuration, "mcp", "list", "--json"]);
-    const listed = await providerProcess(inspection, project, env, Math.max(1, deadline - Date.now()));
-    if (listed.error) throw new Error(`Codex read-only tool preflight failed: ${listed.error}`);
-    if (listed.status !== 0) throw new Error("Codex read-only tool preflight failed; configured tools could not be inspected.");
-    let servers;
-    try {
-      if (Buffer.byteLength(listed.stdout) > MAX_JSON_BYTES) throw new Error();
-      servers = JSON.parse(listed.stdout);
-      if (!Array.isArray(servers) || servers.length > 256 || servers.some(server => !server || typeof server !== "object" || Array.isArray(server) || typeof server.name !== "string" || !server.name.trim() || server.name.length > 256 || typeof server.enabled !== "boolean")) throw new Error();
-      if (new Set(servers.map(server => server.name)).size !== servers.length) throw new Error();
-    } catch { throw new Error("Codex read-only tool preflight returned an unsupported or malformed server list."); }
-    if (servers.length) {
-      // Quoted keys inside a TOML value preserve server names containing dots
-      // or quotes; dotted --config keys would address the wrong nested setting.
-      const disabled = servers.map(server => `${JSON.stringify(server.name)}={enabled=false}`).join(",");
-      configuration.push("--config", `mcp_servers={${disabled}}`);
+  let outerSandbox = null;
+  let permissions;
+  const samePolicy = (before, after) => before.policy.digest === after.policy.digest
+    && before.effectiveDigest === after.effectiveDigest && before.requirementsDigest === after.requirementsDigest;
+  try {
+    if (provider.name === "codex") {
+      // Codex can initialize or repair persistent installation identity during
+      // app-server startup. Validate an existing identity before any uncontained
+      // inspection; the outer boundary later checks every policy/repository alias.
+      if (process.platform === "darwin") checkExistingInstallationId({ codexHome: codexInspectionHome(project, env), repositoryRoot });
+      // Lifecycle hooks, legacy notifications and legacy shell snapshot startup
+      // execute outside the command sandbox. Disable both independent snapshot
+      // modes and remote tools for this run, with the same feature set verified
+      // by both preflights before inference. Restrict only these capabilities;
+      // retain the user's unrelated model, authentication and transport settings.
+      configuration.push(...CODEX_DISABLED_FEATURES.flatMap(name => ["--config", `features.${name}=false`]), "--config", "notify=[]", "--config", 'approval_policy="never"', "--config", 'approvals_reviewer="user"', "--config", 'sandbox_mode="read-only"');
+      if (process.platform === "win32") configuration.push("--config", 'windows.sandbox="elevated"', "--config", "windows.allow_mxc=false");
+      // `features list` loads effective configuration without starting a session.
+      // A missing/renamed flag, malformed result or managed requirement must not
+      // silently allow startup side effects in a supposedly read-only invocation.
+      const featureInspection = launchSpec(provider.executable, [...configuration, "features", "list"]);
+      const features = await providerProcess(featureInspection, project, env, Math.max(1, deadline - Date.now()));
+      if (features.error) throw new Error(`Codex read-only startup preflight failed: ${features.error}`);
+      if (features.status !== 0) throw new Error("Codex read-only startup preflight failed; startup restrictions may be unsupported or prevented by managed policy.");
+      const featureLines = features.stdout.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
+      if (Buffer.byteLength(features.stdout) > MAX_JSON_BYTES || CODEX_DISABLED_FEATURES.some(name => {
+        const entries = featureLines.filter(parts => parts[0] === name);
+        return entries.length !== 1 || entries[0].length < 3 || entries[0].at(-1) !== "false";
+      })) throw new Error("Codex read-only startup preflight could not confirm disabled hooks, shell snapshots, apps and plugins under the effective policy.");
+      features.stdout = "";
+      // A command sandbox also does not constrain remote tools. Disable every
+      // effective configured MCP server after disabling connector/plugin discovery.
+      const inspection = launchSpec(provider.executable, [...configuration, "mcp", "list", "--json"]);
+      const listed = await providerProcess(inspection, project, env, Math.max(1, deadline - Date.now()));
+      if (listed.error) throw new Error(`Codex read-only tool preflight failed: ${listed.error}`);
+      if (listed.status !== 0) throw new Error("Codex read-only tool preflight failed; configured tools could not be inspected.");
+      let servers;
+      try {
+        if (Buffer.byteLength(listed.stdout) > MAX_JSON_BYTES) throw new Error();
+        servers = JSON.parse(listed.stdout);
+        if (!Array.isArray(servers) || servers.length > 256 || servers.some(server => !server || typeof server !== "object" || Array.isArray(server) || typeof server.name !== "string" || !server.name.trim() || server.name.length > 256 || typeof server.enabled !== "boolean")) throw new Error();
+        if (new Set(servers.map(server => server.name)).size !== servers.length) throw new Error();
+      } catch { throw new Error("Codex read-only tool preflight returned an unsupported or malformed server list."); }
+      if (servers.length) {
+        // Quoted keys inside a TOML value preserve server names containing dots
+        // or quotes; dotted --config keys would address the wrong nested setting.
+        const disabled = servers.map(server => `${JSON.stringify(server.name)}={enabled=false}`).join(",");
+        configuration.push("--config", `mcp_servers={${disabled}}`);
+      }
+      // The raw list can contain transport credentials. Retain only the deny
+      // configuration, never the list or its transport details in report/context.
+      listed.stdout = "";
+      servers = null;
+      permissions = await inspectCodexPermissions(provider, project, env, configuration, deadline);
+      if (permissions.policy.ruleFiles.length) {
+        // Never turn an absent OS boundary into a policy bypass. Native macOS
+        // preserves host managed-policy/keychain discovery; other OS backends
+        // remain blocked until they can enforce and verify the same contract.
+        if (process.platform !== "darwin") throw new Error("Codex read-only permission preflight is blocked: configured .rules files require a verified outer sandbox. The native macOS backend is currently supported; this platform has no verified backend. Keep the rules in place.");
+        assertOuterTransport(permissions.transport, env);
+        outerSandbox = await createReviewSandbox({
+          project, repositoryRoot, codexHome: permissions.codexHome, evidenceDirectory: path.dirname(contextFile),
+          policyFiles: permissions.policy.files,
+          policyDirectories: [...new Set([...permissions.ruleDirectories, ...permissions.configurationFiles.map(file => path.dirname(file)), permissions.codexHome])],
+          env, deadline,
+        });
+        env = outerSandbox.env;
+        configuration.push(...outerSandbox.configuration);
+        const contained = await inspectCodexPermissions(provider, project, env, configuration, deadline, outerSandbox);
+        outerSandbox.assertRuntimeStateUnchanged();
+        if (!samePolicy(permissions, contained)) throw new Error("Codex policies changed while establishing the outer review sandbox; rerun verification.");
+      }
     }
-    // The raw list can contain transport credentials. Retain only the deny
-    // configuration, never the list or its transport details in report/context.
-    listed.stdout = "";
-    servers = null;
-    await inspectCodexPermissions(provider, project, env, configuration, deadline);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("Reviewer timed out during read-only tool preflight.");
+    const args = provider.name === "codex"
+      ? [...configuration, "exec", "--strict-config", "--json", ...(outerSandbox ? ["--ephemeral"] : []), "--sandbox", "read-only", "-C", project, prompt]
+      : ["-p", prompt, "--output-format", "json", "--settings", '{"disableAllHooks":true}', "--permission-mode", "plan", "--tools", "Read,Glob,Grep", "--disallowedTools", "mcp__*", "--add-dir", path.dirname(contextFile)];
+    const spec = launchSpec(provider.executable, args);
+    const startedAt = new Date().toISOString();
+    const result = await providerProcess(outerSandbox ? outerSandbox.wrap(spec) : spec, project, env, remaining, null, Boolean(outerSandbox));
+    const provenance = { kind: "provider-process", provider: provider.name, pid: result.pid, started_at: startedAt, completed_at: new Date().toISOString(), exit_code: result.status, fresh_session: true, read_only: true };
+    if (result.error) throw new Error(result.error);
+    if (result.status !== 0) throw new Error(`Reviewer provider exited unsuccessfully (${result.status ?? "no exit status"}).`);
+    if (permissions) {
+      const after = capturePolicyFiles(permissions.ruleDirectories, permissions.configurationFiles);
+      if (permissions.policy.digest !== after.digest) throw new Error("Codex policy files changed during review; the result cannot approve the task.");
+      if (outerSandbox) {
+        outerSandbox.assertRuntimeStateUnchanged();
+        const current = await inspectCodexPermissions(provider, project, env, configuration, deadline, outerSandbox);
+        outerSandbox.assertRuntimeStateUnchanged();
+        if (!samePolicy(permissions, current)) throw new Error("Codex effective policy changed during review; the result cannot approve the task.");
+        provenance.outer_sandbox = outerSandbox.provenance;
+      }
+    }
+    return { report: parseOutput(provider.name, result.stdout), provenance };
+  } finally {
+    if (outerSandbox) await outerSandbox.close();
   }
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("Reviewer timed out during read-only tool preflight.");
-  const args = provider.name === "codex"
-    ? [...configuration, "exec", "--strict-config", "--json", "--sandbox", "read-only", "-C", project, prompt]
-    : ["-p", prompt, "--output-format", "json", "--settings", '{"disableAllHooks":true}', "--permission-mode", "plan", "--tools", "Read,Glob,Grep", "--disallowedTools", "mcp__*", "--add-dir", path.dirname(contextFile)];
-  const spec = launchSpec(provider.executable, args);
-  const startedAt = new Date().toISOString();
-  const result = await providerProcess(spec, project, env, remaining);
-  const provenance = { kind: "provider-process", provider: provider.name, pid: result.pid, started_at: startedAt, completed_at: new Date().toISOString(), exit_code: result.status, fresh_session: true, read_only: true };
-  if (result.error) throw new Error(result.error);
-  if (result.status !== 0) throw new Error(`Reviewer provider exited unsuccessfully (${result.status ?? "no exit status"}).`);
-  return { report: parseOutput(provider.name, result.stdout), provenance };
 }
 
 function recordReview(project, taskId, reportPath) {
@@ -577,7 +727,7 @@ async function main(argv) {
       previous_findings: snapshot.prior_findings || [], report_schema: reportSchema(),
     };
     fs.writeFileSync(contextFile, JSON.stringify(context, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-    const { report, provenance } = await invokeProvider(provider, project, contextFile, options.timeoutMs, runId);
+    const { report, provenance } = await invokeProvider(provider, project, snapshot.repository_root, contextFile, options.timeoutMs, runId);
     const afterJob = readState(project, `.agent-core/state/jobs/${options.taskId}.json`);
     const after = captureReviewSnapshot(project, afterJob, sourceDigest);
     if (afterJob.quality?.review_attempt?.run_id !== runId || afterJob.quality?.review_attempt?.status !== "RUNNING") throw new Error("Another review updated this task while the provider ran; this older result will not replace it.");

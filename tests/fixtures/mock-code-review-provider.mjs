@@ -3,11 +3,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const args = process.argv.slice(2);
+if (process.env.WEB_KIT_TEST_CODE_REVIEW_STARTUP_MARKER) fs.writeFileSync(process.env.WEB_KIT_TEST_CODE_REVIEW_STARTUP_MARKER, "provider startup executed\n");
 const project = process.env.WEB_KIT_CODE_REVIEW_PROJECT_ROOT;
 const contextFile = process.env.WEB_KIT_CODE_REVIEW_CONTEXT_FILE;
 const runId = process.env.WEB_KIT_CODE_REVIEW_RUN_ID;
@@ -19,13 +21,29 @@ const servers = mode === "empty-servers" ? [] : ["workspace", "docs.tools", 'quo
 const home = process.env.CODEX_HOME ? fs.realpathSync.native(path.resolve(process.env.CODEX_HOME)) : path.join(process.env.HOME || "", ".codex");
 const systemHome = process.env.WEB_KIT_TEST_CODE_REVIEW_SYSTEM_HOME || path.join(path.dirname(home), "provider-system");
 const serverConfiguration = `mcp_servers={${servers.map(name => `${JSON.stringify(name)}={enabled=false}`).join(",")}}`;
-const finalConfiguration = [...restrictedConfiguration, ...(servers.length ? ["--config", serverConfiguration] : [])];
+const baseFinalConfiguration = [...restrictedConfiguration, ...(servers.length ? ["--config", serverConfiguration] : [])];
 const configOverrides = new Map(args.flatMap((arg, index) => {
   if (arg !== "--config") return [];
   const value = args[index + 1] || "";
   const equal = value.indexOf("=");
   return equal < 0 ? [] : [[value.slice(0, equal), value.slice(equal + 1)]];
 }));
+const scratchConfiguration = args.flatMap((arg, index) => {
+  if (arg !== "--config" || !/^(?:sqlite_home|log_dir)=/.test(args[index + 1] || "")) return [];
+  return [arg, args[index + 1]];
+});
+const outerActive = scratchConfiguration.length > 0;
+const finalConfiguration = [...baseFinalConfiguration, ...scratchConfiguration];
+let outerRuleProbe = null;
+if (outerActive) {
+  assert.equal(mode, "outer-boundary", "Scratch overrides are recognized only in the dedicated outer-boundary test.");
+  assert.equal(scratchConfiguration.length, 4, "Both and only the two runtime-state directories must be redirected.");
+  for (const name of ["sqlite_home", "log_dir"]) {
+    const directory = JSON.parse(configOverrides.get(name));
+    assert(path.isAbsolute(directory));
+    assert(directory.startsWith(path.resolve(process.env.TMPDIR) + path.sep), "Runtime state escaped private scratch.");
+  }
+}
 function configuredValue(name, fallback) {
   let value = fallback;
   for (const file of [path.join(home, "config.toml"), path.join(process.cwd(), ".codex/config.toml")]) {
@@ -71,6 +89,15 @@ function permissionProbe() {
   if (!allowRule && configuredValue("approvals_reviewer", "user") !== "auto_review"
       && configuredValue("sandbox_mode", "read-only") === "read-only") return;
   const result = spawnSync(command[0], command.slice(1), { cwd: process.cwd(), env: process.env, encoding: "utf8", windowsHide: true, timeout: 5000 });
+  if (mode === "outer-boundary" && outerActive) {
+    assert(allowRule, "The outer-boundary test must exercise an actual matching fixture rule.");
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0, "An allow-matching child bypassed the outer read-only sandbox.");
+    assert(!fs.existsSync(process.env.WEB_KIT_TEST_PERMISSION_MARKER), "An allow-matching child wrote outside scratch.");
+    assert(fs.readFileSync(path.join(process.cwd(), "src/feature.js"), "utf8").length > 0, "Source reads must remain available.");
+    outerRuleProbe = { allow_rule_match: true, child_write_denied: true, source_read: true };
+    return;
+  }
   assert.equal(result.status, 0, result.error?.message || result.stderr);
 }
 function startupHooks(provider) {
@@ -107,6 +134,9 @@ if (args.includes("--fixture-notify-only")) { legacyNotification(); process.exit
 if (args.includes("--fixture-permission-only")) { permissionProbe(); process.exit(0); }
 if (args.includes("--fixture-snapshot-only")) { shellSnapshot(); process.exit(0); }
 const recordAudit = (entry) => {
+  // The outer wrapper must not grant write access to the parent-owned audit.
+  // Its successful runtime probe and review artifact are the actual evidence.
+  if (outerActive) return;
   if (process.env.WEB_KIT_TEST_CODE_REVIEW_AUDIT) fs.appendFileSync(process.env.WEB_KIT_TEST_CODE_REVIEW_AUDIT, JSON.stringify(entry) + "\n");
 };
 function managedRequirements() {
@@ -123,7 +153,27 @@ function managedRequirements() {
   if (mode === "permission-preflight-windows") requirements.allowedWindowsSandboxImplementations = ["mxc"];
   return requirements;
 }
+function initializeFixtureInstallationId() {
+  if (mode !== "outer-boundary") return;
+  const file = path.join(home, "installation_id");
+  const descriptor = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_CREAT, 0o644);
+  try {
+    const before = fs.fstatSync(descriptor);
+    let id = fs.readFileSync(descriptor, "utf8");
+    if (!id && !outerActive) {
+      id = crypto.randomUUID();
+      fs.writeSync(descriptor, id, 0, "utf8");
+    }
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "Runtime state must already contain a valid installation ID inside the outer boundary.");
+    if (outerActive) {
+      const after = fs.fstatSync(descriptor);
+      for (const field of ["dev", "ino", "uid", "mode", "nlink", "size", "mtimeMs", "ctimeMs"]) assert.equal(after[field], before[field], "Startup changed the protected runtime state.");
+      assert.equal(fs.readFileSync(file, "utf8"), id);
+    }
+  } finally { fs.closeSync(descriptor); }
+}
 if (args.includes("app-server")) {
+  initializeFixtureInstallationId();
   const printing = args.includes("--print-startup-config");
   assert.deepEqual(args, [...finalConfiguration, "app-server", "--strict-config", ...(printing ? ["--print-startup-config"] : ["--listen", "stdio://"])]);
   assert.equal(process.cwd(), project);
@@ -159,7 +209,12 @@ if (args.includes("app-server")) {
     } else if (step === 2) {
       assert.deepEqual(request, { id: 2, method: "config/read", params: { includeLayers: true, cwd: project } });
       if (mode === "configuration-preflight-missing-response") process.exit(0);
-      const config = { approval_policy: configuredValue("approval_policy", "on-request"), approvals_reviewer: configuredValue("approvals_reviewer", "user"), sandbox_mode: configuredValue("sandbox_mode", "workspace-write"), features: { apps: false, plugins: false, hooks: false, ...Object.fromEntries(snapshotFeatures.map(name => [name, configuredFeature(name, name === "shell_snapshot")])) }, notify: [], mcp_servers: Object.fromEntries(servers.map(name => [name, { enabled: false }])), windows: { sandbox: "elevated", allow_mxc: false }, model: "preserved-user-model", model_providers: { fixture: { api_key: "DO_NOT_LEAK_PREFLIGHT_SECRET" } } };
+      const config = { approval_policy: configuredValue("approval_policy", "on-request"), approvals_reviewer: configuredValue("approvals_reviewer", "user"), sandbox_mode: configuredValue("sandbox_mode", "workspace-write"), features: { apps: false, plugins: false, hooks: false, ...Object.fromEntries(snapshotFeatures.map(name => [name, configuredFeature(name, name === "shell_snapshot")])) }, notify: [], mcp_servers: Object.fromEntries(servers.map(name => [name, { enabled: false }])), windows: { sandbox: "elevated", allow_mxc: false }, model: "preserved-user-model", model_provider: "fixture", model_providers: { fixture: { api_key: "DO_NOT_LEAK_PREFLIGHT_SECRET" } } };
+      if (mode === "outer-boundary") {
+        config.model_provider = "openai";
+        config.model_providers = {};
+        for (const name of ["sqlite_home", "log_dir"]) if (configOverrides.has(name)) config[name] = JSON.parse(configOverrides.get(name));
+      }
       for (const name of snapshotFeatures) {
         if (mode === `configuration-preflight-${name}-missing`) delete config.features[name];
         if (mode === `configuration-preflight-${name}-enabled`) config.features[name] = true;
@@ -244,6 +299,7 @@ if (provider === "codex") {
   assert.deepEqual(args.slice(0, args.indexOf("exec")), finalConfiguration, "Codex must disable every listed MCP server and prevent approvals without model or effort overrides.");
   assert(args.includes("--strict-config"), "Inference must reject unsupported protection settings just like its preflights.");
   assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+  if (outerActive) assert(args.includes("--ephemeral"), "A protected policy home must not need persistent session writes.");
 }
 else {
   assert.deepEqual(JSON.parse(args[args.indexOf("--settings") + 1]), { disableAllHooks: true }, "Claude's per-session hook restriction must preserve unrelated settings.");
@@ -316,6 +372,10 @@ const output = {
   prior_findings: (context.previous_findings || []).map(previous => ({ id: previous.id, status: vulnerable && previous.id === finding.id ? "OPEN" : "RESOLVED", evidence: vulnerable ? "The non-owner call still returns true." : "The non-owner call now returns false and the owner call returns true." })),
   verification_gaps: [],
 };
+if (mode === "outer-boundary") {
+  assert.deepEqual(outerRuleProbe, { allow_rule_match: true, child_write_denied: true, source_read: true });
+  output.summary += " The matching allow-rule child could read source but its real write was denied by the outer sandbox.";
+}
 if (booleanFeature) {
   output.summary = "Verified the exported feature flag using the actual module.";
   output.requirements = context.requirements.map(req => ({ id: req.id, status: own === true ? "PASS" : "FAIL", evidence: `Imported enabled from src/feature.js; observed ${String(own)}.` }));
