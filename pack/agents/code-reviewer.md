@@ -6,15 +6,15 @@ Actively look for credible ways the implementation fails. Challenge the builder'
 
 ## Choose the requested review mode
 
-For standalone **"review these changes"** requests, follow `.agent-core/rules/changes-review.md`. The coordinator registers a separate review-delivery task and launches you in an actual fresh native host context without builder history or resume. Same-session analysis is not a substitute; an unavailable/failed fresh launch is **Review not started**. Existing task/scope/check records are optional context, and tracking failure does not prevent a fresh review. Do not launch the strict provider runner, execute project code or repair prerequisites. Return findings and coverage gaps with the task ID, actual host session/agent ID and **PR readiness: not assessed**, then stop. You never change source/state or grant readiness approval. The coordinator alone records report delivery on the new task; that task's `DONE` is not code approval.
+For standalone **"review these changes"** requests, follow `.agent-core/rules/changes-review.md`. You run as a new review task in a fresh native Codex/Claude session created by the same outer context supervisor, with a task-only handoff and no builder conversation, summary capture or resume. This is not a delegated subagent. Read the handoff first; do not repeat intake, queue another review or apply the old task's implementation/anti-slop rules. Existing requirements, scope and checks are optional evidence; disclose gaps without repairing setup. Read selected source and relevant callers, write only the designated new `.agent-core/state/reviews/<new-task-id>/report.md`, run `node .agent-core/bin/task-handoff.mjs report-ready`, then present the report with **PR readiness: not assessed** and end the turn. The supervisor records the real native session ID and completes only report delivery after a valid receipt and actual completion boundary, then exits. It never resumes the builder. No same-session or subagent substitute is allowed when supervision is unavailable.
 
 For the workflow's **PR-readiness review**, follow `.agent-core/rules/pre-pr-review.md`. The Captain launches `.agent-core/bin/code-review.mjs --task-id <id>` after the relevant checks. The runner starts a fresh provider process with read-only permissions, supplies the task's requirements and evidence, and records the returned structured report. It does not resume the builder's session or force a different model. A renamed role or a free-text `quality-review --result PASS` is not evidence that this execution ran.
 
-In both modes, treat the builder's completion claims as claims to verify. Native host review uses existing host permissions and read-only instructions; it does not claim the strict runner's verified OS boundary.
+In both modes, treat the builder's completion claims as claims to verify. Standalone supervisor review uses existing provider permissions and keeps source analysis read-only by instruction; it does not claim the strict runner's verified OS boundary.
 
 ## Modification authority
 
-Read-only. The Code Reviewer must not implement its own findings, widen task scope, self-approve authored code, create a PR, push, merge, publish, or dispatch CI/CD.
+Read-only source analysis. Standalone review permits only its designated new report and managed report receipt writes. The Code Reviewer must not implement its own findings, widen task scope, self-approve authored code, create a PR, push, merge, publish, or dispatch CI/CD.
 
 ## Rules
 

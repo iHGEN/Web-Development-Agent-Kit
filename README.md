@@ -173,15 +173,19 @@ npx @ihgen/web-kit code-review --task-id TASK-042 --provider codex
 
 ### Review changes without preparing a PR
 
-Ask your AI **"review these changes"**. The installed instructions register a new review-delivery task through `work-progress.mjs start --classification SMALL --review-only`, then ask the AI client to launch a genuinely fresh reviewer with no builder conversation or resume. Every new request gets a new reviewer. It examines your selected files/diff/range, or current staged, unstaged and relevant untracked changes by default. Your visible conversation stays open. This is instruction-based routing through the AI client; the bookkeeping script itself does not create the session.
+While using `codex` or `claude` under the Web-Kit supervisor, ask **"review these changes"**. The installed instructions invoke `task-handoff.mjs request-review` with your original request and source selection, then end the current turn. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` task. The **same outer supervisor used for 50% context rollover** ends the idle old TUI and starts the same native provider fresh for that new review task. Every request gets a new task and session, with no builder conversation, summary capture or resume.
 
-The host must support launching a fresh agent/session. If that launch is unavailable or fails, the AI reports **Review not started** with the reason; it does not quietly review in the builder's session. Tracking failure is reported as a gap and does not prevent a fresh review. The existing session/rollover controllers are not used for this one-shot request.
+The request need not wait for 50% context usage. Codex transitions at native `agent-turn-complete`; Claude transitions at `Notification idle_prompt`, normally after about 60 seconds waiting for input ([official hook reference](https://code.claude.com/docs/en/hooks#notification)). Status-line updates and Claude `Stop` do not confirm this boundary. The new session uses the existing provider launch settings, model, authentication and permissions. It examines your selected files/diff/range, or current staged, unstaged and relevant untracked changes by default.
 
-Existing task IDs, scope reconciliation, passing tests, Graphify setup and an additional sandbox are not analysis prerequisites. The reviewer uses existing authorized read capabilities and preserves your policies. Missing tests, comparison evidence or inaccessible files become specific coverage gaps while available code is analyzed. `NO SOURCE` and `NO CHANGES` are reported honestly. These read-only instructions do not claim a newly verified OS security boundary.
+A compatible active native supervisor is required. If it is unavailable or launch fails, the AI reports **Review not started** with the reason. There is no delegated subagent, same-session review, explicit Session Controller or manual `/new` or `/clear` fallback. The instruction layer recognizes the request; the helper queues it and the outer supervisor performs the process transition. Queuing alone is not proof that a review ran.
 
-The report includes the new task ID, actual fresh-session ID, examined changes, evidenced findings, coverage gaps and **PR readiness: not assessed**. The coordinator may save the report and complete only the new review task: `DONE --final-validation PASS` means **the report was delivered**, including when it found bugs. It never approves the code or completes your implementation task; quality-review approval stays pending. New review bookkeeping and normal aggregate updates are allowed, while existing source/task/scope/queue records are preserved.
+Existing task IDs, scope reconciliation, passing tests and Graphify setup are not prerequisites. Tracking failures, missing requirements/tests/comparison evidence and inaccessible files become specific gaps while accessible code is analyzed. `NO SOURCE` and `NO CHANGES` are reported honestly. The reviewer reads source using existing permissions and adds no sandbox or policy relaxation; its read-only behavior does not claim a new OS security boundary.
 
-The reviewer returns one report and stops. It does not execute project code/tests, launch the strict provider runner, update the kit, repair prerequisites, fix findings or publish anything. To authorize repairs afterward, say **"fix the findings"**; the normal scoped implementation and readiness workflow then applies.
+The fresh session writes its designated new `.agent-core/state/reviews/<new-task-id>/report.md`, runs `task-handoff.mjs report-ready`, presents findings, examined changes, gaps and **PR readiness: not assessed**, then ends its turn. The supervisor requires a valid report receipt plus the actual native completion boundary, records the real session ID, and completes only the new review task. `DONE`/final-validation `PASS` mean **report delivered**, including reports that find bugs; code approval stays pending. The supervisor then exits. It does not restart or resume the builder.
+
+If the fresh review ends with a missing or invalid receipt, the supervisor stops it and records the new review task as failed. It does not wait indefinitely or mark an unverified report delivered.
+
+Managed review records and normal aggregate bookkeeping may change; existing source, jobs, scope manifests, review queues and the global implementation context handoff remain intact. The review does not run project code/tests, invoke the strict runner, repair setup, fix findings or publish anything. A later **"fix the findings"** request enters the normal scoped implementation and readiness workflow.
 
 ### Strict PR-readiness isolation
 
@@ -341,7 +345,7 @@ Outside projects containing a valid `.agent-kit.json`, the shim simply passes th
 
 Provider administrative/noninteractive commands also pass through rather than being forced into interactive rollover control.
 
-### Default threshold
+### Default threshold: continue the current task
 
 ```text
 50% current context used
@@ -378,11 +382,15 @@ Web Kit does **not** fake `/clear` or `/new` terminal keystrokes and does not re
 
 The threshold is checked at a provider turn boundary, so Web Kit does not intentionally kill an AI in the middle of an edit/tool call to hit exactly 50.000%.
 
+### A new task uses the same supervisor
+
+Standalone review intake queues a task handoff independently of the threshold. After the current native turn completes, the supervisor starts a new review task in a fresh native session from only that task handoff. It does not capture a continuation summary or reuse the implementation handoff. The review session delivers one report, and its receipt plus native completion boundary ends supervision. The builder is not resumed. See [Review changes without preparing a PR](#review-changes-without-preparing-a-pr) for the request and completion contract.
+
 ### Provider telemetry and work evidence
 
 Codex is supervised with a process-local turn-complete notifier. The notifier gives Web Kit the active thread/session ID, which is used to read that Codex session's current context/token-count state. Existing user notify configuration is preserved on a best-effort basis.
 
-Claude Code is supervised with a temporary `--settings` overlay that installs a status-line bridge. The bridge receives the provider's current `context_window.used_percentage`; when possible it also delegates to the user's existing status-line command.
+Claude Code is supervised with a temporary `--settings` overlay. Its status-line bridge receives `context_window.used_percentage` and preserves existing status-line behavior when possible. Its additive `Notification idle_prompt` hook confirms native boundaries for new review tasks and reports; status-line callbacks and `Stop` do not. This event normally arrives after about 60 seconds waiting for input ([Claude hook reference](https://code.claude.com/docs/en/hooks#notification)).
 
 For supervised Codex/Claude sessions, the provider bridge also compares bounded repository fingerprints at safe turns. Real repository changes can be recorded as implementation evidence; repeated no-delta turns during implementation feed the anti-slop guard. Generated Web-Kit state/security-review artifacts are excluded from implementation evidence, and raw untracked file contents are not persisted by this progress fingerprinting.
 
@@ -408,7 +416,7 @@ Project-local state is kept under:
 
 A rollover handoff is routing/state evidence only. Current repository source, current diff, relevant tests/build, and runtime evidence remain authoritative.
 
-The **Context Rollover Manager** role tells a fresh AI to verify the compact state, avoid repeating completed work, and resume the exact next safe action rather than restarting discovery/planning.
+For threshold continuation, the **Context Rollover Manager** tells the fresh AI to verify compact state, preserve completed work and resume the exact next action. For a new review task, it enforces only the task handoff and report contract; prior implementation/anti-slop state cannot turn the review into resumed building.
 
 ### Global configuration
 
@@ -784,6 +792,7 @@ Installed projects receive Node helpers including:
 .agent-core/bin/security-review.mjs
 .agent-core/bin/session-controller.mjs
 .agent-core/bin/context-supervisor.mjs
+.agent-core/bin/task-handoff.mjs
 .agent-core/bin/provider-bridge.mjs
 .agent-core/bin/supervisor-setup.mjs
 .agent-core/bin/web-kit-update.mjs

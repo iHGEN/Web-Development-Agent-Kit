@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { captureReviewBoundary, hasTaskReviewActivity, publishReviewBoundary } from "./task-handoff.mjs";
 
 const TERMINAL_JOB_STATUSES = new Set(["DONE", "BLOCKED", "WAITING_USER", "WAITING_EXTERNAL", "FAILED", "CANCELLED"]);
 const MAX_UNTRACKED_FILES = 200;
@@ -60,6 +61,21 @@ function statePaths() {
     jobs: path.join(project, ".agent-core", "state", "jobs"),
     workProgress: path.join(project, ".agent-core", "bin", "work-progress.mjs"),
   };
+}
+
+function currentLaunch(provider) {
+  const launchId = process.env.WEB_KIT_LAUNCH_ID;
+  // Legacy bridge callers have no generation binding. New supervisors always
+  // supply one; their old callbacks must not write telemetry or another job.
+  if (!launchId) return true;
+  const paths = statePaths();
+  const controller = readJson(path.join(paths.root, "supervisors", `${paths.supervisorId}.json`));
+  if (controller?.schema_version !== 2 || controller.status !== "running"
+    || controller.launch_id !== launchId || controller.supervisor_id !== paths.supervisorId
+    || controller.provider !== provider || controller.project !== paths.project
+    || !Number.isSafeInteger(controller.pid) || controller.pid <= 0) return false;
+  try { process.kill(controller.pid, 0); return true; }
+  catch (error) { return error.code === "EPERM"; }
 }
 
 function threshold() {
@@ -172,12 +188,14 @@ function codexContext(threadId) {
   return null;
 }
 
-function writeTelemetryAndMaybeRequest(provider, sessionId, percent, source, extra = {}) {
+function writeTelemetryAndMaybeRequest(provider, sessionId, percent, source, extra = {}, boundarySource = null) {
   const paths = statePaths();
   if (!Number.isFinite(percent)) return;
   const telemetry = {
     schema_version: 1,
     supervisor_id: paths.supervisorId,
+    project: paths.project,
+    launch_id: process.env.WEB_KIT_LAUNCH_ID || null,
     provider,
     session_id: sessionId || null,
     used_percentage: Math.max(0, Math.min(100, percent)),
@@ -186,12 +204,13 @@ function writeTelemetryAndMaybeRequest(provider, sessionId, percent, source, ext
     ...extra,
   };
   atomicWrite(paths.telemetry, telemetry);
-  if (telemetry.used_percentage >= threshold()) {
+  if (boundarySource && !hasTaskReviewActivity() && telemetry.used_percentage >= threshold()) {
     atomicWrite(paths.request, {
       ...telemetry,
       threshold_percent: threshold(),
       reason: "context-threshold",
       safe_boundary: true,
+      boundary_source: boundarySource,
       requested_at: new Date().toISOString(),
     });
   }
@@ -553,19 +572,26 @@ function codexNotify() {
   const raw = process.argv[3] || "{}";
   const event = readJsonText(raw, {});
   const threadId = event["thread-id"] || event.thread_id || null;
+  const complete = event.type === "agent-turn-complete";
+  // Observe the task/receipt before any slow context scan or original hook.
+  // An earlier turn's delayed callback cannot consume work staged later.
+  const observation = complete ? captureReviewBoundary("codex", threadId, "codex-agent-turn-complete") : null;
   const context = codexContext(threadId);
   const inputMessages = Array.isArray(event["input-messages"]) ? event["input-messages"].slice(-8) : [];
   const lastAssistant = typeof event["last-assistant-message"] === "string" ? event["last-assistant-message"].slice(-12000) : "";
+  // Let the user's original notification finish before publishing a transition.
+  runOriginalCodexNotify(raw);
+  if (!currentLaunch("codex")) return;
   if (context) {
     writeTelemetryAndMaybeRequest("codex", threadId, context.percent, context.source, {
       context_window: context.context_window ?? null,
       input_tokens: context.input_tokens ?? null,
       input_messages: inputMessages,
       last_assistant_message: lastAssistant,
-    });
+    }, complete ? "codex-notify" : null);
   }
-  recordProviderTurn("codex", threadId, hash(JSON.stringify([threadId, inputMessages, lastAssistant])));
-  runOriginalCodexNotify(raw);
+  if (complete && publishReviewBoundary("codex", threadId, "codex-agent-turn-complete", process.env, observation)) return;
+  if (!hasTaskReviewActivity()) recordProviderTurn("codex", threadId, hash(JSON.stringify([threadId, inputMessages, lastAssistant])));
 }
 
 function claudeStatusline() {
@@ -577,7 +603,8 @@ function claudeStatusline() {
   const totalInput = numeric(data?.context_window, "total_input_tokens");
   const totalOutput = numeric(data?.context_window, "total_output_tokens");
   const model = data?.model?.id || data?.model?.display_name || null;
-  if (pct !== null) {
+  const current = currentLaunch("claude");
+  if (current && pct !== null) {
     writeTelemetryAndMaybeRequest("claude", sessionId, pct, "claude-statusline", {
       context_window: contextWindow,
       total_input_tokens: totalInput,
@@ -585,17 +612,37 @@ function claudeStatusline() {
       model,
     });
   }
-  recordProviderTurn("claude", sessionId, hash(JSON.stringify([sessionId, totalInput, totalOutput, pct, model])));
+  if (current && !hasTaskReviewActivity()) recordProviderTurn("claude", sessionId, hash(JSON.stringify([sessionId, totalInput, totalOutput, pct, model])));
   if (!runOriginalClaudeStatusline(raw)) {
     const shown = pct === null ? "--" : Math.round(pct);
     process.stdout.write(`[WK ctx ${shown}%]\n`);
   }
 }
 
+function claudeNotification() {
+  const data = readJsonText(readAllStdin(), {});
+  if (data.hook_event_name !== "Notification" || data.notification_type !== "idle_prompt"
+    || data.agent_id || typeof data.session_id !== "string" || !data.session_id || !currentLaunch("claude")) return;
+  if (publishReviewBoundary("claude", data.session_id, "claude-idle-prompt")) return;
+  if (hasTaskReviewActivity()) return;
+  const paths = statePaths();
+  const telemetry = readJson(paths.telemetry, null);
+  if (!telemetry || telemetry.provider !== "claude" || telemetry.session_id !== data.session_id
+    || telemetry.supervisor_id !== paths.supervisorId || telemetry.project !== paths.project
+    || telemetry.launch_id !== (process.env.WEB_KIT_LAUNCH_ID || null)) return;
+  writeTelemetryAndMaybeRequest("claude", data.session_id, telemetry.used_percentage, telemetry.source, {
+    context_window: telemetry.context_window,
+    total_input_tokens: telemetry.total_input_tokens,
+    total_output_tokens: telemetry.total_output_tokens,
+    model: telemetry.model,
+  }, "claude-idle");
+}
+
 const mode = process.argv[2];
 if (mode === "codex-notify") codexNotify();
 else if (mode === "claude-statusline") claudeStatusline();
+else if (mode === "claude-notification") claudeNotification();
 else {
-  console.error("Usage: provider-bridge.mjs <codex-notify|claude-statusline>");
+  console.error("Usage: provider-bridge.mjs <codex-notify|claude-statusline|claude-notification>");
   process.exitCode = 2;
 }

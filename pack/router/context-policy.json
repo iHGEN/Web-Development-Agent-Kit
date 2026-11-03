@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "mode": "strict-routed-context",
   "runtime": "node+npm",
   "principles": {
@@ -140,23 +140,29 @@
     "compatibility_handoff_state": ".agent-core/state/context-handoff.json",
     "activation_rule": "When the normal codex/claude command is invoked below a Web-Kit project, the user-level shim transparently starts the native provider under supervision. Outside a Web-Kit project, administrative/noninteractive commands, or when supervision is disabled, pass the real provider the original arguments unchanged.",
     "safe_boundary": "Evaluate threshold from provider lifecycle telemetry at an assistant-turn boundary. Do not intentionally terminate the provider in the middle of an edit/tool call merely because usage crossed the threshold during that turn.",
-    "handoff_rule": "At/above threshold, end the now-idle old TUI, attempt one read-only/programmatic resume solely to produce a compact JSON handoff, combine it with current repository/Git state, validate the handoff, then start a genuinely fresh native provider TUI with a short prompt pointing to the handoff.",
-    "fresh_context_rule": "The fresh provider reads the exact handoff first, verifies material claims against current source/diff/tests/runtime, reconciles mismatches in favor of repository evidence, avoids repeating completed work, and resumes the recorded next action.",
+    "handoff_rule": "For context-threshold continuation only: at/above threshold, end the now-idle old TUI, attempt one read-only/programmatic resume solely to produce a compact JSON handoff, combine it with current repository/Git state, validate the handoff, then start a genuinely fresh native provider TUI with a short prompt pointing to the handoff.",
+    "fresh_context_rule": "For threshold continuation, read the exact handoff first, verify material claims against current source/diff/tests/runtime, preserve completed work, and resume the recorded next action. A new review follows only its task handoff and report contract; never apply the old implementation task or anti-slop resume state.",
     "authority_rule": "Context handoff is routing/state evidence only. Current source, current diff, relevant tests/build, and runtime evidence override the handoff.",
     "provider_process_rule": "The transparent supervisor preserves the normal interactive provider UI. It does not emulate /clear or /new terminal keystrokes and does not require the developer to launch Web Kit for every AI session.",
     "codex": {
       "telemetry": "process-local agent-turn-complete notify bridge plus current local Codex session context/token-count state",
       "configuration_injection": "temporary CLI -c notify override",
-      "preserve_existing_notify": true
+      "preserve_existing_notify": true,
+      "new_task_boundary": "agent-turn-complete"
     },
     "claude": {
       "telemetry": "temporary statusLine bridge using context_window.used_percentage",
       "configuration_injection": "temporary command-line --settings overlay",
-      "preserve_existing_statusline_best_effort": true
+      "preserve_existing_statusline_best_effort": true,
+      "new_task_boundary": "Notification idle_prompt; normally after about 60 seconds waiting for input; statusLine and Stop are not completion boundaries"
     },
     "controlled_ai_rule": "When WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE=1, the AI finishes its current turn normally and must not manually /clear, /new, /compact, or ask the user to restart due to context pressure. The outer supervisor owns rollover.",
     "managed_policy_rule": "If provider/enterprise policy prevents telemetry injection, do not weaken or bypass it. The provider remains usable; transparent threshold rollover may be unavailable for that invocation.",
-    "fallback_rule": "The explicit .agent-core/bin/session-controller.mjs and npm session command remain available for CI/headless automation, debugging, and environments where transparent user-level shims cannot be installed."
+    "fallback_rule": "The explicit .agent-core/bin/session-controller.mjs and npm session command remain available for CI/headless automation, debugging and continuation where transparent shims cannot be installed. They are not fallbacks for standalone review task handoffs.",
+    "task_handoff_engine": ".agent-core/bin/task-handoff.mjs",
+    "task_session_engine": ".agent-core/bin/context-supervisor.mjs",
+    "new_task_rule": "A queued standalone review request is a distinct trigger from context pressure. Bind it to the active compatible native supervisor and launch; finish the current turn, then replace the idle provider with a fresh native session using only its task handoff and the existing provider settings/permissions/authentication. Do not capture a builder summary, resume builder history, delegate a subagent or use a same-session/session-controller fallback. Tracking failure is a gap; unavailable supervision is Review not started.",
+    "new_task_completion_rule": "After the fresh review writes its designated new report, stages task-handoff.mjs report-ready and presents it, require a valid receipt plus its actual native completion boundary. Record the real native session ID; mark only report delivery DONE/final-validation PASS with code approval pending, then exit the supervisor without resuming the builder. Preserve existing jobs/scope/queues and the global implementation context handoff."
   },
   "runtime_policy": {
     "required": [

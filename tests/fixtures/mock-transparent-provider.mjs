@@ -20,7 +20,12 @@ if (!active) {
 const stateRoot = path.join(project, ".agent-core", "state", "transparent-test");
 fs.mkdirSync(stateRoot, { recursive: true });
 const logFile = path.join(stateRoot, `${provider}-calls.jsonl`);
-fs.appendFileSync(logFile, `${JSON.stringify({ provider, args, active, handoffMode, isHeadless, at: new Date().toISOString() })}\n`);
+fs.appendFileSync(logFile, `${JSON.stringify({ provider, args, active, handoffMode, isHeadless, pid: process.pid,
+  launch_id: process.env.WEB_KIT_LAUNCH_ID || null, at: new Date().toISOString() })}\n`);
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
 
 function handoff() {
   return {
@@ -67,15 +72,21 @@ if (provider === "codex") {
   const sessionDir = path.join(codexHome, "sessions", "2026", "08", "18");
   fs.mkdirSync(sessionDir, { recursive: true });
   const session = path.join(sessionDir, "rollout-codex-old-session.jsonl");
-  fs.writeFileSync(session, `${JSON.stringify({ type: "event_msg", payload: { type: "token_count", model_context_window: 100000, last_token_usage: { input_tokens: 60000 } } })}\n`);
-  const event = JSON.stringify({
-    type: "agent-turn-complete",
-    "thread-id": "codex-old-session",
-    "input-messages": ["transparent codex task"],
-    "last-assistant-message": "finished step one"
-  });
-  const result = spawnSync(String(notify[0]), [...notify.slice(1).map(String), event], { stdio: "inherit", windowsHide: true });
-  if (result.error || result.status !== 0) process.exit(92);
+  const emit = percent => {
+    fs.writeFileSync(session, `${JSON.stringify({ type: "event_msg", payload: { type: "token_count", model_context_window: 100000, last_token_usage: { input_tokens: percent * 1000 } } })}\n`);
+    const event = JSON.stringify({
+      type: "agent-turn-complete",
+      "thread-id": "codex-old-session",
+      "input-messages": ["transparent codex task"],
+      "last-assistant-message": `finished step one at ${percent}%`
+    });
+    const result = spawnSync(String(notify[0]), [...notify.slice(1).map(String), event], { stdio: "inherit", windowsHide: true });
+    if (result.error || result.status !== 0) process.exit(92);
+  };
+  emit(49);
+  await sleep(700);
+  fs.writeFileSync(path.join(stateRoot, `${provider}-below-threshold.txt`), "still running at 49%\n");
+  emit(60);
 } else {
   const settingsIndex = args.indexOf("--settings");
   if (settingsIndex < 0 || !args[settingsIndex + 1]) process.exit(93);
@@ -83,20 +94,29 @@ if (provider === "codex") {
   if (!settings.statusLine?.command || !settings.statusLine.command.includes("provider-bridge.mjs")) process.exit(94);
   const bridge = process.env.WEB_KIT_PROVIDER_BRIDGE;
   if (!bridge) process.exit(95);
-  const payload = JSON.stringify({
+  const notifyHooks = settings.hooks?.Notification || [];
+  if (!notifyHooks.some(group => group.matcher === "idle_prompt" && group.hooks?.some(hook =>
+    hook.type === "command" && hook.command?.includes("claude-notification")))) process.exit(97);
+  const emit = (mode, payload) => {
+    const result = spawnSync(process.execPath, [bridge, mode], { input: JSON.stringify(payload), encoding: "utf8", stdio: ["pipe", "ignore", "inherit"], windowsHide: true });
+    if (result.error || result.status !== 0) process.exit(96);
+  };
+  const status = percent => emit("claude-statusline", {
     session_id: "claude-old-session",
     model: { id: "claude-test" },
-    context_window: {
-      used_percentage: 60,
-      context_window_size: 100000,
-      total_input_tokens: 60000,
-      total_output_tokens: 1000
-    }
+    context_window: { used_percentage: percent, context_window_size: 100000, total_input_tokens: percent * 1000, total_output_tokens: 1000 }
   });
-  const result = spawnSync(process.execPath, [bridge, "claude-statusline"], { input: payload, encoding: "utf8", stdio: ["pipe", "ignore", "inherit"], windowsHide: true });
-  if (result.error || result.status !== 0) process.exit(96);
+  const idle = () => emit("claude-notification", {
+    hook_event_name: "Notification", notification_type: "idle_prompt", session_id: "claude-old-session"
+  });
+  status(49);
+  idle();
+  await sleep(700);
+  fs.writeFileSync(path.join(stateRoot, `${provider}-below-threshold.txt`), "still running at 49%\n");
+  status(60);
+  await sleep(700);
+  fs.writeFileSync(path.join(stateRoot, `${provider}-before-idle.txt`), "status refresh did not end the active turn\n");
+  idle();
 }
 
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
 setInterval(() => {}, 1000);

@@ -13,9 +13,9 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 ## Startup
 
-For **"review these changes"** and equivalent standalone requests, follow **Review-only intake** in `workflow.md` and `.agent-core/rules/changes-review.md` before profile/Graphify setup. Register a unique new SMALL `--review-only` report-delivery task, then launch an actual fresh native host reviewer without builder history or resume. Record the returned session/agent ID and `REVIEWING`; tracking failure is a disclosed gap and does not prevent launch. If fresh launch is unavailable or fails, report **Review not started** without a same-session substitute or task completion. Do not invoke the strict provider runner or rollover controllers.
+For **"review these changes"** and equivalent standalone requests, follow **Review-only intake** in `workflow.md` and `.agent-core/rules/changes-review.md` before profile/Graphify setup. Invoke `task-handoff.mjs request-review` with the original request and selected source. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` task. Once queued, end the current turn. The same active outer supervisor starts a fresh native Codex/Claude session at the actual native completion boundary, with no builder history, summary capture or resume. Do not delegate a subagent or invoke the strict review runner or explicit Session Controller. If compatible supervision is unavailable or launch fails, report **Review not started**; tracking failure alone is a disclosed gap.
 
-Deliver the returned findings/coverage report with task/session IDs and **PR readiness: not assessed**, then stop. Only the new review task may reach `DONE --final-validation PASS`, meaning report delivered, even with defects; leave its review/quality-review approval fields pending. The coordinator may write new review task/report records and normal aggregate bookkeeping; the reviewer only reads/reports. Preserve source, policies, the current conversation and existing task/scope/queue records. No scope/check/profile/sandbox setup is required for this analysis. An explicit fix request resumes the normal scoped implementation workflow.
+The fresh session reads the selected source once, writes its designated new report, runs `task-handoff.mjs report-ready`, presents findings/gaps with **PR readiness: not assessed**, and ends its turn. The supervisor records the real native session ID, completes only the new report task after the receipt and native boundary, then exits without returning to the builder. `DONE`/final-validation `PASS` mean report delivery; code approval remains pending. Preserve source, user policies, existing jobs/scope/queues and the global implementation context handoff. Missing requirements, scope or tests are gaps; do not repair setup. A later fix request enters normal scoped implementation.
 
 For other engineering work, read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
@@ -70,7 +70,7 @@ High-risk includes material changes to trust/security boundaries, public contrac
 
 ## Anti-slop responsibility
 
-The Captain owns workflow efficiency.
+The Captain owns workflow efficiency. The rules in this section apply to implementation tasks and their threshold continuation. They must not turn a new standalone review task into resumed implementation or a fix loop.
 
 After discovery, do not permit two consecutive planning/routing/summary-only cycles. If `.agent-core/state/jobs/<task-id>.json` reports an anti-slop violation, route the next cycle directly to the responsible implementation worker with the exact evidence-supported next action.
 

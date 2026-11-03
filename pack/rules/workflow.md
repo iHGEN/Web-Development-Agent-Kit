@@ -26,14 +26,14 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 
 ## Review-only intake
 
-Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as source-analysis requests under `.agent-core/rules/changes-review.md`:
+Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as a new source-analysis task under `.agent-core/rules/changes-review.md`:
 
-1. Select the user's diff/files/range, or current staged, unstaged and relevant untracked changes by default. The coordinator registers a unique new report-delivery task with `work-progress.mjs start --classification SMALL --review-only`; never reuse an implementation or existing scope ID. Tracking failure is a disclosed gap, not a reason to skip fresh review.
-2. Launch an actual fresh native host reviewer with no builder conversation or resume, and record its real session/agent ID. Preserve the visible conversation and user policies. If fresh launch is unavailable or fails, report **Review not started**; never substitute same-session analysis or the rollover/strict provider controllers.
-3. The reviewer reads selected source and relevant callers, then returns evidenced findings and coverage gaps with **PR readiness: not assessed**. Existing tasks, scope/check evidence, profiles and strict-runner sandbox support are not analysis prerequisites. Do not execute project code or repair setup. Report `NO SOURCE` or `NO CHANGES` honestly when applicable.
-4. The coordinator delivers the report and may mark only the new review task `DONE --final-validation PASS`, meaning report delivery completed even when findings remain. Leave its review/quality-review approval fields pending. Include the task and actual fresh-session IDs, then stop. A failed launch never completes the task.
+1. Select the user's diff/files/range, or current staged, unstaged and relevant untracked changes by default. Invoke `node .agent-core/bin/task-handoff.mjs request-review --request '<original request>' --selection '<selection>'`. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` report-delivery task; tracking failure is a disclosed gap.
+2. End the current turn after the request is queued. At Codex `agent-turn-complete` or Claude `Notification idle_prompt`, the same active outer supervisor ends the old TUI and starts a fresh native session of the same provider with the task handoff, existing settings and policies. No builder history, summary capture or session resume is passed. An unavailable/failed compatible supervisor launch is **Review not started**; there is no subagent, same-session or explicit Session Controller fallback.
+3. The fresh session reads the selected source and relevant callers once, then writes the designated new `report.md` with evidenced findings, coverage gaps and **PR readiness: not assessed**. Existing tasks, scope/check evidence, profiles and strict-runner sandbox support are not prerequisites. Do not execute project code or repair setup. Report `NO SOURCE` or `NO CHANGES` honestly when applicable.
+4. Run `node .agent-core/bin/task-handoff.mjs report-ready`, present the report and end the turn. Only a valid report receipt plus the fresh session's actual native completion boundary lets the supervisor record the real session ID and mark the new review task `DONE --final-validation PASS`. That means report delivery completed, even with defects; leave review/quality-review approval pending. The supervisor exits and does not resume the builder.
 
-This route takes precedence over profile/Graphify setup and implementation/repair loops. Allow only new review task/report bookkeeping and the helper's normal aggregate updates; preserve source and existing task/scope/queue records. Do not import approval evidence, declare `READY TO OPEN PR`, complete an implementation task or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
+This route precedes profile/Graphify setup and implementation/repair loops. Allow only new review task/handoff/report/receipt bookkeeping and normal helper aggregate updates; preserve source, existing jobs/scope/queues and the global implementation context handoff. Do not import approval evidence, complete an implementation task or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
 
 ## Phase 0 — Intake and job creation
 
@@ -340,7 +340,9 @@ Do not invent application-completion percentages from intuition.
 
 ## Phase 12 — Context rollover
 
-Context rollover changes provider-session lifetime only. It does not reset job/workflow state.
+Threshold rollover at 50% changes provider-session lifetime while preserving the same task and job/workflow state. A queued standalone review request is a separate trigger on the same outer supervisor: it starts a new task from its task-only handoff, reviews once, and exits after report delivery. It never resumes the old implementation task or applies that task's anti-slop state.
+
+The continuation rules below apply only to threshold rollover.
 
 At a safe boundary:
 

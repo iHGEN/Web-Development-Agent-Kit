@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Verify installed routing and the prescribed tracker lifecycle with explicit fixtures.
-// This test never launches a native review agent or claims an AI review ran.
+// Verify installed supervisor routing and the report-task tracker contract with explicit fixtures.
+// This suite never launches a native review session or claims an AI review ran.
+// Native supervisor transitions and receipt delivery have separate process integration coverage.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -79,11 +80,18 @@ function verifyInstructions() {
     const managed = text.slice(first, last);
     const route = managed.split("\n").find(line => line.includes("review these changes") && line.includes("changes-review.md"));
     assert(route, `${relative}: standalone changes-review trigger missing`);
-    assert.match(route, /fresh native review agent/);
-    assert.match(route, /no same-session fallback/);
+    assert.match(route, /fresh native Codex\/Claude session/);
+    assert.match(route, /No subagent, same-session fallback/);
+    assert.match(route, /same outer context-supervisor\.mjs/);
+    assert.match(route, /end the current turn/);
+    assert.match(route, /task-only handoff/);
+    assert.match(route, /no builder conversation, summary capture or resume/);
+    assert.match(route, /supervisor exits and does not resume the builder/);
+    assert.match(route, /Codex agent-turn-complete or Claude Notification idle_prompt/);
     assert.match(route, /unique new.*task/);
-    assert.match(route, /work-progress\.mjs start/);
-    assert.match(route, /--classification SMALL/);
+    assert.match(route, /task-handoff\.mjs request-review/);
+    assert.match(route, /task-handoff\.mjs report-ready/);
+    assert.match(route, /SMALL/);
     assert.match(route, /--review-only/);
     assert.match(route, /session ID/);
     assert.match(route, /PR readiness: not assessed/);
@@ -99,10 +107,11 @@ function verifyInstructions() {
     rule: ".agent-core/rules/changes-review.md",
     trigger: "review these changes",
     mode: "source-analysis",
-    execution: "fresh-native-agent",
+    execution: "fresh-native-supervisor-session",
     fresh_session_required: true,
     same_session_fallback: false,
-    task_registration_engine: ".agent-core/bin/work-progress.mjs",
+    task_registration_engine: ".agent-core/bin/task-handoff.mjs",
+    task_session_engine: ".agent-core/bin/context-supervisor.mjs",
     task_registration_mode: "review-only",
     existing_task_required: false,
     readiness_evidence: false,
@@ -111,6 +120,13 @@ function verifyInstructions() {
     assert.deepEqual(compatibility.changes_review, expectedRoute);
     assert.equal(compatibility.pr_readiness_review_engine, ".agent-core/bin/code-review.mjs");
   }
+  assert(fs.existsSync(path.join(project, expectedRoute.task_registration_engine)), "Task handoff helper must be installed with its routing instructions");
+  const policy = JSON.parse(read(".agent-core/routing/context-policy.json"));
+  assert.equal(policy.session_control.task_handoff_engine, expectedRoute.task_registration_engine);
+  assert.equal(policy.session_control.task_session_engine, expectedRoute.task_session_engine);
+  assert.match(policy.session_control.new_task_rule, /distinct trigger from context pressure/);
+  assert.match(policy.session_control.new_task_completion_rule, /exit the supervisor without resuming the builder/);
+  assert.match(policy.session_control.claude.new_task_boundary, /Notification idle_prompt/);
   assert.deepEqual(fs.readFileSync(path.join(project, ".agent-core/rules/changes-review.md")),
     fs.readFileSync(path.join(repo, "pack/rules/changes-review.md")), "The detailed changes-review rule must actually be installed.");
 }
@@ -175,7 +191,7 @@ try {
     const taskId = `changes-review-fixture-${randomUUID()}`;
     const job = progress(["start", "--task-id", taskId, "--classification", "SMALL", "--review-only",
       "--title", "Fixture changes-review report delivery", "--next", "Launch a fresh review session",
-      "--evidence", "TEST FIXTURE ONLY: new report-delivery request; no host launch has occurred"]);
+      "--evidence", "TEST FIXTURE ONLY: new report-delivery request; no native launch has occurred"]);
     assert.equal(job.task_id, taskId);
     assert.equal(job.status, "QUEUED");
     assert.equal(job.final_validation.status, "PENDING");
@@ -187,8 +203,8 @@ try {
     return taskId;
   };
 
-  // Exercise the documented coordinator ordering twice through the installed
-  // runtime. Session IDs and the delivery sink are explicitly test fixtures:
+  // Exercise the report-task tracker contract twice through the installed
+  // runtime; the supervisor now owns these updates in actual review delivery. Session IDs and the delivery sink are explicitly test fixtures:
   // this does not test native launch or independently generated analysis.
   for (let request = 0; request < 2; request += 1) {
     const taskId = registerRequest();
@@ -196,7 +212,7 @@ try {
     assert(!sessions.includes(sessionId));
     sessions.push(sessionId);
     const reviewing = progress(["update", "--task-id", taskId, "--status", "REVIEWING", "--agent", "fixture-reviewer",
-      "--evidence", `TEST FIXTURE ONLY: session=${sessionId}; no native agent was launched by this suite`]);
+      "--evidence", `TEST FIXTURE ONLY: session=${sessionId}; no native provider was launched by this suite`]);
     assert.equal(reviewing.status, "REVIEWING");
     assert(reviewing.evidence.items.some(item => item.value.includes(sessionId)));
     verifyReportOnlyTask(reviewing);
@@ -206,7 +222,7 @@ try {
     assert.deepEqual(fs.readFileSync(path.join(project, `.agent-core/state/jobs/${taskId}.json`)), pending);
 
     const reportPath = `.agent-core/state/reviews/${taskId}/report.md`;
-    const report = `# Fixture report\n\nTEST FIXTURE ONLY: authored test report, not output from a native agent.\n\nTask: ${taskId}\nSession: ${sessionId}\n\n## Finding\n\nP2 — src/feature.js:4: sumPrices([]) calls reduce without an initial value, which throws TypeError instead of the documented empty-list total of 0. Supply an initial accumulator of 0. This is a source-analysis fixture; the source was not executed.\n\nCoverage: supplied src/feature.js only. No Git comparison, tests, scope evidence or requirements were supplied; no checks or provider CLI were run.\n\nPR readiness: not assessed\n`;
+    const report = `# Fixture report\n\nTEST FIXTURE ONLY: authored test report, not output from a native provider.\n\nTask: ${taskId}\nSession: ${sessionId}\n\n## Finding\n\nP2 — src/feature.js:4: sumPrices([]) calls reduce without an initial value, which throws TypeError instead of the documented empty-list total of 0. Supply an initial accumulator of 0. This is a source-analysis fixture; the source was not executed.\n\nCoverage: supplied src/feature.js only. No Git comparison, tests, scope evidence or requirements were supplied; no checks or provider CLI were run.\n\nPR readiness: not assessed\n`;
     write(reportPath, report);
     allowedNewState.add(reportPath);
     assert.equal(readJob(taskId).status, "REVIEWING", "Task completed before fixture report delivery");

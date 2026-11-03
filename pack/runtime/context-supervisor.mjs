@@ -4,16 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { readReviewTransition, startReviewTransition, finishReviewTransition, failReviewTransition } from "./task-handoff.mjs";
 
 const SUPPORTED = new Set(["codex", "claude"]);
 const PASS_THROUGH_CODEX = new Set(["exec", "login", "logout", "mcp", "completion", "debug", "apply", "cloud", "app-server", "features", "sandbox", "help"]);
 const PASS_THROUGH_CLAUDE = new Set(["update", "mcp", "doctor", "install", "setup-token"]);
-const CODEX_VALUE_FLAGS = new Set(["-m", "--model", "-c", "--config", "-p", "--profile", "-C", "--cd", "--sandbox", "--ask-for-approval", "-i", "--image"]);
+const CODEX_VALUE_FLAGS = new Set(["-m", "--model", "-c", "--config", "-p", "--profile", "-C", "--cd", "-s", "--sandbox", "-a", "--ask-for-approval", "-i", "--image", "--add-dir", "--local-provider", "--enable", "--disable", "--remote", "--remote-auth-token-env", "-P", "--permission-profile"]);
 const CLAUDE_VALUE_FLAGS = new Set([
   "--model", "--permission-mode", "--settings", "--add-dir", "--allowedTools", "--disallowedTools",
   "--mcp-config", "--agent", "--agents", "--system-prompt", "--system-prompt-file", "--append-system-prompt",
   "--append-system-prompt-file", "--plugin-dir", "--plugin-url", "--tools", "--output-format", "--input-format",
   "--max-turns", "--session-id", "--teammate-mode",
+  "--effort", "--setting-sources", "--fallback-model", "--permission-prompt-tool", "--allowed-tools", "--disallowed-tools",
 ]);
 
 function nowIso() { return new Date().toISOString(); }
@@ -89,6 +91,7 @@ function firstCommandToken(args, valueFlags) {
 
 function shouldPassThrough(provider, args) {
   if (args.some((arg) => ["--help", "-h", "--version", "-V"].includes(arg))) return true;
+  if (provider === "claude" && args.some((arg) => ["-p", "--print"].includes(arg))) return true;
   const first = firstCommandToken(args, provider === "codex" ? CODEX_VALUE_FLAGS : CLAUDE_VALUE_FLAGS);
   if (!first) return false;
   if (provider === "codex") return PASS_THROUGH_CODEX.has(first);
@@ -199,13 +202,17 @@ function sanitizeCodexFreshArgs(args) {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--") break;
-    if (arg === "resume") break;
+    // Identity selectors and builder attachments belong to the old conversation.
+    if (["--last", "--all", "--fork", "--continue"].includes(arg)) continue;
+    if (["--session-id", "-i", "--image"].includes(arg)) { i += 1; continue; }
+    if (/^--(?:session-id|image)=/.test(arg)) continue;
     if (arg.startsWith("-")) {
       out.push(arg);
       if (CODEX_VALUE_FLAGS.has(arg) && i + 1 < args.length) out.push(args[++i]);
       continue;
     }
-    break;
+    // Drop resume/fork commands, IDs and positional prompts, but retain policy
+    // options that were supplied after them in the original invocation.
   }
   return out;
 }
@@ -259,19 +266,19 @@ function sanitizeClaudeFreshArgs(args) {
   const out = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (["-c", "--continue"].includes(arg)) continue;
-    if (["-r", "--resume"].includes(arg)) {
+    if (["-c", "--continue", "--fork-session"].includes(arg)) continue;
+    if (["-r", "--resume", "--session-id"].includes(arg)) {
       if (i + 1 < args.length && !args[i + 1].startsWith("-")) i += 1;
       continue;
     }
-    if (arg.startsWith("--resume=")) continue;
+    if (/^--(?:resume|session-id|continue|fork-session)=/.test(arg)) continue;
     if (arg === "--") break;
     if (arg.startsWith("-")) {
       out.push(arg);
       if (CLAUDE_VALUE_FLAGS.has(arg) && i + 1 < args.length) out.push(args[++i]);
       continue;
     }
-    break;
+    // Positional builder text is not part of the next session.
   }
   return out;
 }
@@ -313,8 +320,16 @@ function prepareInstrumentation(provider, rawArgs, project, supervisorId) {
   fs.mkdirSync(runtimeDir, { recursive: true });
   const settingsFile = path.join(runtimeDir, `${supervisorId}-claude-settings.json`);
   const bridgeCommand = `${quoteCommandArg(process.execPath)} ${quoteCommandArg(bridge)} claude-statusline`;
+  const idleCommand = `${quoteCommandArg(process.execPath)} ${quoteCommandArg(bridge)} claude-notification`;
   const merged = {
     ...explicit,
+    hooks: {
+      ...(explicit.hooks || {}),
+      Notification: [
+        ...(Array.isArray(explicit.hooks?.Notification) ? explicit.hooks.Notification : []),
+        { matcher: "idle_prompt", hooks: [{ type: "command", command: idleCommand, timeout: 10 }] },
+      ],
+    },
     statusLine: {
       type: "command",
       command: bridgeCommand,
@@ -458,21 +473,41 @@ function freshPrompt(project, handoffPath, handoff) {
   return `Web Kit automatically started a fresh context because the previous ${handoff.provider} context reached ${Math.round(handoff.observed_context_percent ?? handoff.threshold_percent)}%. Read \`${rel}\` first. Treat it as routing/state evidence, verify material claims against current repository source/diff/tests/runtime, do not repeat completed work, and continue the exact recorded next action under the existing Web-Kit workflow. Do not manually /clear, /new, or /compact for this rollover.`;
 }
 
-async function waitForChildOrRequest(child, requestFile) {
+function taskReviewPrompt(project, handoffPath) {
+  const rel = path.relative(project, handoffPath).split(path.sep).join("/");
+  return `Web Kit started a fresh review session for a new task through the same outer supervisor used for context rollover. Read \`${rel}\` first, then \`.agent-core/rules/changes-review.md\`. This is already the fresh reviewer: do not queue another handoff or resume the builder. Analyze the requested changes and relevant callers, preserve source and existing task/scope/queue records, and report findings and coverage gaps with PR readiness: not assessed. Write only this task's report at the handoff's report_path, run \`node .agent-core/bin/task-handoff.mjs report-ready\`, present the report, then stop. The supervisor records delivery at the native completion boundary and exits. Do not continue implementation, fix findings, run project code/tests, or grant code approval.`;
+}
+
+async function waitForChildOrRequest(child, requestFile, context) {
   return await new Promise((resolve) => {
     let settled = false;
+    let timer;
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearInterval(timer);
       resolve(value);
     };
-    child.once("error", () => finish({ type: "exit", code: 127 }));
-    child.once("close", (code) => finish({ type: "exit", code: code ?? 1 }));
-    const timer = setInterval(() => {
-      if (!fs.existsSync(requestFile)) return;
+    const requested = () => {
       const request = readJson(requestFile, null);
-      if (request?.safe_boundary && request?.reason) finish({ type: "rollover", request });
+      if (request?.safe_boundary !== true) return null;
+      if (["review-task", "review-complete", "review-failed"].includes(request.reason)) {
+        const transition = readReviewTransition(request, context);
+        return transition ? { type: transition.reason, request, transition } : null;
+      }
+      if (context.activeReviewTaskId || request.reason !== "context-threshold"
+        || request.schema_version !== 1 || request.supervisor_id !== context.supervisorId
+        || request.provider !== context.provider || request.project !== context.project
+        || request.launch_id !== context.launchId
+        || !Number.isFinite(request.used_percentage) || request.used_percentage < context.threshold
+        || !["codex-notify", "claude-idle"].includes(request.boundary_source)) return null;
+      return { type: "rollover", request };
+    };
+    child.once("error", () => finish({ type: "exit", code: 127 }));
+    child.once("close", (code) => finish(requested() || { type: "exit", code: code ?? 1 }));
+    timer = setInterval(() => {
+      const request = requested();
+      if (request) finish(request);
     }, 250);
     timer.unref?.();
   });
@@ -528,9 +563,13 @@ async function main() {
   instrumentation.env.WEB_KIT_CONTEXT_THRESHOLD = String(boundedThreshold);
   let launchArgs = instrumentation.initialArgs;
   let rollovers = 0;
+  let nextLaunchId = null;
+  let activeReviewTaskId = null;
 
   atomicWrite(controllerFile, {
-    schema_version: 1,
+    schema_version: 2,
+    task_handoff_version: 1,
+    pid: process.pid,
     supervisor_id: supervisorId,
     provider,
     status: "running",
@@ -546,20 +585,71 @@ async function main() {
   try {
     while (true) {
       removeIfExists(requestFile);
+      const launchId = nextLaunchId || crypto.randomUUID();
+      nextLaunchId = null;
+      instrumentation.env.WEB_KIT_LAUNCH_ID = launchId;
+      if (activeReviewTaskId) instrumentation.env.WEB_KIT_REVIEW_TASK_ID = activeReviewTaskId;
+      else delete instrumentation.env.WEB_KIT_REVIEW_TASK_ID;
+      const current = readJson(controllerFile, {});
+      atomicWrite(controllerFile, {
+        ...current,
+        status: "running",
+        launch_id: launchId,
+        launch_started_at: nowIso(),
+        active_review_task_id: activeReviewTaskId,
+        updated_at: nowIso(),
+      });
       const child = spawnProvider(real, launchArgs, {
         cwd: project,
         stdio: "inherit",
         env: instrumentation.env,
       });
-      const outcome = await waitForChildOrRequest(child, requestFile);
+      const outcome = await waitForChildOrRequest(child, requestFile, {
+        project, supervisorId, provider, launchId, activeReviewTaskId, threshold: boundedThreshold,
+      });
       if (outcome.type === "exit") {
+        let code = outcome.code;
+        const pending = readJson(path.join(stateRoot, "pending-tasks", `${supervisorId}-${launchId}.json`), null);
+        const incompleteTaskId = activeReviewTaskId || pending?.task_id;
+        if (incompleteTaskId) {
+          const reason = activeReviewTaskId
+            ? `Review session exited (${code}) without a verified report-delivery boundary.`
+            : `The current session exited (${code}) before the queued review reached a native handoff boundary.`;
+          failReviewTransition(project, incompleteTaskId, reason);
+          console.error(`[Web Kit] Review not completed: ${reason}`);
+          code = code || 1;
+        }
         const state = readJson(controllerFile, {});
-        atomicWrite(controllerFile, { ...state, status: "exited", exit_code: outcome.code, rollovers, updated_at: nowIso() });
-        return outcome.code;
+        atomicWrite(controllerFile, { ...state, status: "exited", exit_code: code, rollovers, updated_at: nowIso() });
+        return code;
       }
 
       const request = outcome.request;
       await stopChild(child);
+      if (outcome.type === "review-failed") {
+        const reason = outcome.transition.failure_reason;
+        const failed = failReviewTransition(project, activeReviewTaskId, reason);
+        const state = readJson(controllerFile, {});
+        atomicWrite(controllerFile, { ...state, status: "exited", exit_code: 1, review_result: failed, updated_at: nowIso() });
+        console.error(`[Web Kit] Review session stopped without verified report delivery: ${reason}`);
+        return 1;
+      }
+      if (outcome.type === "review-complete") {
+        const delivered = finishReviewTransition(outcome.transition);
+        const state = readJson(controllerFile, {});
+        atomicWrite(controllerFile, { ...state, status: "exited", exit_code: 0, review_result: delivered, updated_at: nowIso() });
+        console.log(`[Web Kit] Review report delivered for ${activeReviewTaskId}. Review session stopped; PR readiness not assessed.`);
+        return 0;
+      }
+      if (outcome.type === "review-task") {
+        nextLaunchId = crypto.randomUUID();
+        activeReviewTaskId = outcome.transition.task.task_id;
+        const started = startReviewTransition(outcome.transition, nextLaunchId);
+        activeReviewTaskId = started.taskId;
+        launchArgs = [...instrumentation.freshBaseArgs, taskReviewPrompt(project, started.handoffPath)];
+        console.log(`\n[Web Kit] Starting a fresh ${provider} session for review task ${activeReviewTaskId}; no builder conversation is resumed.\n`);
+        continue;
+      }
       rollovers += 1;
       console.log(`\n[Web Kit] Context ${Math.round(request.used_percentage ?? boundedThreshold)}% reached at a safe turn boundary. Preparing fresh context...`);
 
@@ -588,6 +678,13 @@ async function main() {
       removeIfExists(requestFile);
       await sleep(150);
     }
+  } catch (error) {
+    if (activeReviewTaskId) {
+      try { failReviewTransition(project, activeReviewTaskId, error.message); } catch {}
+    }
+    const state = readJson(controllerFile, {});
+    atomicWrite(controllerFile, { ...state, status: "failed", error: error.message, updated_at: nowIso() });
+    throw error;
   } finally {
     instrumentation.cleanup();
   }

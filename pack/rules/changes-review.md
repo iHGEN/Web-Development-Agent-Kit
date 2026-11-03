@@ -1,79 +1,70 @@
 # Standalone Changes Review
 
-This rule supports **Review-only intake** in `.agent-core/rules/workflow.md`. It applies to standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"**. Register a separate review-delivery task, launch a genuinely fresh reviewer, return findings and coverage gaps, then stop. Interpret the whole request: an explicit request to fix findings, execute checks, or assess PR readiness also authorizes the corresponding normal workflow.
+This rule supports **Review-only intake** in `.agent-core/rules/workflow.md`. Standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** start a **new review task in a fresh native Codex/Claude session**. The same outer supervisor that handles 50% context rollover replaces the current session, runs one review, and exits after report delivery. It does not delegate a subagent or resume the builder afterward. Interpret the whole request: explicit fixes, check execution or PR-readiness assessment follow their corresponding authorized workflow.
 
 ## Select the evidence
 
-Honor the user's supplied diff, files, PR, commit range or comparison base first. Otherwise review the current staged, unstaged and relevant untracked changes, and say that this is the selection. Do not silently include every committed change on the branch or substitute a task's allowed paths for the user's review selection. Read affected callers and contracts as needed to assess the selected changes.
+Honor the user's supplied diff, files, PR, commit range or comparison base first. Otherwise select the current staged, unstaged and relevant untracked changes and say so. Do not silently include every committed branch change or substitute an implementation task's allowed paths for the requested selection.
 
-Use the host's existing authorized source-reading and diff capabilities. Existing task IDs, requirements, scope snapshots, project profiles and recorded checks are optional context. Do not reconcile scope, capture a replacement pre-change baseline or repair setup. This route takes precedence over project-profile loading, Graphify bootstrap and the implementation/completion loop; its separate review-delivery task does not inherit those prerequisites.
+Preserve the original request and source selection in the task handoff. Do not attach the builder's conversation, implementation summary or global context handoff. The fresh session reads the selected source and relevant callers/contracts needed to assess it. Requirements, prior findings and recorded checks supplied with the requested review selection may be inspected; they are evidence, not prerequisites. Do not load an old implementation job, scope, queue or prior reviewer conclusions to reconstruct builder context. Do not reconcile scope, capture a replacement pre-change baseline, repair setup or bootstrap Graphify.
 
-Pass the available selection to the fresh reviewer even when it may be empty or incomplete; these cases do not skip the fresh launch. If the requested base or some files are unavailable, the reviewer inspects available material and identifies the missing comparison or coverage precisely. Do not silently claim a different selection was reviewed. If no source or diff is accessible, its report states **NO SOURCE** and what is needed, not "no findings." If the selected working tree has no changes, it states **NO CHANGES** without implying that branch commits were reviewed.
+Empty or incomplete selections still enter the fresh review. An unavailable base or file becomes a precise coverage gap; do not silently review another comparison. No accessible source produces **NO SOURCE** and a description of what is missing. No selected working-tree changes produces **NO CHANGES**, without implying branch commits were reviewed.
 
-## Register and launch a fresh reviewer
+## Request a new task and end the current turn
 
-The **coordinator** owns bookkeeping; the **reviewer** only reads and returns a report. For every new request, the coordinator chooses a unique new task ID with no existing job, scope manifest or review report/directory. Never reuse an implementation task or an earlier review task, use `--force`, or add `--high-risk` or `--pr-bound` to this report-delivery task. `SMALL` describes delivery bookkeeping, not the risk of the code being reviewed.
-
-Register through the existing managed helper (replace placeholders with actual values):
+Use the installed helper from the project root with the original request and selected source description:
 
 ```bash
-node .agent-core/bin/work-progress.mjs start \
-  --task-id <new-review-task-id> --classification SMALL --review-only \
-  --title "Deliver independent changes review" \
-  --next "Launch a fresh native reviewer for the selected changes"
+node .agent-core/bin/task-handoff.mjs request-review \
+  --request '<original user request>' \
+  --selection '<requested files/diff/range, or current staged, unstaged and relevant untracked changes>'
 ```
 
-Then use the host assistant's **actual native fresh-agent/session tool**, with no inherited builder conversation and no resume. Give it the original user intent, selected diff/current source, relevant callers, prior findings and existing check evidence. Request read-only tools when supported. The delegated reviewer must not repeat intake, register another task or spawn a replacement reviewer. Preserve the visible builder conversation. A renamed role, new task ID or copied transcript is not proof of a new session.
+For text that is easier to pass as JSON, use `--request-file <path>` containing `original_request` and `selection` instead of the two text flags. Preserve user text exactly and use safe argument quoting.
 
-After the host confirms launch, record the real returned session/agent ID:
+The helper saves a task-only handoff, chooses a unique new task ID, and best-effort registers a SMALL `--review-only` report-delivery task. `SMALL` describes delivery bookkeeping, not the risk of the reviewed code. It never reuses an implementation task, existing scope ID or earlier review directory, or forces registration. Tracking failure is a coverage gap and does not prevent the fresh review.
 
-```bash
-node .agent-core/bin/work-progress.mjs update \
-  --task-id <new-review-task-id> --status REVIEWING --agent code-reviewer \
-  --evidence "Fresh host reviewer: <actual-session-id>; no builder conversation or resume" \
-  --next "Receive the independent source-review report"
-```
+A compatible active native supervisor is required. The request is bound to that supervisor and its current provider launch. An accepted request means **handoff queued**, not that review has run. After successful queuing, end the current assistant turn. Do not continue analysis, launch a subagent, spawn another supervisor, run the strict `code-review.mjs` runner or reset the provider manually.
 
-If managed tracking is unavailable or fails, disclose the tracking gap and still launch the fresh reviewer. Do not repair tracking or reuse another task to make registration succeed. If the host cannot launch a fresh context, or the launch fails, report **Review not started** with the concrete limitation; do not claim findings, substitute same-session analysis or complete the task. The new task, if successfully registered, may be marked `BLOCKED` with the launch failure as evidence. Never invent a session ID.
+At the actual native boundary, the outer `context-supervisor.mjs` ends the idle old TUI and starts the same provider fresh with only the task handoff. Codex uses `agent-turn-complete`; Claude uses `Notification` with `idle_prompt` (normally after about 60 seconds waiting for input; see [Claude hook documentation](https://code.claude.com/docs/en/hooks#notification)). Claude status-line updates and `Stop` are not trusted as this task's completion boundary. This path never resumes the builder to capture a summary and does not wait for 50% context usage.
 
-The Node bookkeeping helper cannot itself create a host-native session. Do not use `session-controller.mjs`, `context-supervisor.mjs`, `/clear` or `/new` as a substitute: the controllers continue or replace implementation sessions and have different progress/permission contracts. This route requires an actual fresh host launch, runs one review, and stops.
+The fresh launch retains the existing provider launch settings, model, permissions, authentication and user policies. It adds no OS sandbox and never weakens policy. If supervision is unavailable, incompatible, denied or fails to launch, report **Review not started** with the concrete limitation. Do not substitute delegated or same-session review, `session-controller.mjs`, `/clear` or `/new`, and do not complete the task. Never invent a native session ID.
 
 ## Execute the analysis
 
-This route does not launch an external provider CLI, invoke `.agent-core/bin/code-review.mjs`, or establish an additional OS sandbox. It uses the host's existing permissions and policies. Read-only instructions are a behavior contract, not a claim of newly verified OS isolation. Never bypass a denied capability, remove `.rules` files or weaken user policies to obtain more access.
+The fresh session reads its referenced task-only handoff first and performs that review once. It must not re-enter intake, register another task, spawn a replacement reviewer or apply the old implementation task's resume/anti-slop rules.
 
-The reviewer must not execute project code, tests, builds, hooks, migrations or installation commands. The coordinator's managed tracking commands above and below are bookkeeping only. Avoid read/diff commands that invoke configured project helpers. Use available source-reading alternatives or supplied evidence when safe inspection is unavailable. Missing test execution, failed scope checks and unavailable strict-runner sandbox support are coverage or readiness limitations; they do not prevent analysis of accessible code.
+Use existing authorized read/diff capabilities. Do not execute project code, tests, builds, hooks, migrations or installation commands. Avoid read/diff commands that invoke configured project helpers. Use source-reading alternatives or supplied evidence when safe inspection is unavailable. Missing requirements, tests, scope records and comparison evidence are coverage gaps; they do not block analysis of accessible code. Read-only behavior does not imply a newly verified OS boundary.
 
-Challenge the implementation against the original intent and actual source. Trace realistic normal, failure, permission, boundary, retry and concurrency cases where applicable. Inspect relevant security, correctness, integration, testing, performance and maintainability concerns. Support each P0–P3 finding with its location, trigger, impact, evidence and smallest proposed remedy. Distinguish demonstrated defects from hypotheses; do not invent findings, a finding quota, test results or a guarantee that no bugs remain. On re-review, address earlier findings explicitly.
+Challenge the implementation against the original intent and current source. Trace realistic normal, failure, permission, boundary, retry and concurrency cases where relevant. Inspect security, correctness, integration, testing, performance and maintainability concerns. Support each P0–P3 finding with its location, trigger, impact, evidence and smallest proposed remedy. Distinguish demonstrated defects from hypotheses; do not invent findings, test results, a finding quota or a guarantee that no bugs remain. Address previous findings explicitly on re-review.
 
-## Report and stop
+## Deliver the report and stop
 
-State the actual task and fresh-session identities, selected changes, examined files or behaviors, findings and coverage gaps. The coordinator adds the host-returned identity when it is not visible to the reviewer. Distinguish source reasoning from recorded or executed checks. If source changes during analysis, identify affected conclusions as stale rather than certifying the new state. Missing evidence may make the report **PARTIAL** while useful findings are still returned.
+The sole review output write is the new path designated by the handoff: `.agent-core/state/reviews/<new-review-task-id>/report.md`. Include findings, examined source and gaps. Distinguish source reasoning from recorded checks. If source changes during review, mark affected conclusions stale. Missing evidence may make a useful report **PARTIAL**.
 
 ```text
 Changes review: COMPLETED | PARTIAL | NO CHANGES | NO SOURCE
-Task: <new-review-task-id, or tracking unavailable with reason>
-Execution: fresh host reviewer
-Session: <actual host-returned session/agent ID>
+Task: <new-review-task-id; disclose tracking failure if any>
+Execution: fresh native supervisor session
+Session: <actual native provider ID when available; otherwise pending boundary confirmation>
 Selection: <files/diff/range and comparison actually examined>
 Findings: <severity, location, trigger, impact, evidence, proposed remedy>
 Coverage: <examined behavior and relevant callers>
-Checks: <existing evidence inspected; checks not executed during this review>
-Gaps: <unavailable evidence or unexamined behavior, or none identified>
+Checks: <recorded evidence inspected; no project checks executed during this review>
+Gaps: <missing evidence or unexamined behavior, or none identified>
 PR readiness: not assessed
 ```
 
-The reviewer returns this report and stops without writing source or state. The coordinator may save the returned report in a new `.agent-core/state/reviews/<new-review-task-id>/report.md`, present it to the user, and record delivery on **only the new review task**:
+After writing the report, stage its receipt:
 
 ```bash
-node .agent-core/bin/work-progress.mjs update \
-  --task-id <new-review-task-id> --status DONE --final-validation PASS \
-  --evidence "Independent report delivered: .agent-core/state/reviews/<new-review-task-id>/report.md; session <actual-session-id>; PR readiness not assessed" \
-  --next "Stop; await a separate request to fix findings"
+node .agent-core/bin/task-handoff.mjs report-ready
 ```
 
-Run this completion update only after the actual report is delivered, using its real location or delivery evidence. `DONE` and this task's final-validation `PASS` mean **review-report delivery completed**, even if the report contains defects or states `PARTIAL`, `NO CHANGES` or `NO SOURCE`. They never approve the reviewed code. Leave `review.status` and `quality.code_review` pending; do not invoke `quality-review`. A launch failure never qualifies for completion. If tracking or report storage fails, still deliver the available report and disclose that gap.
+Then present the report to the user and end the turn. Do not change the report after staging its receipt. `report-ready` alone is not delivery confirmation. The supervisor requires a valid receipt and the fresh provider's actual native completion boundary, records the native session identity, and completes **only the new review task** with `DONE` and final-validation `PASS` before exiting. It never returns to the builder. Do not manually mark the task done; report any receipt/storage failure honestly without claiming successful completion.
 
-The coordinator may write the new review task/report and the managed helper's normal aggregate bookkeeping. Preserve source, existing implementation/review jobs, scope manifests and review queues. Do not fix findings, import approval evidence, declare `READY TO OPEN PR`, commit, push, change PRs, publish or dispatch CI/CD. A later fix request resumes the normal scoped implementation workflow.
+If that genuine fresh-session boundary arrives with a missing or invalid report receipt, the supervisor stops the review and records the new task as failed instead of waiting indefinitely or claiming delivery. An old session callback cannot trigger this failure. A failure to verify task ownership remains an explicit limitation; do not use another task's records to repair it.
 
-The strict PR-readiness review remains `.agent-core/bin/code-review.mjs` under `pre-pr-review.md`, with its existing task, scope, check, provider and sandbox requirements. Standalone analysis never supplies or replaces that approval evidence. A numerical review score, if requested, does not change this distinction.
+`DONE`/`PASS` mean **report delivery completed**, including reports with findings or `PARTIAL`, `NO CHANGES` or `NO SOURCE`. Leave `review.status` and `quality.code_review` pending; do not import approval through `quality-review`. Managed writes are limited to the new review task/handoff/report/receipt and normal aggregate bookkeeping. Preserve source, existing jobs, scope manifests, review queues and the global implementation `context-handoff.json`.
+
+Do not fix findings, declare `READY TO OPEN PR`, commit, push, change PRs, publish or dispatch CI/CD. A later fix request enters normal scoped implementation. Strict PR readiness remains `.agent-core/bin/code-review.mjs` under `pre-pr-review.md`, with its existing task, scope, check, provider and sandbox requirements. This report never supplies that approval evidence.

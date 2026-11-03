@@ -105,7 +105,7 @@ function install(version) {
   const home = userHome();
   const base = webKitHome();
   const binDir = path.join(base, "bin");
-  const required = ["context-supervisor.mjs", "provider-bridge.mjs", "provider-process-wrapper.mjs"];
+  const required = ["context-supervisor.mjs", "provider-bridge.mjs", "provider-process-wrapper.mjs", "task-handoff.mjs"];
   for (const name of required) if (!fs.existsSync(path.join(here, name))) throw new Error(`Installed Web Kit runtime missing ${name}`);
   fs.mkdirSync(base, { recursive: true });
   for (const name of required) copyFile(path.join(here, name), path.join(base, name));
@@ -150,6 +150,7 @@ function status() {
   return {
     installed: fs.existsSync(path.join(base, "context-supervisor.mjs"))
       && fs.existsSync(path.join(base, "provider-bridge.mjs"))
+      && fs.existsSync(path.join(base, "task-handoff.mjs"))
       && processWrapperInstalled
       && shims.every((file) => fs.existsSync(file)),
     enabled: config.enabled !== false,

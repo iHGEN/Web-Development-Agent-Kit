@@ -2,8 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
@@ -284,5 +285,241 @@ assert(gateJob.status === "IMPLEMENTING", "pending delta did not advance the job
 assert(gateState.repository_fingerprint !== authorizedBaseline, "resolved pending delta did not advance repository fingerprint");
 assert(gateState.pending_repository_fingerprint === null, "resolved pending fingerprint was not cleared");
 assert(gateState.governance_violation === null, "resolved governance violation was not cleared");
+
+// New supervisors bind callbacks to a live launch. Exercise real Git deltas so
+// a stale callback or corrupt review artifact would otherwise credit old work.
+const guardedState = path.join(project, ".agent-core", "state", "context-rollover");
+const guardedCodexHome = path.join(project, ".agent-core", "state", "bridge-codex-fixture");
+function guardedCallback(provider, env, percent, sessionId, message) {
+  if (provider === "codex") {
+    const sessions = path.join(guardedCodexHome, "sessions", "2026", "11", "03");
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(path.join(sessions, "rollout-" + sessionId + ".jsonl"), JSON.stringify({
+      type: "event_msg",
+      payload: { type: "token_count", model_context_window: 100000, last_token_usage: { input_tokens: percent * 1000 } },
+    }) + "\n");
+    run(process.execPath, [bridge, "codex-notify", JSON.stringify({
+      type: "agent-turn-complete", "thread-id": sessionId,
+      "input-messages": ["implement the guarded task"], "last-assistant-message": message,
+    })], { cwd: project, env });
+    return;
+  }
+  run(process.execPath, [bridge, "claude-statusline"], { cwd: project, env, input: JSON.stringify({
+    session_id: sessionId, model: { id: "claude-guard-smoke" },
+    context_window: { used_percentage: percent, context_window_size: 100000, total_input_tokens: percent * 1000, total_output_tokens: 100 },
+  }) });
+  run(process.execPath, [bridge, "claude-notification"], { cwd: project, env, input: JSON.stringify({
+    hook_event_name: "Notification", notification_type: "idle_prompt", session_id: sessionId,
+  }) });
+}
+function snapshot(files) { return files.map(file => [file, fs.readFileSync(file)]); }
+function assertUnchanged(files, reason) {
+  for (const [file, content] of files) assert(fs.readFileSync(file).equals(content),
+    reason + ": changed " + path.relative(project, file));
+}
+let guardedValue = 100;
+for (const provider of ["codex", "claude"]) {
+  const taskId = "TASK-GUARDED-" + provider.toUpperCase();
+  run(process.execPath, [progress, "start", "--task-id", taskId, "--classification", "SMALL",
+    "--local-only", "--title", provider + " launch ownership", "--project", project], { cwd: project });
+  run(process.execPath, [progress, "update", "--task-id", taskId, "--status", "IMPLEMENTING",
+    "--agent", "backend-developer", "--next", "continue the existing implementation", "--project", project], { cwd: project });
+  const guardedJob = path.join(jobsDir, taskId + ".json");
+  const supervisorId = randomUUID();
+  const initialLaunch = randomUUID();
+  const controllerFile = path.join(guardedState, "supervisors", supervisorId + ".json");
+  const turnFile = path.join(guardedState, "turns", supervisorId + ".json");
+  const telemetryFile = path.join(guardedState, "telemetry", supervisorId + ".json");
+  const requestFile = path.join(guardedState, "requests", supervisorId + ".json");
+  let controller = {
+    schema_version: 2, task_handoff_version: 1, pid: process.pid, status: "running",
+    project, provider, supervisor_id: supervisorId, launch_id: initialLaunch,
+    launch_started_at: new Date().toISOString(), active_review_task_id: null,
+  };
+  fs.mkdirSync(path.dirname(controllerFile), { recursive: true });
+  const saveController = () => fs.writeFileSync(controllerFile, JSON.stringify(controller) + "\n");
+  saveController();
+  const initialEnv = {
+    ...process.env, WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE: "1",
+    WEB_KIT_PROJECT_ROOT: project, WEB_KIT_SUPERVISOR_ID: supervisorId, WEB_KIT_LAUNCH_ID: initialLaunch,
+    WEB_KIT_REVIEW_TASK_ID: "", WEB_KIT_CONTEXT_THRESHOLD: "50", CODEX_HOME: guardedCodexHome,
+    WEB_KIT_ORIGINAL_CODEX_NOTIFY_B64: "", WEB_KIT_ORIGINAL_CLAUDE_STATUSLINE_B64: "",
+  };
+  const oldSession = provider + "-guarded-builder";
+  guardedCallback(provider, initialEnv, 10, oldSession, "Pin the real implementation baseline.");
+  assert(readJson(turnFile).task_id === taskId, provider + ": normal callback did not pin the actual implementation task");
+  assert(readJson(turnFile).repository_fingerprint, provider + ": Git baseline fingerprint was not established");
+  assert(readJson(telemetryFile).launch_id === initialLaunch, provider + ": normal current telemetry was not recorded");
+  assert(readJson(guardedJob).metrics.implementation_cycles === 0, provider + ": baseline callback earned implementation credit");
+  const oldState = snapshot([guardedJob, turnFile, telemetryFile]);
+
+  const currentLaunch = randomUUID();
+  controller = { ...controller, launch_id: currentLaunch, launch_started_at: new Date().toISOString() };
+  saveController();
+  fs.writeFileSync(path.join(project, "src", "index.js"), "export const value = " + guardedValue++ + ";\n");
+  guardedCallback(provider, initialEnv, 60, oldSession, "Late old-launch callback after a real source edit.");
+  assertUnchanged(oldState, provider + ": stale launch callback");
+  assert(!fs.existsSync(requestFile), provider + ": stale launch callback requested threshold rollover");
+
+  // A current callback must still recognize that exact delta; suppression above
+  // cannot pass just because the fixture failed to expose meaningful Git state.
+  const currentEnv = { ...initialEnv, WEB_KIT_LAUNCH_ID: currentLaunch };
+  const currentSession = provider + "-guarded-current";
+  guardedCallback(provider, currentEnv, 10, currentSession, "Account for the source delta under the current launch.");
+  assert(readJson(guardedJob).metrics.implementation_cycles === 1, provider + ": current launch lost legitimate automatic progress");
+  const implementationState = snapshot([guardedJob, turnFile]);
+
+  const reviewId = "changes-review-" + randomUUID();
+  const reviewDir = path.join(project, ".agent-core", "state", "reviews", reviewId);
+  fs.mkdirSync(reviewDir, { recursive: true });
+  fs.writeFileSync(path.join(reviewDir, "request.json"), JSON.stringify({
+    schema_version: 1, kind: "changes-review", task_id: reviewId, request_id: randomUUID(),
+    project, provider, supervisor_id: supervisorId, launch_id: currentLaunch,
+    requested_at: new Date().toISOString(), original_request: "review these changes",
+    selection: "src/index.js", report_path: path.join(reviewDir, "report.md"),
+  }) + "\n");
+  const reviewLaunch = randomUUID();
+  controller = { ...controller, launch_id: reviewLaunch, launch_started_at: new Date().toISOString(), active_review_task_id: reviewId };
+  saveController();
+  const reviewEnv = { ...currentEnv, WEB_KIT_LAUNCH_ID: reviewLaunch, WEB_KIT_REVIEW_TASK_ID: reviewId };
+  for (const artifact of ["missing", "corrupt"]) {
+    if (artifact === "corrupt") fs.writeFileSync(path.join(reviewDir, "handoff.json"), "{broken handoff\n");
+    fs.writeFileSync(path.join(project, "src", "index.js"), "export const value = " + guardedValue++ + ";\n");
+    guardedCallback(provider, reviewEnv, 60, provider + "-guarded-review", "Review handoff is " + artifact + ".");
+    assertUnchanged(implementationState, provider + ": " + artifact + " review handoff fell through to implementation");
+    const telemetry = readJson(telemetryFile);
+    assert(telemetry.launch_id === reviewLaunch && telemetry.used_percentage === 60,
+      provider + ": " + artifact + " review test did not reach the valid current telemetry path");
+    assert(!fs.existsSync(requestFile), provider + ": " + artifact + " review handoff triggered threshold continuation");
+  }
+}
+
+// An old callback may still be running the user's original notification when
+// the next turn queues a review or stages its report. Keep the launch and native
+// session identical: generation-only guards cannot distinguish these turns.
+const taskHandoff = path.join(project, ".agent-core", "bin", "task-handoff.mjs");
+const { readReviewTransition, startReviewTransition, finishReviewTransition } = await import(pathToFileURL(taskHandoff).href);
+const delayedSupervisor = randomUUID();
+const delayedBuilderLaunch = randomUUID();
+const delayedControllerFile = path.join(guardedState, "supervisors", delayedSupervisor + ".json");
+const delayedRequestFile = path.join(guardedState, "requests", delayedSupervisor + ".json");
+const delayedHookDir = path.join(guardedState, "delayed-notify", delayedSupervisor);
+fs.mkdirSync(delayedHookDir, { recursive: true });
+const delayedHookFile = path.join(delayedHookDir, "original-notify.mjs");
+fs.writeFileSync(delayedHookFile, [
+  'import fs from "node:fs";',
+  'const [started, release] = process.argv.slice(2);',
+  'fs.writeFileSync(started, new Date().toISOString());',
+  'const deadline = Date.now() + 15000;',
+  'const timer = setInterval(() => {',
+  '  if (fs.existsSync(release)) { fs.writeFileSync(release + ".observed", "released"); clearInterval(timer); process.exit(0); }',
+  '  if (Date.now() >= deadline) { clearInterval(timer); process.exit(1); }',
+  '}, 10);',
+].join("\n") + "\n");
+let delayedController = {
+  schema_version: 2, task_handoff_version: 1, pid: process.pid, status: "running",
+  project, provider: "codex", supervisor_id: delayedSupervisor, launch_id: delayedBuilderLaunch,
+  launch_started_at: new Date().toISOString(), active_review_task_id: null,
+};
+const saveDelayedController = () => fs.writeFileSync(delayedControllerFile, JSON.stringify(delayedController) + "\n");
+saveDelayedController();
+const delayedBuilderEnv = {
+  ...process.env, WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE: "1",
+  WEB_KIT_PROJECT_ROOT: project, WEB_KIT_SUPERVISOR_ID: delayedSupervisor, WEB_KIT_LAUNCH_ID: delayedBuilderLaunch,
+  WEB_KIT_REVIEW_TASK_ID: "", CODEX_HOME: path.join(project, ".codex-empty"),
+  WEB_KIT_ORIGINAL_CODEX_NOTIFY_B64: "", WEB_KIT_ORIGINAL_CLAUDE_STATUSLINE_B64: "",
+};
+const delayedBuilderSession = "delayed-builder-" + randomUUID();
+const delayedReviewerSession = "delayed-reviewer-" + randomUUID();
+function completedTurn(sessionId, message) {
+  return JSON.stringify({ type: "agent-turn-complete", "thread-id": sessionId,
+    "input-messages": ["review these changes"], "last-assistant-message": message });
+}
+function handoffCommand(env, ...args) {
+  return JSON.parse(run(process.execPath, [taskHandoff, ...args], { cwd: project, env }).stdout);
+}
+async function delayedBoundary(label, env, sessionId, stageNextTurn) {
+  const started = path.join(delayedHookDir, label + ".started");
+  const release = path.join(delayedHookDir, label + ".release");
+  const original = [process.execPath, delayedHookFile, started, release];
+  const child = spawn(process.execPath, [bridge, "codex-notify", completedTurn(sessionId, "Earlier turn before " + label)], {
+    cwd: project, env: { ...env, WEB_KIT_ORIGINAL_CODEX_NOTIFY_B64: Buffer.from(JSON.stringify(original)).toString("base64") },
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 20000,
+  });
+  let output = "";
+  let exit;
+  child.stdout.on("data", chunk => { output += chunk; });
+  child.stderr.on("data", chunk => { output += chunk; });
+  const closed = new Promise(resolve => {
+    child.once("error", error => { exit = { error }; resolve(); });
+    child.once("close", (code, signal) => { exit = { ...exit, code, signal }; resolve(); });
+  });
+  try {
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(started) && !exit && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert(fs.existsSync(started) && !exit, label + ": original notification did not block: " + output);
+    return stageNextTurn();
+  } finally {
+    // Release even on a staging assertion failure so the test leaves no bridge
+    // or original-notification process waiting in the background.
+    fs.writeFileSync(release, "release\n");
+    await closed;
+    assert(!exit.error && exit.code === 0, label + ": bridge failed: " + (exit.error?.message || output || exit.signal));
+    assert(fs.existsSync(release + ".observed"), label + ": original notification timed out before the test released it");
+  }
+}
+const delayedFailures = [];
+function rejectDelayedTransition(label) {
+  if (!fs.existsSync(delayedRequestFile)) return;
+  const request = readJson(delayedRequestFile);
+  delayedFailures.push(label + ": earlier same-launch callback published " + request.reason + " for state staged during its original notification");
+  // Keep both race cases observable on a broken runtime. The assertions below
+  // still fail, but a fresh genuine boundary can establish the next phase.
+  fs.unlinkSync(delayedRequestFile);
+}
+
+const queuedReview = await delayedBoundary("queued-review", delayedBuilderEnv, delayedBuilderSession, () =>
+  handoffCommand(delayedBuilderEnv, "request-review", "--request", "review these changes", "--selection", "src/index.js"));
+assert(queuedReview.registered === true, "delayed-callback regression requires a real registered review task");
+rejectDelayedTransition("queued review");
+const delayedJobFile = path.join(jobsDir, queuedReview.task_id + ".json");
+assert(fs.existsSync(queuedReview.pending_path), "old callback consumed the queued review");
+assert(readJson(delayedJobFile).status === "QUEUED", "old callback changed the queued review job");
+
+run(process.execPath, [bridge, "codex-notify", completedTurn(delayedBuilderSession, "The new review request is now queued.")],
+  { cwd: project, env: delayedBuilderEnv });
+const delayedBuilderOwner = { project, supervisorId: delayedSupervisor, provider: "codex", launchId: delayedBuilderLaunch };
+const queuedTransition = readReviewTransition(readJson(delayedRequestFile), delayedBuilderOwner);
+assert(queuedTransition?.reason === "review-task", "fresh builder boundary did not accept the queued review");
+const delayedReviewLaunch = randomUUID();
+startReviewTransition(queuedTransition, delayedReviewLaunch);
+fs.unlinkSync(delayedRequestFile);
+delayedController = { ...delayedController, launch_id: delayedReviewLaunch,
+  launch_started_at: new Date().toISOString(), active_review_task_id: queuedReview.task_id };
+saveDelayedController();
+const delayedReviewEnv = { ...delayedBuilderEnv, WEB_KIT_LAUNCH_ID: delayedReviewLaunch, WEB_KIT_REVIEW_TASK_ID: queuedReview.task_id };
+const delayedResultFile = path.join(path.dirname(queuedReview.report_path), "result.json");
+await delayedBoundary("staged-report", delayedReviewEnv, delayedReviewerSession, () => {
+  fs.writeFileSync(queuedReview.report_path, "# Review report\n\nStaged during an earlier turn's notification; final response has not been sent.\n\nPR readiness: not assessed\n");
+  const receipt = handoffCommand(delayedReviewEnv, "report-ready");
+  assert(receipt.status === "report-ready", "review report did not produce a real receipt");
+});
+rejectDelayedTransition("staged report");
+assert(!fs.existsSync(delayedResultFile), "old callback falsely recorded report delivery");
+const stagedJob = readJson(delayedJobFile);
+assert(stagedJob.status === "REVIEWING" && stagedJob.final_validation.status === "PENDING",
+  "old callback prematurely completed the review job");
+
+run(process.execPath, [bridge, "codex-notify", completedTurn(delayedReviewerSession, fs.readFileSync(queuedReview.report_path, "utf8"))],
+  { cwd: project, env: delayedReviewEnv });
+const delayedReviewOwner = { ...delayedBuilderOwner, launchId: delayedReviewLaunch };
+const reportTransition = readReviewTransition(readJson(delayedRequestFile), delayedReviewOwner);
+assert(reportTransition?.reason === "review-complete", "fresh reviewer boundary did not accept the report receipt");
+const deliveredReview = finishReviewTransition(reportTransition);
+assert(deliveredReview.status === "delivered" && readJson(delayedJobFile).status === "DONE",
+  "fresh reviewer boundary did not record legitimate report delivery");
+assert(delayedFailures.length === 0, delayedFailures.join("\n"));
 
 console.log("Provider bridge automatic progress smoke: PASS");
