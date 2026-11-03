@@ -13,9 +13,9 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 ## Startup
 
-Read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
+For **"review these changes"** and equivalent standalone review requests, follow **Review-only intake** in `workflow.md` and `.agent-core/rules/changes-review.md` before profile/Graphify setup or job creation. Inspect the selected changes using a fresh native host reviewer when available, or clearly labeled same-session analysis otherwise. Task/scope records and passing checks are not prerequisites; do not invoke the strict provider runner or repair its sandbox. Present evidenced findings and coverage gaps, state **PR readiness: not assessed**, then stop. Preserve source, policies, the current conversation and existing task/scope/queue records. An explicit fix request resumes the normal scoped implementation workflow.
 
-For **"review these changes"** and equivalent standalone review requests, follow **Review-only intake** in `workflow.md` before job creation or implementation. Resolve the existing matching task, invoke the independent reviewer once, present its findings or verification blocker, and stop. Keep the current conversation and underlying PR-bound task; do not create a replacement scope baseline, run project tests, repair prerequisites or route findings for fixes without a fix request.
+For other engineering work, read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
 Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review. Before implementation, register a short testable requirements checklist and the relevant required checks for every PR-bound task, including SMALL. This does not add a formal plan to SMALL work.
 

@@ -7,6 +7,7 @@ Implementation-first / anti-slop policy: `.agent-core/rules/implementation-first
 Efficiency policy: `.agent-core/rules/efficiency-policy.md`  
 Context rollover: `.agent-core/rules/context-rollover.md`  
 Security review: `.agent-core/rules/security-review.md`
+Standalone changes review: `.agent-core/rules/changes-review.md`
 Pre-PR review and scope fence: `.agent-core/rules/pre-pr-review.md`
 
 ## Core operating principle
@@ -25,15 +26,13 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 
 ## Review-only intake
 
-Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as an instruction to run the existing independent Code Reviewer once, return its findings, and stop. An explicit request to fix findings also authorizes the normal scoped repair workflow. Interpret the user's whole request; do not mistake a review-only request for permission to continue implementation.
+Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as source-analysis requests under `.agent-core/rules/changes-review.md`:
 
-1. Resolve the existing active PR-bound task from the conversation and current project's branch/change scope. Reuse an unambiguous matching task without making the user type its ID. If several tasks plausibly match, ask which task to review. If none is eligible, report `VERIFICATION BLOCKED` and the missing task/evidence; do not fabricate a task, requirements or a retroactive pre-change scope snapshot. Do not change the underlying task to the `--review-only` job mode: the review runner requires its existing PR protection.
-2. Execute `node .agent-core/bin/code-review.mjs --task-id <resolved-id> --project <installed-project>` once. An explicit fresh review request requires a new invocation; do not present a cached report or the builder's own review as a new independent run. The existing provider, policy and snapshot checks remain mandatory.
-3. The reviewer receives the original requirements, current source/diff and recorded evidence in a separate fresh provider process. It does not resume the builder's conversation. The current visible conversation/TUI stays open; do not use `/clear`, `/new` or the context-rollover controller to replace it.
-4. Use the recorded check evidence. Missing/stale checks, unsupported protection or unavailable commands are verification gaps, not authorization to run project code/tests, install/update the kit, alter policies, repair prerequisites or edit source during this review-only request. The runner may write its normal report and task-review evidence.
-5. Present the actual findings with severity, location, impact and evidence, the coverage/verification gaps, and the verdict, then **stop**. Do not fix findings, enter a retry/repair loop, commit, push, open/change/merge a PR, publish, or dispatch CI/CD. Reporting finishes this review request; it does not mark the underlying implementation task `DONE`. A later fix request resumes the scoped implementation workflow.
+1. Inspect the user's selected diff/files/range, or current staged, unstaged and relevant untracked changes by default. Tasks, scope snapshots, profiles and passing checks are not prerequisites.
+2. Use an actual fresh native host reviewer when available; otherwise perform and label **same-session analysis**. Use existing authorized read capabilities without launching the strict provider CLI, executing project code or repairing setup. Preserve the visible conversation and user policies.
+3. Return evidenced findings and coverage gaps, state **PR readiness: not assessed**, then stop. Missing tests, scope failures or strict-runner sandbox support do not prevent useful analysis of accessible code. If no source is accessible, say so rather than claiming a clean review.
 
-This intake route takes precedence over implementation-first, repair and completion loops for the review-only request. It adds no reviewer stage and does not weaken the existing readiness gate.
+This route takes precedence over profile/Graphify setup, task creation, implementation, repair and completion loops for a standalone review. Do not change source or task/scope/queue records, import approval evidence, declare `READY TO OPEN PR`/`DONE`, or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
 
 ## Phase 0 — Intake and job creation
 

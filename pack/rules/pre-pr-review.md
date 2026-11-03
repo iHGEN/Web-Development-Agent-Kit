@@ -4,7 +4,7 @@ This rule supports the single lifecycle in `.agent-core/rules/workflow.md`. It a
 
 Treat new feature-branch work as intended for a future PR by default unless the user explicitly says it is local-only or review-only. Do **not** introduce a second Code Reviewer step: strengthen and reuse the workflow's existing independent review.
 
-For a standalone **"review these changes"** request, follow **Review-only intake** in `workflow.md`: resolve the existing task, invoke the fresh reviewer once, report findings or a verification blocker, and stop. Preserve the underlying task's PR-bound intent and retained scope snapshot. The setup and repair steps below do not authorize edits, prerequisite repair or a fix loop during a review-only request.
+For a standalone **"review these changes"** request, follow **Review-only intake** in `workflow.md` and `changes-review.md`: inspect the selected changes through the host's available review capabilities, report findings and coverage gaps, and stop with **PR readiness: not assessed**. Tasks, passing scope/check evidence and the strict runner's sandbox are not prerequisites for that analysis. Preserve existing task/scope/queue records and user policies; do not import the analysis as readiness approval. The setup, strict runner and repair steps below apply to their authorized implementation/readiness workflow and do not authorize prerequisite repair or a fix loop during a standalone review.
 
 ## 1. Lock a narrow change surface before editing
 

@@ -12,6 +12,7 @@ on:
       - "pack/rules/**"
       - "pack/agents/**"
       - "tests/repository-search-smoke.mjs"
+      - "tests/changes-review-routing-smoke.mjs"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/ai-compat-graphify-smoke.yml"
@@ -25,6 +26,7 @@ on:
       - "pack/runtime/**"
       - "pack/rules/**"
       - "pack/agents/**"
+      - "tests/changes-review-routing-smoke.mjs"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/ai-compat-graphify-smoke.yml"
@@ -54,6 +56,7 @@ jobs:
           node --check scripts/agent-kit.mjs
           node --check scripts/project-profile.mjs
           node --check scripts/ai-compat.mjs
+          node --check tests/changes-review-routing-smoke.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
           node --check pack/runtime/repository-search.mjs
@@ -64,6 +67,9 @@ jobs:
 
       - name: Verify indexed search and selective Graphify refresh
         run: node tests/repository-search-smoke.mjs
+
+      - name: Verify changes-review instructions and preserved project state
+        run: node tests/changes-review-routing-smoke.mjs
 
       - name: Create sample project with existing AI instructions
         shell: bash

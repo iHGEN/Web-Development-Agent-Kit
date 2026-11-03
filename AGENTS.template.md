@@ -70,7 +70,7 @@ Every code-changing Git feature branch must protect its intended change surface 
 .agent-core/bin/code-review.mjs
 ```
 
-Treat **"review these changes"** and equivalent standalone review requests as **review only**. Follow **Review-only intake** in `.agent-core/rules/workflow.md`: resolve the existing matching task, invoke a fresh independent reviewer once, present findings or verification blockers, and stop. Preserve the existing task's PR protection. Do not repair prerequisites, run project tests, edit code or enter the fix loop without a fix request. The separate reviewer exits after reporting; the current conversation stays open.
+Treat **"review these changes"** and equivalent standalone review requests as **changes analysis** under **Review-only intake** in `.agent-core/rules/workflow.md` and `.agent-core/rules/changes-review.md`. Inspect the selected changes in an actual fresh native host reviewer when available, or disclose same-session analysis otherwise. Tasks, scope records, profiles and passing checks are not prerequisites. Do not launch the strict provider runner, set up its sandbox, execute project code or repair prerequisites. Return evidenced findings and coverage gaps with **PR readiness: not assessed**, then stop. Preserve user policies, source, task/scope/queue records and the visible conversation. This route takes precedence over profile/Graphify setup and task creation for the standalone request; it does not supply PR-readiness approval. An explicit fix request resumes the normal scoped workflow.
 
 Machine-readable project metadata is:
 
