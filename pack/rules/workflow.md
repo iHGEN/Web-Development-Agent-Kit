@@ -28,11 +28,12 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 
 Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as source-analysis requests under `.agent-core/rules/changes-review.md`:
 
-1. Inspect the user's selected diff/files/range, or current staged, unstaged and relevant untracked changes by default. Tasks, scope snapshots, profiles and passing checks are not prerequisites.
-2. Use an actual fresh native host reviewer when available; otherwise perform and label **same-session analysis**. Use existing authorized read capabilities without launching the strict provider CLI, executing project code or repairing setup. Preserve the visible conversation and user policies.
-3. Return evidenced findings and coverage gaps, state **PR readiness: not assessed**, then stop. Missing tests, scope failures or strict-runner sandbox support do not prevent useful analysis of accessible code. If no source is accessible, say so rather than claiming a clean review.
+1. Select the user's diff/files/range, or current staged, unstaged and relevant untracked changes by default. The coordinator registers a unique new report-delivery task with `work-progress.mjs start --classification SMALL --review-only`; never reuse an implementation or existing scope ID. Tracking failure is a disclosed gap, not a reason to skip fresh review.
+2. Launch an actual fresh native host reviewer with no builder conversation or resume, and record its real session/agent ID. Preserve the visible conversation and user policies. If fresh launch is unavailable or fails, report **Review not started**; never substitute same-session analysis or the rollover/strict provider controllers.
+3. The reviewer reads selected source and relevant callers, then returns evidenced findings and coverage gaps with **PR readiness: not assessed**. Existing tasks, scope/check evidence, profiles and strict-runner sandbox support are not analysis prerequisites. Do not execute project code or repair setup. Report `NO SOURCE` or `NO CHANGES` honestly when applicable.
+4. The coordinator delivers the report and may mark only the new review task `DONE --final-validation PASS`, meaning report delivery completed even when findings remain. Leave its review/quality-review approval fields pending. Include the task and actual fresh-session IDs, then stop. A failed launch never completes the task.
 
-This route takes precedence over profile/Graphify setup, task creation, implementation, repair and completion loops for a standalone review. Do not change source or task/scope/queue records, import approval evidence, declare `READY TO OPEN PR`/`DONE`, or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
+This route takes precedence over profile/Graphify setup and implementation/repair loops. Allow only new review task/report bookkeeping and the helper's normal aggregate updates; preserve source and existing task/scope/queue records. Do not import approval evidence, declare `READY TO OPEN PR`, complete an implementation task or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
 
 ## Phase 0 — Intake and job creation
 
@@ -375,7 +376,8 @@ For work intended to become a PR, **before** marking the task done/opening a PR:
 
 This applies to all PR-bound task sizes and does not authorize a PR, push, or merge by itself. Follow the project's CI/CD ownership policy; do not manually dispatch GitHub Actions merely because a local readiness gate exists.
 
-A job may be `DONE` only when:
+The separate standalone review-delivery task uses **Review-only intake** above. An implementation job may be `DONE` only when:
+
 - requested behavior is implemented;
 - relevant tests/build/checks pass or limitations are explicitly accepted by the user;
 - required specialist/security reviews pass;

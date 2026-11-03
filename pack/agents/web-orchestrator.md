@@ -13,7 +13,9 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 ## Startup
 
-For **"review these changes"** and equivalent standalone review requests, follow **Review-only intake** in `workflow.md` and `.agent-core/rules/changes-review.md` before profile/Graphify setup or job creation. Inspect the selected changes using a fresh native host reviewer when available, or clearly labeled same-session analysis otherwise. Task/scope records and passing checks are not prerequisites; do not invoke the strict provider runner or repair its sandbox. Present evidenced findings and coverage gaps, state **PR readiness: not assessed**, then stop. Preserve source, policies, the current conversation and existing task/scope/queue records. An explicit fix request resumes the normal scoped implementation workflow.
+For **"review these changes"** and equivalent standalone requests, follow **Review-only intake** in `workflow.md` and `.agent-core/rules/changes-review.md` before profile/Graphify setup. Register a unique new SMALL `--review-only` report-delivery task, then launch an actual fresh native host reviewer without builder history or resume. Record the returned session/agent ID and `REVIEWING`; tracking failure is a disclosed gap and does not prevent launch. If fresh launch is unavailable or fails, report **Review not started** without a same-session substitute or task completion. Do not invoke the strict provider runner or rollover controllers.
+
+Deliver the returned findings/coverage report with task/session IDs and **PR readiness: not assessed**, then stop. Only the new review task may reach `DONE --final-validation PASS`, meaning report delivered, even with defects; leave its review/quality-review approval fields pending. The coordinator may write new review task/report records and normal aggregate bookkeeping; the reviewer only reads/reports. Preserve source, policies, the current conversation and existing task/scope/queue records. No scope/check/profile/sandbox setup is required for this analysis. An explicit fix request resumes the normal scoped implementation workflow.
 
 For other engineering work, read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
@@ -125,7 +127,7 @@ Avoid duplicate tool calls, duplicated context reads, and unnecessary Graphify r
 
 ## Completion
 
-Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires a current `READY TO OPEN PR` verdict supported by the existing Code Review record and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
+For implementation tasks, declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires a current `READY TO OPEN PR` verdict supported by the existing Code Review record and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. The separate standalone review-delivery task follows its narrower completion contract above and never completes the implementation job. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas only for the corresponding authorized task.
 
 ## Captain handoff
 
