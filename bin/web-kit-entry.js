@@ -143,7 +143,7 @@ function runCodeReview(rawArgs) {
   }
 
   if (flags.has("--help") || flags.has("-h")) {
-    console.log(`iHGEN Web Kit Independent Code Reviewer\n\nUsage:\n  npx @ihgen/web-kit code-review --task-id <id> [options]\n\nOptions:\n  --project <path>          Installed project. Default: current directory.\n  --task-id <id>            Existing PR-bound task with a scope snapshot.\n  --provider <name>         auto | codex | claude | gemini. Default: auto.\n  --timeout <seconds>       Reviewer process timeout.\n  --json                    Print the review result as JSON.\n\nRuns the existing Code Review in a fresh, read-only provider process and records its report.\nActive adapter: Codex; auto selects Codex.\n--provider claude and --provider gemini return VERIFICATION BLOCKED without launching either\nprovider until their read-only restrictions can be enforced safely before inference.\nThe command uses the installed runtime; run Web Kit update separately before starting work.\nNo provider session is resumed, and no model or reasoning setting is overridden.\n`);
+    console.log(`iHGEN Web Kit PR-Readiness Reviewer\n\nUsage:\n  npx @ihgen/web-kit code-review --task-id <id> [options]\n\nOptions:\n  --project <path>          Installed project. Default: current directory.\n  --task-id <id>            Existing PR-bound task with a scope snapshot.\n  --provider <name>         auto | codex | claude | gemini. Default: auto.\n  --timeout <seconds>       Reviewer process timeout.\n  --json                    Print the review result as JSON.\n\nRuns strict PR-readiness review in a fresh, read-only provider process and records its report.\nFor ordinary source analysis, ask your assistant: review these changes.\nThat host-native changes-review route does not require this command or a task ID.\nActive adapter: Codex; auto selects Codex.\n--provider claude and --provider gemini return VERIFICATION BLOCKED without launching either\nprovider until their read-only restrictions can be enforced safely before inference.\nThe command uses the installed runtime; run Web Kit update separately before starting work.\nNo provider session is resumed, and no model or reasoning setting is overridden.\n`);
     return 0;
   }
 
@@ -194,7 +194,7 @@ if (args[0] === "progress" || args[0] === "status") {
 
 const status = runNode(legacyCli, args);
 if ((args.includes("--help") || args.includes("-h") || args[0] === "help") && status === 0) {
-  console.log("Code review:\n  npx @ihgen/web-kit code-review --task-id <id>\n  Runs the installed reviewer without installing/updating the project.\n");
+  console.log("PR-readiness review:\n  npx @ihgen/web-kit code-review --task-id <id>\n  Runs the installed reviewer without installing/updating the project.\n");
   console.log("Security review:\n  npx @ihgen/web-kit security-review\n  Inside AI providers: run security-review\n");
   console.log("Work progress:\n  npx @ihgen/web-kit status\n  npx @ihgen/web-kit status --task-id <id>\n  npx @ihgen/web-kit progress show --task-id <id>\n  npx @ihgen/web-kit progress help\n");
 }

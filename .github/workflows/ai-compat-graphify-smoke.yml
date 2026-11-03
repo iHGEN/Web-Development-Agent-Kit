@@ -12,6 +12,7 @@ on:
       - "pack/rules/**"
       - "pack/agents/**"
       - "tests/repository-search-smoke.mjs"
+      - "tests/changes-review-routing-smoke.mjs"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/ai-compat-graphify-smoke.yml"
@@ -25,6 +26,7 @@ on:
       - "pack/runtime/**"
       - "pack/rules/**"
       - "pack/agents/**"
+      - "tests/changes-review-routing-smoke.mjs"
       - "pack/router/**"
       - "AGENTS.template.md"
       - ".github/workflows/ai-compat-graphify-smoke.yml"
@@ -54,6 +56,7 @@ jobs:
           node --check scripts/agent-kit.mjs
           node --check scripts/project-profile.mjs
           node --check scripts/ai-compat.mjs
+          node --check tests/changes-review-routing-smoke.mjs
           node --check pack/rules/graphify-setup.mjs
           node --check pack/rules/graphify-refresh.mjs
           node --check pack/runtime/repository-search.mjs
@@ -64,6 +67,9 @@ jobs:
 
       - name: Verify indexed search and selective Graphify refresh
         run: node tests/repository-search-smoke.mjs
+
+      - name: Verify changes-review instructions and preserved project state
+        run: node tests/changes-review-routing-smoke.mjs
 
       - name: Create sample project with existing AI instructions
         shell: bash
@@ -194,7 +200,7 @@ jobs:
           node - "$POLICY" <<'NODE'
           const fs = require('fs');
           const policy = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (policy.version !== 8 || policy.runtime !== 'node+npm') process.exit(1);
+          if (policy.version !== 9 || policy.runtime !== 'node+npm') process.exit(1);
           if (!policy.principles.web_kit_runtime_requires_node_not_python) process.exit(1);
           if (policy.efficiency_policy?.repeat_no_progress_threshold !== 2) process.exit(1);
           if (!policy.principles.transparent_context_rollover_enabled_after_normal_install) process.exit(1);

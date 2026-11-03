@@ -13,9 +13,11 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 ## Startup
 
-Read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
+For **"review these changes"** and equivalent standalone requests, follow **Review-only intake** in `workflow.md` and `.agent-core/rules/changes-review.md` before profile/Graphify setup. Invoke `task-handoff.mjs request-review` with the original request and selected source. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` task. Once queued, end the current turn. The same active outer supervisor starts a fresh native Codex/Claude session at the actual native completion boundary, with no builder history, summary capture or resume. Do not delegate a subagent or invoke the strict review runner or explicit Session Controller. If compatible supervision is unavailable or launch fails, report **Review not started**; tracking failure alone is a disclosed gap.
 
-For **"review these changes"** and equivalent standalone review requests, follow **Review-only intake** in `workflow.md` before job creation or implementation. Resolve the existing matching task, invoke the independent reviewer once, present its findings or verification blocker, and stop. Keep the current conversation and underlying PR-bound task; do not create a replacement scope baseline, run project tests, repair prerequisites or route findings for fixes without a fix request.
+The fresh session reads the selected source once, writes its designated new report, runs `task-handoff.mjs report-ready`, presents findings/gaps with **PR readiness: not assessed**, and ends its turn. The supervisor records the real native session ID, completes only the new report task after the receipt and native boundary, then exits without returning to the builder. `DONE`/final-validation `PASS` mean report delivery; code approval remains pending. Preserve source, user policies, existing jobs/scope/queues and the global implementation context handoff. Missing requirements, scope or tests are gaps; do not repair setup. A later fix request enters normal scoped implementation.
+
+For other engineering work, read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
 Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review. Before implementation, register a short testable requirements checklist and the relevant required checks for every PR-bound task, including SMALL. This does not add a formal plan to SMALL work.
 
@@ -68,7 +70,7 @@ High-risk includes material changes to trust/security boundaries, public contrac
 
 ## Anti-slop responsibility
 
-The Captain owns workflow efficiency.
+The Captain owns workflow efficiency. The rules in this section apply to implementation tasks and their threshold continuation. They must not turn a new standalone review task into resumed implementation or a fix loop.
 
 After discovery, do not permit two consecutive planning/routing/summary-only cycles. If `.agent-core/state/jobs/<task-id>.json` reports an anti-slop violation, route the next cycle directly to the responsible implementation worker with the exact evidence-supported next action.
 
@@ -125,7 +127,7 @@ Avoid duplicate tool calls, duplicated context reads, and unnecessary Graphify r
 
 ## Completion
 
-Declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires a current `READY TO OPEN PR` verdict supported by the existing Code Review record and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas.
+For implementation tasks, declare `DONE` only after the original request is implemented and the required build/tests/reviews/final validation pass; PR-bound work additionally requires a current `READY TO OPEN PR` verdict supported by the existing Code Review record and a passing scope check. For new formal jobs, require the independent spec, REQ verification, executed npm checks where available, and independent code review recorded through work-progress.mjs. The separate standalone review-delivery task follows its narrower completion contract above and never completes the implementation job. Once satisfied, stop work; no speculative cleanup or unrelated docs. Record final validation evidence and update relevant project/application status areas only for the corresponding authorized task.
 
 ## Captain handoff
 

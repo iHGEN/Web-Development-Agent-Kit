@@ -70,7 +70,9 @@ Every code-changing Git feature branch must protect its intended change surface 
 .agent-core/bin/code-review.mjs
 ```
 
-Treat **"review these changes"** and equivalent standalone review requests as **review only**. Follow **Review-only intake** in `.agent-core/rules/workflow.md`: resolve the existing matching task, invoke a fresh independent reviewer once, present findings or verification blockers, and stop. Preserve the existing task's PR protection. Do not repair prerequisites, run project tests, edit code or enter the fix loop without a fix request. The separate reviewer exits after reporting; the current conversation stays open.
+Treat **"review these changes"** and equivalent standalone requests as a **new review task** under **Review-only intake** in `.agent-core/rules/workflow.md` and `.agent-core/rules/changes-review.md`. Invoke `task-handoff.mjs request-review` with the original request and source selection, then end the current turn once queued. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` task. The same active context supervisor replaces the idle TUI with a fresh native Codex/Claude session using the existing settings, permissions and authentication. It passes no builder history, summary capture or resume. Missing compatible supervision means **Review not started**, with no subagent, same-session or explicit Session Controller fallback. Tracking failure and missing requirements/scope/tests are gaps; do not repair setup.
+
+The fresh session reads selected source and relevant callers, writes only its designated new report, runs `node .agent-core/bin/task-handoff.mjs report-ready`, presents findings/gaps with **PR readiness: not assessed**, and ends the turn. A valid report receipt plus the actual native completion boundary lets the supervisor record the real native session ID and mark only the report task `DONE`/final-validation `PASS`, then exit without resuming the builder. Code approval remains pending. Preserve source, existing jobs/scope/queues, the global implementation context handoff and user policies. Do not run project code, set up an extra sandbox or invoke the strict review runner. This intake precedes profile/Graphify setup and the implementation loop. A later fix request enters normal scoped implementation.
 
 Machine-readable project metadata is:
 
@@ -102,7 +104,7 @@ The developer does not need to launch a Web-Kit session command for each task.
 
 The shims activate only when the current directory is inside a project with a valid `.agent-kit.json`. Outside a Web-Kit project the real provider receives the original invocation unchanged.
 
-Default behavior:
+Default context-threshold behavior (continuing the same task):
 
 ```text
 normal codex / claude native TUI
@@ -135,19 +137,21 @@ Transparent rollover state lives under:
 .agent-core/state/context-handoff.json
 ```
 
+A queued standalone review is a separate trigger on the same supervisor and does not wait for 50% context usage. Its fresh session receives only the new task handoff, reviews once, and ends after report delivery. It never applies the old task's implementation resume or anti-slop state.
+
 The Context Rollover Manager is an always-available control role. Context handoffs are routing/state evidence only; current source, current diff, tests/build, and runtime evidence remain authoritative.
 
 ### Provider monitoring
 
 Codex uses a process-local turn-complete notifier plus the active Codex session's local context/token-count state.
 
-Claude Code uses a temporary `--settings` overlay containing a status-line bridge that reads current `context_window.used_percentage`.
+Claude Code uses a temporary `--settings` overlay with a status-line bridge for `context_window.used_percentage`. New review transitions/report completion require `Notification idle_prompt`, normally after about 60 seconds waiting for input ([official hook reference](https://code.claude.com/docs/en/hooks#notification)); status-line callbacks and `Stop` are not completion boundaries. Codex uses native `agent-turn-complete`.
 
 Do not rewrite provider configuration files merely to monitor context. Preserve existing notify/status-line behavior when possible, and never weaken enterprise/managed provider policy to force monitoring.
 
 ### Explicit Session Controller fallback
 
-The deterministic/headless fallback remains installed at:
+The deterministic/headless continuation fallback remains installed below. It cannot replace the native-supervisor contract for standalone reviews:
 
 ```text
 .agent-core/bin/session-controller.mjs
@@ -267,7 +271,7 @@ Transparent context rollover is an **outer provider-session overlay**, never a s
 
 Material new evidence that invalidates an approved plan requires a Plan Delta and independent revalidation before affected work continues. Ordinary implementation discoveries do not restart planning.
 
-Before writing on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound implementation work, the Captain runs `code-review.mjs` after required checks. The fresh reviewer actively investigates realistic failure cases and records evidence for its findings and coverage. A renamed role or claimed PASS cannot replace that execution. For authorized implementation/fix work, fix verified findings and re-review affected behavior; a standalone review-only request stops after the report. `READY TO OPEN PR` requires the current report, verified acceptance criteria and declared checks to pass. Required specialist/security review and final integration validation remain intact.
+Before changing source on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound implementation work, the Captain runs `code-review.mjs` after required checks. The fresh reviewer actively investigates realistic failure cases and records evidence for its findings and coverage. A renamed role or claimed PASS cannot replace that execution. For authorized implementation/fix work, fix verified findings and re-review affected behavior; a standalone review-only request stops after the report. `READY TO OPEN PR` requires the current report, verified acceptance criteria and declared checks to pass. Required specialist/security review and final integration validation remain intact.
 
 ## Efficiency and backwards compatibility
 

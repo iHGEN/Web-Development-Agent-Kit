@@ -7,6 +7,7 @@ Implementation-first / anti-slop policy: `.agent-core/rules/implementation-first
 Efficiency policy: `.agent-core/rules/efficiency-policy.md`  
 Context rollover: `.agent-core/rules/context-rollover.md`  
 Security review: `.agent-core/rules/security-review.md`
+Standalone changes review: `.agent-core/rules/changes-review.md`
 Pre-PR review and scope fence: `.agent-core/rules/pre-pr-review.md`
 
 ## Core operating principle
@@ -25,15 +26,14 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 
 ## Review-only intake
 
-Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as an instruction to run the existing independent Code Reviewer once, return its findings, and stop. An explicit request to fix findings also authorizes the normal scoped repair workflow. Interpret the user's whole request; do not mistake a review-only request for permission to continue implementation.
+Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as a new source-analysis task under `.agent-core/rules/changes-review.md`:
 
-1. Resolve the existing active PR-bound task from the conversation and current project's branch/change scope. Reuse an unambiguous matching task without making the user type its ID. If several tasks plausibly match, ask which task to review. If none is eligible, report `VERIFICATION BLOCKED` and the missing task/evidence; do not fabricate a task, requirements or a retroactive pre-change scope snapshot. Do not change the underlying task to the `--review-only` job mode: the review runner requires its existing PR protection.
-2. Execute `node .agent-core/bin/code-review.mjs --task-id <resolved-id> --project <installed-project>` once. An explicit fresh review request requires a new invocation; do not present a cached report or the builder's own review as a new independent run. The existing provider, policy and snapshot checks remain mandatory.
-3. The reviewer receives the original requirements, current source/diff and recorded evidence in a separate fresh provider process. It does not resume the builder's conversation. The current visible conversation/TUI stays open; do not use `/clear`, `/new` or the context-rollover controller to replace it.
-4. Use the recorded check evidence. Missing/stale checks, unsupported protection or unavailable commands are verification gaps, not authorization to run project code/tests, install/update the kit, alter policies, repair prerequisites or edit source during this review-only request. The runner may write its normal report and task-review evidence.
-5. Present the actual findings with severity, location, impact and evidence, the coverage/verification gaps, and the verdict, then **stop**. Do not fix findings, enter a retry/repair loop, commit, push, open/change/merge a PR, publish, or dispatch CI/CD. Reporting finishes this review request; it does not mark the underlying implementation task `DONE`. A later fix request resumes the scoped implementation workflow.
+1. Select the user's diff/files/range, or current staged, unstaged and relevant untracked changes by default. Invoke `node .agent-core/bin/task-handoff.mjs request-review --request '<original request>' --selection '<selection>'`. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` report-delivery task; tracking failure is a disclosed gap.
+2. End the current turn after the request is queued. At Codex `agent-turn-complete` or Claude `Notification idle_prompt`, the same active outer supervisor ends the old TUI and starts a fresh native session of the same provider with the task handoff, existing settings and policies. No builder history, summary capture or session resume is passed. An unavailable/failed compatible supervisor launch is **Review not started**; there is no subagent, same-session or explicit Session Controller fallback.
+3. The fresh session reads the selected source and relevant callers once, then writes the designated new `report.md` with evidenced findings, coverage gaps and **PR readiness: not assessed**. Existing tasks, scope/check evidence, profiles and strict-runner sandbox support are not prerequisites. Do not execute project code or repair setup. Report `NO SOURCE` or `NO CHANGES` honestly when applicable.
+4. Run `node .agent-core/bin/task-handoff.mjs report-ready`, present the report and end the turn. Only a valid report receipt plus the fresh session's actual native completion boundary lets the supervisor record the real session ID and mark the new review task `DONE --final-validation PASS`. That means report delivery completed, even with defects; leave review/quality-review approval pending. The supervisor exits and does not resume the builder.
 
-This intake route takes precedence over implementation-first, repair and completion loops for the review-only request. It adds no reviewer stage and does not weaken the existing readiness gate.
+This route precedes profile/Graphify setup and implementation/repair loops. Allow only new review task/handoff/report/receipt bookkeeping and normal helper aggregate updates; preserve source, existing jobs/scope/queues and the global implementation context handoff. Do not import approval evidence, complete an implementation task or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
 
 ## Phase 0 — Intake and job creation
 
@@ -340,7 +340,9 @@ Do not invent application-completion percentages from intuition.
 
 ## Phase 12 — Context rollover
 
-Context rollover changes provider-session lifetime only. It does not reset job/workflow state.
+Threshold rollover at 50% changes provider-session lifetime while preserving the same task and job/workflow state. A queued standalone review request is a separate trigger on the same outer supervisor: it starts a new task from its task-only handoff, reviews once, and exits after report delivery. It never resumes the old implementation task or applies that task's anti-slop state.
+
+The continuation rules below apply only to threshold rollover.
 
 At a safe boundary:
 
@@ -376,7 +378,8 @@ For work intended to become a PR, **before** marking the task done/opening a PR:
 
 This applies to all PR-bound task sizes and does not authorize a PR, push, or merge by itself. Follow the project's CI/CD ownership policy; do not manually dispatch GitHub Actions merely because a local readiness gate exists.
 
-A job may be `DONE` only when:
+The separate standalone review-delivery task uses **Review-only intake** above. An implementation job may be `DONE` only when:
+
 - requested behavior is implemented;
 - relevant tests/build/checks pass or limitations are explicitly accepted by the user;
 - required specialist/security reviews pass;
