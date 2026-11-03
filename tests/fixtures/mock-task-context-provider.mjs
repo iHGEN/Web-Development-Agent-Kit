@@ -13,7 +13,7 @@ const args = process.argv.slice(2);
 const freshPrompt = args.find(arg => arg.includes("Web Kit started a fresh review session"));
 const phase = freshPrompt ? "reviewer" : "builder";
 const sessionId = freshPrompt ? provider + "-review-" + process.env.WEB_KIT_LAUNCH_ID : process.env.WEB_KIT_TASK_TEST_OLD_SESSION;
-const helper = path.join(project, ".agent-core", "bin", "task-handoff.mjs");
+const helper = path.join(project, ".agent-core", "bin", process.env.WEB_KIT_TASK_TEST_HELPER_NAME || "task-handoff.mjs");
 const bridge = process.env.WEB_KIT_PROVIDER_BRIDGE;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const readJson = file => JSON.parse(fs.readFileSync(file, "utf8"));

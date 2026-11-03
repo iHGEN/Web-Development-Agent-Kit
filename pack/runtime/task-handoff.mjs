@@ -626,7 +626,10 @@ function main(args) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node canonicalizes ESM modules, but argv[1] can retain an installed symlink or macOS /private alias.
+const invokedEntrypoint = Boolean(process.argv[1]) &&
+  fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (invokedEntrypoint) {
   try { main(process.argv.slice(2)); }
   catch (error) {
     process.stderr.write(`${JSON.stringify({ status: error instanceof UnavailableError ? "unavailable" : "rejected", error: error.message })}\n`);

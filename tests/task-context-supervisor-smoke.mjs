@@ -9,9 +9,14 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const fixture = path.join(repo, "tests", "fixtures", "mock-task-context-provider.mjs");
-if (process.platform !== "win32") fs.chmodSync(fixture, 0o755);
+const fixtureSource = path.join(repo, "tests", "fixtures", "mock-task-context-provider.mjs");
+const fixtureSourceBytes = fs.readFileSync(fixtureSource);
+const fixtureSourceMode = fs.statSync(fixtureSource).mode;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-task-supervisor-"));
+// Make only the disposable copy executable; never chmod the tracked fixture.
+const fixture = path.join(root, "mock-task-context-provider.mjs");
+fs.copyFileSync(fixtureSource, fixture);
+if (process.platform !== "win32") fs.chmodSync(fixture, 0o755);
 const userHome = path.join(root, "home");
 const webKitHome = path.join(userHome, ".web-kit");
 const commonEnv = {
@@ -59,6 +64,9 @@ function createProject(name) {
   write(project, "src/feature.js", "export const priceTotal = prices => prices.reduce((total, price) => total + price);\n");
   write(project, "src/unrelated.js", "export const userOwned = 'preserve exactly';\n");
   success(process.execPath, [path.join(repo, "scripts", "agent-kit.mjs"), "install", project]);
+  // Exercise the installed helper through an alias in the actual mock native provider.
+  if (process.platform !== "win32") fs.symlinkSync("task-handoff.mjs",
+    path.join(project, ".agent-core", "bin", "task-handoff-link.mjs"));
   success(process.execPath, [path.join(project, ".agent-core", "bin", "supervisor-setup.mjs"), "install", "task-context-smoke"], { cwd: project });
   const progress = path.join(project, ".agent-core", "bin", "work-progress.mjs");
   success(process.execPath, [progress, "start", "--task-id", "host-handover", "--classification", "SMALL",
@@ -156,9 +164,18 @@ try {
     assert(fs.existsSync(path.join(webKitHome, "task-handoff.mjs")), "task helper was not installed with the user supervisor");
     const helper = path.join(project, ".agent-core", "bin", "task-handoff.mjs");
     if (name === "codex-success") {
-      const unavailable = run(process.execPath, [helper, "request-review", "--request", "review these changes",
-        "--selection", "src/feature.js"], { cwd: project });
-      assert.notEqual(unavailable.status, 0, "request-review silently fell back without an active supervisor");
+      const alias = path.join(project, ".agent-core", "bin", "task-handoff-link.mjs");
+      for (const executable of [helper, ...(process.platform === "win32" ? [] : [alias])]) {
+        for (const args of [
+          ["request-review", "--request", "review these changes", "--selection", "src/feature.js"],
+          ["report-ready"],
+        ]) {
+          const unavailable = run(process.execPath, [executable, ...args], { cwd: project });
+          assert.notEqual(unavailable.status, 0, args[0] + " silently succeeded without a supervisor via " + executable);
+          assert.match(unavailable.stderr, /no active compatible native supervisor/,
+            args[0] + " did not explain the unavailable supervisor via " + executable);
+        }
+      }
       assert.deepEqual(fs.readdirSync(path.join(project, ".agent-core", "state", "jobs")), ["host-handover.json"]);
       assertPreserved(project, preserved);
     }
@@ -173,6 +190,7 @@ try {
       ...commonEnv,
       [provider === "codex" ? "WEB_KIT_REAL_CODEX_BIN" : "WEB_KIT_REAL_CLAUDE_BIN"]: actualProvider(provider),
       WEB_KIT_TEST_PROVIDER: provider, WEB_KIT_TASK_TEST_SCENARIO: scenario, WEB_KIT_TASK_TEST_DIR: logs,
+      WEB_KIT_TASK_TEST_HELPER_NAME: process.platform === "win32" ? "task-handoff.mjs" : "task-handoff-link.mjs",
       WEB_KIT_TASK_TEST_REQUEST: request, WEB_KIT_TASK_TEST_SELECTION: selection,
       WEB_KIT_TASK_TEST_OLD_SESSION: oldSession, WEB_KIT_TASK_TEST_MARKER: marker,
       CODEX_HOME: path.join(root, name, "codex-state"),
@@ -283,4 +301,6 @@ try {
   console.log("Task Context Supervisor smoke: PASS (" + process.platform + "; mock process integration, no live AI review)");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
+  assert.deepEqual(fs.readFileSync(fixtureSource), fixtureSourceBytes, "process smoke modified tracked fixture bytes");
+  assert.equal(fs.statSync(fixtureSource).mode, fixtureSourceMode, "process smoke modified tracked fixture mode");
 }
