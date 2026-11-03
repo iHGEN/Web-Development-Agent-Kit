@@ -4,6 +4,8 @@ This rule supports the single lifecycle in `.agent-core/rules/workflow.md`. It a
 
 Treat new feature-branch work as intended for a future PR by default unless the user explicitly says it is local-only or review-only. Do **not** introduce a second Code Reviewer step: strengthen and reuse the workflow's existing independent review.
 
+For a standalone **"review these changes"** request, follow **Review-only intake** in `workflow.md`: resolve the existing task, invoke the fresh reviewer once, report findings or a verification blocker, and stop. Preserve the underlying task's PR-bound intent and retained scope snapshot. The setup and repair steps below do not authorize edits, prerequisite repair or a fix loop during a review-only request.
+
 ## 1. Lock a narrow change surface before editing
 
 The Captain states the original intent, acceptance criteria, affected owners, exact expected files and explicit non-goals. For formal work, use the locked Execution Registry and approved Plan Deltas; for SMALL/MEDIUM work, use a short scope note. A dependency may be inspected without permission to edit it.
@@ -134,7 +136,7 @@ The review also binds the registered spec's path, current contents and approval 
 
 ## 3. Fix, re-test, re-review
 
-The independent reviewer is **read-only**. Route verified, in-scope findings to the original responsible implementation worker. Fix P0/P1/P2 findings, regressions, and missing required coverage; treat P3 as optional unless it violates an acceptance criterion. Each fix must stay within the scope fence and pass targeted checks plus affected broader checks, security review and final integration validation when the change warrants them.
+The independent reviewer is **read-only**. For an authorized implementation or fix request, route verified, in-scope findings to the original responsible implementation worker. Fix P0/P1/P2 findings, regressions, and missing required coverage; treat P3 as optional unless it violates an acceptance criterion. Each fix must stay within the scope fence and pass targeted checks plus affected broader checks, security review and final integration validation when the change warrants them. For a standalone review-only request, return the findings and stop without entering this repair loop.
 
 Re-run `scope-guard.mjs check`, rerun affected required checks, update acceptance evidence and invoke the independent reviewer on the resulting changes. The reviewer must explicitly address prior findings; omission is not resolution. Keep unchanged, already verified work valid. Limit one invocation to three review/fix passes, then report unresolved issues instead of looping indefinitely. A current unchanged report can be reused.
 

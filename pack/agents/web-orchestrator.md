@@ -15,6 +15,8 @@ Routing, task/job state, compact planning when required, and closure artifacts. 
 
 Read the generated Project Agent Context / `.agent-core/index/project-profile.json` when available. It is routing metadata only; current source/diff/tests/runtime remain authoritative.
 
+For **"review these changes"** and equivalent standalone review requests, follow **Review-only intake** in `workflow.md` before job creation or implementation. Resolve the existing matching task, invoke the independent reviewer once, present its findings or verification blocker, and stop. Keep the current conversation and underlying PR-bound task; do not create a replacement scope baseline, run project tests, repair prerequisites or route findings for fixes without a fix request.
+
 Create/reuse the task ID and initialize job progress with `.agent-core/bin/work-progress.mjs`. For PR-bound code work, include `--pr-bound` at job creation; this activates the existing completion gate for scope and fresh independent review. Before implementation, register a short testable requirements checklist and the relevant required checks for every PR-bound task, including SMALL. This does not add a formal plan to SMALL work.
 
 Detected feature branches default new jobs to PR-bound. Use `--local-only` or `--review-only` only when the user's task has that explicit scope. Do not silently opt a feature out to avoid missing evidence.
@@ -113,7 +115,7 @@ node .agent-core/bin/code-review.mjs --task-id TASK-042
 
 The runner starts a fresh read-only provider process, without resuming the implementation session. Give it the original intent, registered requirements, complete eventual diff, scope result and real check evidence. Do not substitute the builder's conclusion or a different role name for an actual reviewer invocation. The reviewer actively seeks counterexamples and must substantiate findings; it has no required finding count.
 
-The runner imports the returned structured report through the existing `quality-review --report` path. Reuse that review when its diff, requirements and evidence remain current. Route verified blockers to the owning worker, rerun affected checks and re-review changed/dependent behavior. Ensure prior findings receive explicit disposition. Never claim a live review ran when the provider is unavailable or only a fixture was used.
+The runner imports the returned structured report through the existing `quality-review --report` path. Reuse that review when its diff, requirements and evidence remain current, unless the user explicitly requests a fresh review. During authorized implementation/fix work, route verified blockers to the owning worker, rerun affected checks and re-review changed/dependent behavior. A standalone review-only request ends after presenting the report. Ensure prior findings receive explicit disposition. Never claim a live review ran when the provider is unavailable or only a fixture was used.
 
 Completion requires the registered acceptance criteria, all declared checks, scope and current review evidence to pass. Missing essential evidence is `VERIFICATION BLOCKED`; known defects are `NOT READY`. Only `READY TO OPEN PR` plus publication authorization permits opening or marking a PR ready. A score never excuses a blocker. Respect the configured CI/CD owner; Dot remains the CI/CD executor and no GitHub Actions dispatch is part of this review.
 
