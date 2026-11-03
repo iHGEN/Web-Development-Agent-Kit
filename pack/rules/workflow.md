@@ -23,6 +23,18 @@ Planning, routing, handoffs, summaries, and validation metadata are support mech
 
 Web Kit itself requires Node.js + npm only. Graphify remains optional and must never block standard routing. Current repository source, current diff, relevant tests/build/runtime evidence remain authoritative over indexes, graphs, plans, and handoffs.
 
+## Review-only intake
+
+Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as an instruction to run the existing independent Code Reviewer once, return its findings, and stop. An explicit request to fix findings also authorizes the normal scoped repair workflow. Interpret the user's whole request; do not mistake a review-only request for permission to continue implementation.
+
+1. Resolve the existing active PR-bound task from the conversation and current project's branch/change scope. Reuse an unambiguous matching task without making the user type its ID. If several tasks plausibly match, ask which task to review. If none is eligible, report `VERIFICATION BLOCKED` and the missing task/evidence; do not fabricate a task, requirements or a retroactive pre-change scope snapshot. Do not change the underlying task to the `--review-only` job mode: the review runner requires its existing PR protection.
+2. Execute `node .agent-core/bin/code-review.mjs --task-id <resolved-id> --project <installed-project>` once. An explicit fresh review request requires a new invocation; do not present a cached report or the builder's own review as a new independent run. The existing provider, policy and snapshot checks remain mandatory.
+3. The reviewer receives the original requirements, current source/diff and recorded evidence in a separate fresh provider process. It does not resume the builder's conversation. The current visible conversation/TUI stays open; do not use `/clear`, `/new` or the context-rollover controller to replace it.
+4. Use the recorded check evidence. Missing/stale checks, unsupported protection or unavailable commands are verification gaps, not authorization to run project code/tests, install/update the kit, alter policies, repair prerequisites or edit source during this review-only request. The runner may write its normal report and task-review evidence.
+5. Present the actual findings with severity, location, impact and evidence, the coverage/verification gaps, and the verdict, then **stop**. Do not fix findings, enter a retry/repair loop, commit, push, open/change/merge a PR, publish, or dispatch CI/CD. Reporting finishes this review request; it does not mark the underlying implementation task `DONE`. A later fix request resumes the scoped implementation workflow.
+
+This intake route takes precedence over implementation-first, repair and completion loops for the review-only request. It adds no reviewer stage and does not weaken the existing readiness gate.
+
 ## Phase 0 — Intake and job creation
 
 **Owner:** Captain / Web Orchestrator

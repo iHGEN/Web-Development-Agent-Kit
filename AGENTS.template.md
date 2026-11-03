@@ -70,6 +70,8 @@ Every code-changing Git feature branch must protect its intended change surface 
 .agent-core/bin/code-review.mjs
 ```
 
+Treat **"review these changes"** and equivalent standalone review requests as **review only**. Follow **Review-only intake** in `.agent-core/rules/workflow.md`: resolve the existing matching task, invoke a fresh independent reviewer once, present findings or verification blockers, and stop. Preserve the existing task's PR protection. Do not repair prerequisites, run project tests, edit code or enter the fix loop without a fix request. The separate reviewer exits after reporting; the current conversation stays open.
+
 Machine-readable project metadata is:
 
 ```text
@@ -265,7 +267,7 @@ Transparent context rollover is an **outer provider-session overlay**, never a s
 
 Material new evidence that invalidates an approved plan requires a Plan Delta and independent revalidation before affected work continues. Ordinary implementation discoveries do not restart planning.
 
-Before writing on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound work, the Captain runs `code-review.mjs` after required checks. The fresh reviewer actively investigates realistic failure cases and records evidence for its findings and coverage. A renamed role or claimed PASS cannot replace that execution. Fix verified findings and re-review affected behavior; `READY TO OPEN PR` requires the current report, verified acceptance criteria and declared checks to pass. Required specialist/security review and final integration validation remain intact.
+Before writing on a feature branch, the Captain locks exact permitted paths with `scope-guard.mjs start` and records non-goals. After coherent chunks and before handoff/commit/push, run `scope-guard.mjs check`; an additional necessary path requires a justified `extend` **before** modification. Do not modify unrelated files, amend pre-existing dirty work, or broaden scope to conceal unexpected edits. For PR-bound implementation work, the Captain runs `code-review.mjs` after required checks. The fresh reviewer actively investigates realistic failure cases and records evidence for its findings and coverage. A renamed role or claimed PASS cannot replace that execution. For authorized implementation/fix work, fix verified findings and re-review affected behavior; a standalone review-only request stops after the report. `READY TO OPEN PR` requires the current report, verified acceptance criteria and declared checks to pass. Required specialist/security review and final integration validation remain intact.
 
 ## Efficiency and backwards compatibility
 
