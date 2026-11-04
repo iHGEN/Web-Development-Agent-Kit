@@ -834,7 +834,7 @@ function main(args) {
       catch (error) { if (!(error instanceof UnavailableError)) throw error; project = findReviewProject(process.cwd()); }
       requireValue(project, "Review not started: no installed Web Kit project found.");
       const file = path.resolve(project, options["--request-file"]);
-      const stat = fs.statSync(file);
+      const stat = checkedPath(project, file);
       requireValue(stat.isFile() && stat.size <= MAX_JSON_BYTES, "Review request file is invalid or too large.");
       const input = JSON.parse(fs.readFileSync(file, "utf8"));
       request = input.original_request;
