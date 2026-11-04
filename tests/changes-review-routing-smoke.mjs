@@ -106,9 +106,10 @@ function verifyInstructions() {
     rule: ".agent-core/rules/changes-review.md",
     trigger: "review these changes",
     mode: "source-analysis",
-    execution: "fresh-native-supervisor-session",
+    execution: "fresh-native-supervisor-or-independent-codex-cli",
     fresh_session_required: true,
     same_session_fallback: false,
+    unsupervised_backend: "codex-cli-read-only",
     task_registration_engine: ".agent-core/bin/task-handoff.mjs",
     task_session_engine: ".agent-core/bin/context-supervisor.mjs",
     task_registration_mode: "review-only",
@@ -124,7 +125,7 @@ function verifyInstructions() {
   assert.equal(policy.session_control.task_handoff_engine, expectedRoute.task_registration_engine);
   assert.equal(policy.session_control.task_session_engine, expectedRoute.task_session_engine);
   assert.match(policy.session_control.new_task_rule, /distinct trigger from context pressure/);
-  assert.match(policy.session_control.new_task_completion_rule, /exit the supervisor without resuming the builder/);
+  assert.match(policy.session_control.new_task_completion_rule, /fresh-thread event.*completed turn/);
   assert.match(policy.session_control.claude.new_task_boundary, /Notification idle_prompt/);
   assert.deepEqual(fs.readFileSync(path.join(project, ".agent-core/rules/changes-review.md")),
     fs.readFileSync(path.join(repo, "pack/rules/changes-review.md")), "The detailed changes-review rule must actually be installed.");
