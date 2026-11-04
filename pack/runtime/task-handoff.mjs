@@ -430,7 +430,7 @@ export function startReviewTransition(transition, newLaunchId) {
       "Do not load or resume the builder transcript, implementation handoff, implementation job, scope, queue, or prior review conclusions. Do not continue implementation or start another task.",
       "Inspect source read-only. Write only this new task's fixed report.md and its task-specific bookkeeping through task-handoff.mjs. Do not edit source, tests, original task records, or approval fields.",
       "Missing source, no changes, and partial coverage are report outcomes. State gaps and evidence; do not claim clean code or approval from absent evidence.",
-      "Save a nonempty report to report_path. Run node .agent-core/bin/task-handoff.mjs report-ready, then present this report as your final native response. Do not modify the report after report-ready.",
+      "Present the structured plain-text review as your sole final native response. The native completion hook persists the report and stages its receipt; do not require model-side report writes or report-ready.",
       "Finish after this single report. The outer supervisor verifies the native completion boundary and stops this review session; it does not resume implementation.",
     ],
   });
