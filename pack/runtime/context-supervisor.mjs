@@ -321,6 +321,7 @@ function prepareInstrumentation(provider, rawArgs, project, supervisorId) {
   const settingsFile = path.join(runtimeDir, `${supervisorId}-claude-settings.json`);
   const bridgeCommand = `${quoteCommandArg(process.execPath)} ${quoteCommandArg(bridge)} claude-statusline`;
   const idleCommand = `${quoteCommandArg(process.execPath)} ${quoteCommandArg(bridge)} claude-notification`;
+  const stopCommand = `${quoteCommandArg(process.execPath)} ${quoteCommandArg(bridge)} claude-stop`;
   const merged = {
     ...explicit,
     hooks: {
@@ -328,6 +329,10 @@ function prepareInstrumentation(provider, rawArgs, project, supervisorId) {
       Notification: [
         ...(Array.isArray(explicit.hooks?.Notification) ? explicit.hooks.Notification : []),
         { matcher: "idle_prompt", hooks: [{ type: "command", command: idleCommand, timeout: 10 }] },
+      ],
+      Stop: [
+        ...(Array.isArray(explicit.hooks?.Stop) ? explicit.hooks.Stop : []),
+        { hooks: [{ type: "command", command: stopCommand, timeout: 10 }] },
       ],
     },
     statusLine: {
@@ -475,7 +480,8 @@ function freshPrompt(project, handoffPath, handoff) {
 
 function taskReviewPrompt(project, handoffPath) {
   const rel = path.relative(project, handoffPath).split(path.sep).join("/");
-  return `Web Kit started a fresh review session for a new task through the same outer supervisor used for context rollover. Read \`${rel}\` first, then \`.agent-core/rules/changes-review.md\`. This is already the fresh reviewer: do not queue another handoff or resume the builder. Analyze the requested changes and relevant callers, preserve source and existing task/scope/queue records, and report findings and coverage gaps with PR readiness: not assessed. Write only this task's report at the handoff's report_path, run \`node .agent-core/bin/task-handoff.mjs report-ready\`, present the report, then stop. The supervisor records delivery at the native completion boundary and exits. Do not continue implementation, fix findings, run project code/tests, or grant code approval.`;
+  const taskId = path.basename(path.dirname(handoffPath));
+  return `Web Kit started a fresh review session for a new task through the same outer supervisor used for context rollover. Read \`${rel}\` first, then \`.agent-core/rules/changes-review.md\`. This is already the fresh reviewer: do not queue another handoff or resume the builder. Analyze the requested changes and relevant callers without modifying source or existing task/scope/queue records. Your ONE final assistant message MUST be the full plain-text report (no code fence, no introductory text), beginning with "Changes review: COMPLETED" or "Changes review: PARTIAL" or "Changes review: NO CHANGES" or "Changes review: NO SOURCE", then exact lines "Task: ${taskId}", "Execution: fresh native supervisor session", "Session: <native ID or pending>", and nonempty "Selection:", "Findings:", "Coverage:", "Checks:", "Gaps:", plus "PR readiness: not assessed". The native completion hook saves this final message and verifies the report receipt; no model-side report file write or report-ready command is required. The supervisor then stops at the real native completion boundary. Do not continue implementation, fix findings, run project code/tests, or grant code approval.`;
 }
 
 async function waitForChildOrRequest(child, requestFile, context) {

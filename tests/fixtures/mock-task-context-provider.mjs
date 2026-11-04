@@ -72,16 +72,21 @@ function context(percent) {
 }
 
 let boundaryCount = 0;
-function boundary({ valid = true, environment = process.env, nativeSession = sessionId } = {}) {
+function boundary({ valid = true, environment = process.env, nativeSession = sessionId, finalMessage = null } = {}) {
   boundaryCount += 1;
   if (provider === "codex") {
     bridgeCall("codex-notify", {
       type: valid ? "agent-turn-complete" : "agent-turn-started",
       "thread-id": nativeSession,
       "input-messages": ["BUILDER_CONVERSATION_MUST_NOT_BE_COPIED"],
-      "last-assistant-message": "BUILDER_REASONING_MUST_NOT_BE_COPIED_" + boundaryCount,
+      "last-assistant-message": finalMessage ?? ("BUILDER_REASONING_MUST_NOT_BE_COPIED_" + boundaryCount),
     }, environment);
   } else {
+    if (valid && finalMessage !== null) {
+      bridgeCall("claude-stop", { hook_event_name: "Stop", session_id: nativeSession,
+        last_assistant_message: finalMessage, stop_hook_active: false }, environment);
+      event("claude-native-stop");
+    }
     bridgeCall("claude-notification", {
       hook_event_name: "Notification",
       notification_type: valid ? "idle_prompt" : "permission_prompt",
@@ -118,6 +123,8 @@ function inspectInstrumentation() {
     assert(settings.statusLine.command.includes("claude-statusline"), "Claude telemetry instrumentation missing");
     assert(settings.hooks.Notification.some(group => group.matcher === "idle_prompt" &&
       group.hooks.some(hook => hook.command?.includes("claude-notification"))), "Claude idle hook missing");
+    assert(settings.hooks.Stop.some(group => group.hooks.some(hook => hook.command?.includes("claude-stop"))),
+      "Claude final-message capture hook missing");
     writeJson(phase + "-settings.json", settings);
   }
 }
@@ -209,6 +216,20 @@ async function reviewer() {
     "\nTask: " + queued.task_id + "\nSession: " + sessionId +
     "\nSelection: " + process.env.WEB_KIT_TASK_TEST_SELECTION +
     "\nChecks: not executed\nPR readiness: not assessed\n";
+  if (scenario === "auto-success" || scenario === "auto-incomplete") {
+    assert(!fs.existsSync(path.join(taskRoot, "report.md")), "model unexpectedly wrote a native report");
+    const nativeReport = "Changes review: COMPLETED\nTask: " + queued.task_id +
+      "\nExecution: fresh native supervisor session\nSession: " + sessionId +
+      "\nSelection: " + process.env.WEB_KIT_TASK_TEST_SELECTION +
+      "\nFindings: " + process.env.WEB_KIT_TASK_TEST_MARKER + " — test fixture only; no real source analysis" +
+      "\nCoverage: mock source review\nChecks: no project checks executed" +
+      "\nGaps: mock process only\nPR readiness: not assessed\n";
+    const output = scenario === "auto-incomplete" ? "Unable to complete the source review." : nativeReport;
+    process.stdout.write(output + "\n");
+    event("native-final-output");
+    boundary({ finalMessage: output });
+    await new Promise(() => {});
+  }
   fs.writeFileSync(path.join(taskRoot, "report.md"), report);
   if (scenario === "missing-receipt") {
     await waitForFailedReviewStop(queued.task_id, "missing-receipt");

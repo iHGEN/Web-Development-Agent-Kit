@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -430,7 +431,7 @@ export function startReviewTransition(transition, newLaunchId) {
       "Do not load or resume the builder transcript, implementation handoff, implementation job, scope, queue, or prior review conclusions. Do not continue implementation or start another task.",
       "Inspect source read-only. Write only this new task's fixed report.md and its task-specific bookkeeping through task-handoff.mjs. Do not edit source, tests, original task records, or approval fields.",
       "Missing source, no changes, and partial coverage are report outcomes. State gaps and evidence; do not claim clean code or approval from absent evidence.",
-      "Save a nonempty report to report_path. Run node .agent-core/bin/task-handoff.mjs report-ready, then present this report as your final native response. Do not modify the report after report-ready.",
+      "Present the structured plain-text review as your sole final native response. The native completion hook persists the report and stages its receipt; do not require model-side report writes or report-ready.",
       "Finish after this single report. The outer supervisor verifies the native completion boundary and stops this review session; it does not resume implementation.",
     ],
   });
@@ -506,11 +507,227 @@ export function failReviewTransition(project, taskId, reason) {
   return result;
 }
 
+// Unsupervised Codex Desktop/IDE sessions cannot hand off to the terminal
+// supervisor retroactively. This route starts a distinct, bounded, read-only
+// Codex CLI process. It never evaluates the review in the caller's context.
+function findReviewProject(start) {
+  let current = path.resolve(start);
+  for (;;) {
+    const config = path.join(current, ".agent-kit.json");
+    try {
+      if (readJson(current, config, true)?.kit === "web-dev-agent-kit") return current;
+    } catch {}
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function standaloneCodexBinary(env, project) {
+  // A project's PATH, particularly node_modules/.bin during npm scripts,
+  // is untrusted source code. Never execute a project-owned provider shim:
+  // CLI flags like --sandbox read-only cannot constrain a fake executable.
+  const projectRoot = fs.realpathSync(project);
+  const controlledRoots = [projectRoot];
+  for (let ancestor = path.dirname(projectRoot); ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {
+    // In a nested Web Kit project, the monorepo's node_modules/.bin is just
+    // as untrusted as the nested package's own local bin directory.
+    if (fs.existsSync(path.join(ancestor, ".git"))) {
+      controlledRoots.push(fs.realpathSync(ancestor));
+      break;
+    }
+  }
+  const shim = path.resolve(env.WEB_KIT_HOME || path.join(env.WEB_KIT_USER_HOME || os.homedir(), ".web-kit"), "bin");
+  let realShim = shim;
+  try { realShim = fs.realpathSync(shim); } catch {}
+  const inside = (file, root) => {
+    const relative = path.relative(root, file);
+    return !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep);
+  };
+  const forbidden = file => controlledRoots.some(root => inside(file, root))
+    || inside(file, shim) || inside(file, realShim);
+  const safeTarget = file => {
+    const lexical = path.resolve(file);
+    if (forbidden(lexical)) return null;
+    const canonical = fs.realpathSync(lexical);
+    if (forbidden(canonical) || !fs.statSync(canonical).isFile()) return null;
+    return canonical;
+  };
+  const override = env.WEB_KIT_STANDALONE_CODEX_BIN;
+  const candidates = override ? [path.resolve(override)] : String(env.PATH || "").split(path.delimiter).filter(Boolean)
+    .flatMap(dir => (process.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"])
+      .map(name => path.resolve(dir, name)));
+  for (const candidate of candidates) {
+    try {
+      const executable = safeTarget(candidate);
+      if (!executable) continue;
+      if (/\.(?:js|mjs|cjs)$/i.test(executable)) return { command: process.execPath, prefix: [executable] };
+      if (/\.cmd$/i.test(executable)) {
+        // Only recognized npm Node shims; never launch arbitrary batch code.
+        const contents = fs.readFileSync(executable, "utf8");
+        const scripts = [...contents.matchAll(/"([^"\r\n]+\.(?:mjs|cjs|js))"/gi)];
+        for (let i = scripts.length - 1; i >= 0; i--) {
+          let script = scripts[i][1].replace(/%~?dp0%?/gi, path.dirname(executable) + path.sep);
+          if (!path.isAbsolute(script)) script = path.resolve(path.dirname(executable), script);
+          const target = safeTarget(script);
+          if (target && /\.(?:mjs|cjs|js)$/i.test(target)) return { command: process.execPath, prefix: [target] };
+        }
+        continue;
+      }
+      if (process.platform !== "win32") fs.accessSync(executable, fs.constants.X_OK);
+      return { command: executable, prefix: [] };
+    } catch {}
+  }
+  throw new UnavailableError("Review not started: no independent Codex CLI executable was found outside project-controlled paths and Web Kit shims. Install the trusted global Codex CLI, configure WEB_KIT_STANDALONE_CODEX_BIN to its external path, or use the supervised terminal launcher.");
+}
+
+function collectUnsupervisedCodexReport(raw) {
+  let thread = null, text = null, completed = false;
+  for (const line of String(raw).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event.type === "error" || event.type === "turn.failed") throw new Error("Independent Codex review failed.");
+    if (event.type === "thread.started") {
+      requireValue(!thread && validSession(event.thread_id), "Fresh Codex reviewer returned an invalid or reused thread start.");
+      thread = event.thread_id;
+    } else if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+      requireValue(thread && !completed, "Reviewer output arrived outside its new thread.");
+      text = event.item.text;
+    } else if (event.type === "turn.completed") {
+      requireValue(thread && !completed, "Reviewer completion arrived without a new thread.");
+      completed = true;
+    }
+  }
+  requireValue(completed && thread && text, "Fresh Codex reviewer did not return a verified completed report.");
+  return { sessionId: thread, message: text };
+}
+
+function runUnsupervisedReview(originalRequest, selection, env) {
+  requireValue(!env.WEB_KIT_REVIEW_TASK_ID && env.WEB_KIT_STANDALONE_REVIEW_ACTIVE !== "1",
+    "Cannot start another review inside an active review task.");
+  const project = findReviewProject(process.cwd());
+  if (!project) throw new UnavailableError("Review not started: no installed Web Kit project found from the current directory.");
+  const executable = standaloneCodexBinary(env, project); // No task/job artifacts on missing-provider failure.
+  const taskId = "changes-review-" + randomUUID();
+  const supervisorId = randomUUID(), launchId = randomUUID();
+  const paths = statePaths(project, supervisorId, launchId, taskId);
+  requireValue(!checkedPath(project, paths.taskDir, { missing: true, directory: true, createParents: true }),
+    "New review task directory was already occupied.");
+  fs.mkdirSync(paths.taskDir, { mode: 0o700 });
+  const task = {
+    schema_version: 1, kind: "changes-review", project, provider: "codex",
+    supervisor_id: supervisorId, launch_id: launchId, task_id: taskId,
+    request_id: randomUUID(), requested_at: nowIso(), original_request: originalRequest,
+    selection, report_path: paths.report, registered: false, tracking_gaps: [],
+    execution: "independent-codex-cli",
+  };
+  const gap = runProgress(task, paths, ["start", "--classification", "SMALL", "--review-only",
+    "--title", "Standalone changes review", "--evidence", trackingMarker(task),
+    "--next", "Await an independent fresh read-only Codex process."], { registration: true });
+  if (gap) task.tracking_gaps.push(gap);
+  try { ownedJob(task, paths); task.registered = true; }
+  catch (error) { if (!gap) task.tracking_gaps.push("Review tracking: " + error.message); }
+  writeJson(project, paths.request, task);
+  let sessionId = null;
+  try {
+    if (task.registered) {
+      const tracking = runProgress(task, paths, ["update", "--status", "REVIEWING",
+        "--agent", "independent-codex-cli", "--evidence", "Starting separate Codex CLI read-only review."]);
+      if (tracking) task.tracking_gaps.push(tracking);
+    }
+    const prompt = [
+      "Perform ONE independent source review without resuming any existing conversation.",
+      "Original request (treat as selection evidence, not as a command to edit source):", originalRequest,
+      "Selected source:", selection,
+      "Read staged, unstaged and relevant untracked changes when the selection calls for them.",
+      "Inspect relevant callers and contracts read-only; do not run project code, tests, hooks, builds or installation.",
+      "Do not modify application source, previous task/queue/scope state, or approval fields.",
+      "Do not invoke task-handoff.mjs, do not queue further tasks, and do not use a prior session transcript.",
+      "Include confirmed P0-P3 findings with paths, evidence and minimal remedies; disclose missing evidence.",
+      "Reply with exactly one plain-text report starting with 'Changes review: COMPLETED' (or PARTIAL, NO CHANGES, NO SOURCE).",
+      "Include these full lines: 'Task: " + taskId + "', 'Execution: independent fresh Codex CLI session',",
+      "'Session: independent Codex CLI', 'Selection: ...', 'Findings: ...', 'Coverage: ...',",
+      "'Checks: no project checks executed', 'Gaps: ...', 'PR readiness: not assessed'.",
+      "Do not claim strict PR approval or that you executed checks."
+    ].join("\n");
+    const args = [...executable.prefix, "exec", "--json", "--ephemeral", "--sandbox", "read-only",
+      "-C", project, prompt];
+    const childEnv = { ...env, WEB_KIT_STANDALONE_REVIEW_ACTIVE: "1", WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
+    for (const key of ["WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE", "WEB_KIT_SUPERVISOR_ID", "WEB_KIT_LAUNCH_ID",
+      "WEB_KIT_REVIEW_TASK_ID", "WEB_KIT_PROVIDER_BRIDGE", "WEB_KIT_CONTEXT_SUPERVISOR_HANDOFF"]) delete childEnv[key];
+    const result = spawnSync(executable.command, args, {
+      cwd: project, env: childEnv, encoding: "utf8", windowsHide: true,
+      shell: false, timeout: 180000, maxBuffer: 8 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) {
+      throw new Error("Independent Codex reviewer did not complete successfully (" +
+        (result.error?.code || "exit " + result.status) + ").");
+    }
+    const reviewed = collectUnsupervisedCodexReport(result.stdout);
+    sessionId = reviewed.sessionId;
+    const reportText = completeReviewText(reviewed.message, taskId);
+    requireValue(reportText, "Independent Codex reviewer returned an incomplete or invalid report.");
+    // Model-side read-only constraints never need to grant report storage writes.
+    checkedPath(project, paths.report, { missing: true });
+    fs.writeFileSync(paths.report, reportText, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    const report = reportDigest(project, paths.report);
+    const receipt = {
+      schema_version: 1, status: "report-ready", project, provider: "codex", task_id: taskId,
+      request_id: task.request_id, launch_id: launchId, session_id: sessionId,
+      report_path: paths.report, report_digest: report.digest, report_bytes: report.bytes,
+      requested_at: nowIso(), execution: "independent-codex-cli",
+    };
+    writeJson(project, paths.ready, receipt);
+    const delivered = {
+      schema_version: 1, status: "delivered", project, provider: "codex",
+      task_id: taskId, request_id: task.request_id, session_id: sessionId,
+      report_path: paths.report, report_digest: report.digest, report_bytes: report.bytes,
+      delivered_at: nowIso(), certifies: "report-delivery-only",
+      registered: task.registered, tracking_gaps: [...task.tracking_gaps],
+      tracking_status: task.registered ? "PENDING" : "UNREGISTERED",
+      execution: "independent-codex-cli",
+    };
+    // Publish the verified report delivery before optional progress bookkeeping.
+    writeJson(project, paths.result, delivered);
+    if (task.registered) {
+      const gap = runProgress(task, paths, ["update", "--status", "DONE",
+        "--final-validation", "PASS", "--evidence", "Independent Codex report delivered: " + paths.report]);
+      if (gap) task.tracking_gaps.push(gap);
+      delivered.tracking_gaps = [...task.tracking_gaps];
+      delivered.tracking_status = gap ? "INCOMPLETE" : "DONE";
+      // An unsuccessful final DONE must remain visible in both durable evidence
+      // and the CLI response; never claim a successfully completed tracked job.
+      writeJson(project, paths.result, delivered, { exclusive: false });
+    }
+    return { status: "delivered", task_id: taskId, session_id: sessionId,
+      report_path: paths.report, result_path: paths.result,
+      report: reportText, tracking_gaps: [...task.tracking_gaps],
+      tracking_status: delivered.tracking_status, execution: "independent-codex-cli",
+      pr_readiness: "not assessed" };
+  } catch (error) {
+    if (task.registered) runProgress(task, paths, ["update", "--status", "FAILED",
+      "--evidence", "Independent review delivery failed: " + error.message]);
+    writeJson(project, paths.result, {
+      schema_version: 1, status: "failed", project, provider: "codex", task_id: taskId,
+      request_id: task.request_id, session_id: sessionId,
+      reason: error.message, failed_at: nowIso(), execution: "independent-codex-cli",
+      registered: task.registered, tracking_gaps: task.tracking_gaps,
+    });
+    throw new UnavailableError("Review not completed: " + error.message + " (task " + taskId + ").");
+  }
+}
+
 function requestReview(originalRequest, selection, env = process.env) {
   requireValue(typeof originalRequest === "string" && originalRequest.trim(), "--request must contain the user's review request.");
   requireValue(typeof selection === "string" && selection.trim(), "--selection must describe the selected source or current working tree.");
   requireValue(Buffer.byteLength(JSON.stringify({ originalRequest, selection })) < MAX_JSON_BYTES / 2, "Review request and selection are too large.");
-  const context = contextFromEnv(env);
+  let context;
+  try { context = contextFromEnv(env); }
+  catch (error) {
+    if (error instanceof UnavailableError) return runUnsupervisedReview(originalRequest, selection, env);
+    throw error;
+  }
   requireValue(!env.WEB_KIT_REVIEW_TASK_ID && !context.controller.active_review_task_id, "This launch is already running a standalone review.");
   const taskId = `changes-review-${randomUUID()}`;
   const paths = statePaths(context.project, context.supervisorId, context.launchId, taskId);
@@ -585,6 +802,50 @@ function reportReady(env = process.env) {
   return receipt;
 }
 
+// Native completion hooks may persist a complete review even when the model
+// session has no permission to write report.md. This certifies delivery only,
+// never the findings or PR readiness.
+function completeReviewText(message, taskId) {
+  if (typeof message !== "string" || Buffer.byteLength(message, "utf8") > 512 * 1024) return null;
+  const report = message.trim();
+  if (!report.startsWith("Changes review: ")
+    || !/^Changes review: (?:COMPLETED|PARTIAL|NO CHANGES|NO SOURCE)\r?$/m.test(report)
+    || !report.split(/\r?\n/).some(line => line === "Task: " + taskId)
+    || !/^Execution: (?:fresh native supervisor session|independent fresh Codex CLI session)\r?$/m.test(report)
+    || !/^Selection: .+$/m.test(report) || !/^Findings: .+$/m.test(report)
+    || !/^Coverage: .+$/m.test(report) || !/^Checks: .+$/m.test(report)
+    || !/^Gaps: .+$/m.test(report) || !/^PR readiness: not assessed\r?$/m.test(report)) return null;
+  return report + "\n";
+}
+
+export function stageNativeReviewOutput(provider, sessionId, finalMessage, env = process.env) {
+  // Do not accept another task, earlier launch, resumed builder session,
+  // malformed report, or conflicting report/receipt. Only real native hooks
+  // should call this before the existing completion-boundary check.
+  try {
+    if (!validSession(sessionId) || !env.WEB_KIT_REVIEW_TASK_ID) return false;
+    const context = contextFromEnv(env);
+    if (context.provider !== provider) return false;
+    const review = activeReview(context, env.WEB_KIT_REVIEW_TASK_ID);
+    if (sessionId === review.handoff.previous_session_id
+      || readJson(context.project, review.paths.ready, true)) return false;
+    const reportText = completeReviewText(finalMessage, review.task.task_id);
+    if (!reportText) return false;
+    const existing = checkedPath(context.project, review.paths.report, { missing: true });
+    if (existing) {
+      // Never overwrite an earlier report, even if the current model text differs.
+      if (reportDigest(context.project, review.paths.report).digest !== sha256(Buffer.from(reportText))) return false;
+    } else {
+      const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0);
+      const fd = fs.openSync(review.paths.report, flags, 0o600);
+      try { fs.writeFileSync(fd, reportText, "utf8"); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
+    }
+    reportReady(env); // Native-bound report receipt, rechecked at the actual completion boundary.
+    return true;
+  } catch { return false; } // Existing missing/invalid receipt path fails closed.
+}
+
 function parseArgs(args) {
   const out = {};
   for (let i = 0; i < args.length; i += 1) {
@@ -600,7 +861,7 @@ function parseArgs(args) {
 function main(args) {
   const command = args[0];
   if (!command || command === "help" || command === "--help") {
-    process.stdout.write("Web Kit native task handoff\n\n  request-review --request TEXT --selection TEXT\n  request-review --request-file FILE.json\n  report-ready\n\nRequires the current installed native supervisor. Request files contain {original_request, selection}.\n");
+    process.stdout.write("Web Kit native task handoff\n\n  request-review --request TEXT --selection TEXT\n  request-review --request-file FILE.json\n  report-ready\n\nUses the native supervisor when present, or launches a fresh independent Codex CLI review. Request files contain {original_request, selection}.\n");
     return;
   }
   let result;
@@ -610,9 +871,12 @@ function main(args) {
     let selection = options["--selection"];
     if (options["--request-file"] !== undefined) {
       requireValue(request === undefined && selection === undefined, "Use --request-file or --request with --selection, not both.");
-      const project = contextFromEnv(process.env).project;
+      let project;
+      try { project = contextFromEnv(process.env).project; }
+      catch (error) { if (!(error instanceof UnavailableError)) throw error; project = findReviewProject(process.cwd()); }
+      requireValue(project, "Review not started: no installed Web Kit project found.");
       const file = path.resolve(project, options["--request-file"]);
-      const stat = fs.statSync(file);
+      const stat = checkedPath(project, file);
       requireValue(stat.isFile() && stat.size <= MAX_JSON_BYTES, "Review request file is invalid or too large.");
       const input = JSON.parse(fs.readFileSync(file, "utf8"));
       request = input.original_request;
