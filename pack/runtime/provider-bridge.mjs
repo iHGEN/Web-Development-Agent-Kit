@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { captureReviewBoundary, hasTaskReviewActivity, publishReviewBoundary } from "./task-handoff.mjs";
+import { captureReviewBoundary, hasTaskReviewActivity, publishReviewBoundary, stageNativeReviewOutput } from "./task-handoff.mjs";
 
 const TERMINAL_JOB_STATUSES = new Set(["DONE", "BLOCKED", "WAITING_USER", "WAITING_EXTERNAL", "FAILED", "CANCELLED"]);
 const MAX_UNTRACKED_FILES = 200;
@@ -575,6 +575,9 @@ function codexNotify() {
   const complete = event.type === "agent-turn-complete";
   // Observe the task/receipt before any slow context scan or original hook.
   // An earlier turn's delayed callback cannot consume work staged later.
+  // Persist a completed structured final response before slow user hooks; the
+  // review completion boundary still requires the authentic native event.
+  if (complete && currentLaunch("codex")) stageNativeReviewOutput("codex", threadId, event["last-assistant-message"]);
   const observation = complete ? captureReviewBoundary("codex", threadId, "codex-agent-turn-complete") : null;
   const context = codexContext(threadId);
   const inputMessages = Array.isArray(event["input-messages"]) ? event["input-messages"].slice(-8) : [];
@@ -619,6 +622,14 @@ function claudeStatusline() {
   }
 }
 
+function claudeStop() {
+  const data = readJsonText(readAllStdin(), {});
+  if (data.hook_event_name !== "Stop" || data.agent_id || !currentLaunch("claude")) return;
+  // Stop carries the assistant's complete final message; it is NOT the native
+  // idle boundary and cannot complete the task on its own.
+  stageNativeReviewOutput("claude", data.session_id, data.last_assistant_message);
+}
+
 function claudeNotification() {
   const data = readJsonText(readAllStdin(), {});
   if (data.hook_event_name !== "Notification" || data.notification_type !== "idle_prompt"
@@ -642,7 +653,8 @@ const mode = process.argv[2];
 if (mode === "codex-notify") codexNotify();
 else if (mode === "claude-statusline") claudeStatusline();
 else if (mode === "claude-notification") claudeNotification();
+else if (mode === "claude-stop") claudeStop();
 else {
-  console.error("Usage: provider-bridge.mjs <codex-notify|claude-statusline|claude-notification>");
+  console.error("Usage: provider-bridge.mjs <codex-notify|claude-statusline|claude-notification|claude-stop>");
   process.exitCode = 2;
 }
