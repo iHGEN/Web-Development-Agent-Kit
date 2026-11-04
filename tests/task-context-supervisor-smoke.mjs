@@ -174,8 +174,10 @@ try {
         ]) {
           const unavailable = run(process.execPath, [executable, ...args], { cwd: project });
           assert.notEqual(unavailable.status, 0, args[0] + " silently succeeded without a supervisor via " + executable);
-          assert.match(unavailable.stderr, /no independent Codex CLI executable/,
-            args[0] + " did not explain that an independent reviewer could not start via " + executable);
+          const reason = args[0] === "request-review"
+            ? /no independent Codex CLI executable/ : /no active compatible native supervisor/;
+          assert.match(unavailable.stderr, reason,
+            args[0] + " did not explain why its independent/supervised operation could not start via " + executable);
         }
       }
       assert.deepEqual(fs.readdirSync(path.join(project, ".agent-core", "state", "jobs")), ["host-handover.json"]);
