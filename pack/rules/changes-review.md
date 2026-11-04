@@ -40,7 +40,7 @@ Challenge the implementation against the original intent and current source. Tra
 
 ## Deliver the report and stop
 
-The sole review output write is the new path designated by the handoff: `.agent-core/state/reviews/<new-review-task-id>/report.md`. Include findings, examined source and gaps. Distinguish source reasoning from recorded checks. If source changes during review, mark affected conclusions stale. Missing evidence may make a useful report **PARTIAL**.
+The sole stored review report is the new path designated by the handoff: `.agent-core/state/reviews/<new-review-task-id>/report.md`. The reviewer should **not write it directly**. Instead present one complete structured **plain-text final response**, which the native provider hook persists to the protected report path and stages as an identity-bound receipt. This works even when the reviewer has read-only filesystem permissions. Include findings, examined source and gaps. Distinguish source reasoning from recorded checks. If source changes during review, mark affected conclusions stale. Missing evidence may make a useful report **PARTIAL**.
 
 ```text
 Changes review: COMPLETED | PARTIAL | NO CHANGES | NO SOURCE
@@ -55,13 +55,7 @@ Gaps: <missing evidence or unexamined behavior, or none identified>
 PR readiness: not assessed
 ```
 
-After writing the report, stage its receipt:
-
-```bash
-node .agent-core/bin/task-handoff.mjs report-ready
-```
-
-Then present the report to the user and end the turn. Do not change the report after staging its receipt. `report-ready` alone is not delivery confirmation. The supervisor requires a valid receipt and the fresh provider's actual native completion boundary, records the native session identity, and completes **only the new review task** with `DONE` and final-validation `PASS` before exiting. It never returns to the builder. Do not manually mark the task done; report any receipt/storage failure honestly without claiming successful completion.
+Do not run `report-ready` or attempt model-side report writes. End the turn with the **full report** as the final assistant message, using the exact fields above, no code fence and no extra commentary. Codex's native turn-completion notification, or Claude's native Stop hook, automatically persists the completed report and stages the receipt. If the final message is malformed, incomplete or from an older/unauthorized session, the supervisor fails the review rather than claiming success. The original `report-ready` command remains available for compatible legacy/manual delivery, but is unnecessary for this automatic path. The supervisor requires a valid receipt and the fresh provider's actual native completion boundary, records the native session identity, and completes **only the new review task** with `DONE` and final-validation `PASS` before exiting. It never returns to the builder. Do not manually mark the task done; report any receipt/storage failure honestly without claiming successful completion.
 
 If that genuine fresh-session boundary arrives with a missing or invalid report receipt, the supervisor stops the review and records the new task as failed instead of waiting indefinitely or claiming delivery. An old session callback cannot trigger this failure. A failure to verify task ownership remains an explicit limitation; do not use another task's records to repair it.
 
