@@ -112,7 +112,9 @@ function copyUntracked(original, temporary, names) {
   }
 }
 
-const sensitive = file => /(?:^|\/)(?:\.env(?:\..+)?|\.npmrc|\.pypirc|id_(?:rsa|ed25519)|[^/]+\.(?:pem|key|p12|pfx))$/i.test(file);
+// Never auto-publish credential stores, including copies nested in application
+// directories. Opaque secrets cannot be reliably identified by token patterns.
+const sensitive = file => /(?:^|\/)(?:\.env(?:\..+)?|\.npmrc|\.pypirc|\.netrc|_netrc|\.git-credentials|\.aws\/(?:credentials|config)|\.kube\/config|\.docker\/config\.json|\.config\/(?:gh\/hosts\.yml|gcloud\/(?:application_default_credentials\.json|credentials\.db))|id_(?:rsa|ed25519)|[^/]+\.(?:pem|key|p12|pfx)|[^/]*(?:secret|credential|service[-_]?account)[^/]*\.(?:json|ya?ml|ini|toml|txt|conf|cfg|properties))$/i.test(file);
 const testPath = file => /(?:^|\/)(?:tests?|__tests__|fixtures)\/|(?:\.test|\.spec)\.[^/]+$/i.test(file);
 const addedSecret = /(?:^|\n)\+[^\n]*(?:-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{36,}|AKIA[A-Z0-9]{16}|sk_live_[A-Za-z0-9]{20,}|sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{12,})/;
 function shellCommand(command) {
@@ -140,6 +142,47 @@ const suspiciousValidation = text => /^(?:npm|pnpm|yarn|bun|node|npx|python3?|py
 const benignSearchMiss = event => event.exitCode === 1
   && /^(?:rg|grep)(?:\s|$)/.test(shellCommand(event.command))
   && safeCommand(event.command) !== null;
+
+// An npm script can hide a failing child command even when the outer command
+// is just `npm test`. Inspect common failure summaries AND direct script masks.
+function failedTestSummary(output) {
+  const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "");
+  const patterns = [
+    /(?:^|\n)\s*#\s*fail\s+[1-9]\d*\b/im, // Node TAP
+    /\b(?:Test Suites|Test Files|Tests?)\s*:?\s*[1-9]\d*\s+failed\b/im, // Jest/Vitest
+    /\b(?:Failures|Errors|Failed)\s*:\s*[1-9]\d*\b/im, // Maven/.NET
+    /(?:^|\n)\s*test result:\s*FAILED\b/im, // Cargo
+    /(?:^|\n)\s*not ok\s+\d+\b/im, // TAP assertions
+    /\b[1-9]\d*\s+failed\s*[,;|]\s*\d+\s+passed\b/im,
+    /\b\d+\s+passed\s*[,;|]\s*[1-9]\d*\s+failed\b/im,
+    /(?:^|\n)\s*=+[^\n]*\b[1-9]\d*\s+failed\b/im, // pytest
+  ];
+  if (patterns.some(pattern => pattern.test(plain))) return true;
+  return plain.split(/\r?\n/).some(line => {
+    if (!line.trimStart().startsWith("{")) return false;
+    try { return JSON.parse(line).Action === "fail"; } catch { return false; }
+  });
+}
+
+function maskedPackageTestScript(project, command) {
+  const match = shellCommand(command).match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test[\w:-]*)(?:\s|$)/i);
+  if (!match) return false;
+  const manifest = path.join(project, "package.json");
+  if (!fs.existsSync(manifest)) return false;
+  let scripts;
+  try { scripts = JSON.parse(fs.readFileSync(manifest, "utf8")).scripts; } catch { return true; }
+  const seen = new Set();
+  const masked = name => {
+    if (seen.has(name)) return false;
+    seen.add(name);
+    const script = scripts?.[name];
+    if (typeof script !== "string") return false;
+    if (/\|\|\s*(?:true\b|:|exit\s+0\b)|(?:;|&&)\s*exit\s+0\b/i.test(script)) return true;
+    const next = script.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)(?:\s|$)/i);
+    return next ? masked(next[1]) : false;
+  };
+  return masked(match[1]);
+}
 
 // A successful process exit is not evidence that tests ran (e.g. --help).
 // Go prints "ok" even for -run patterns matching no tests, and can replay
@@ -245,11 +288,11 @@ function readyReport(report) {
   let unresolved;
   try { unresolved = JSON.parse(unresolvedLine?.replace(/^Unresolved findings \(JSON\):\s*/i, "") || "null"); } catch { return false; }
   // A 'READY' summary cannot override a P0-P2 finding in the actual review.
-  const finding = /(?:\*\*)?\[?P[012]\]?(?:\*\*)?(?=\s|[:—-])/i;
+  const finding = /^(?:\*\*)?\[?P[012]\]?(?:\*\*)?(?=\s|[:|—-])/i;
   const contradictoryFinding = lines.some(line => {
     const inline = line.match(/^(?:#{1,6}\s*)?Findings:\s*(.*)$/i);
-    return (inline && finding.test(inline[1]))
-      || /^(?:[-*]\s*)?(?:\*\*)?\[?P[012]\]?(?:\*\*)?(?=\s|[:—-])/i.test(line);
+    const candidate = (inline ? inline[1] : line).replace(/^(?:[-*]\s+|\d+[.)]\s+|\|\s*)/, "");
+    return finding.test(candidate);
   });
   return /^PR readiness:\s*READY TO OPEN PR$/i.test(readiness || "")
     && /^Remaining P0-P2 findings:\s*(?:none|none identified)\.?$/i.test(remaining || "")
@@ -378,14 +421,17 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
       const failedExecutions = verifier.commands.filter(item => item.exitCode !== 0 && !benignSearchMiss(item));
       const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command));
       realChecks = verifier.commands.filter(item => check(item.command));
+      const failedTestOutputs = realChecks.filter(item => testCheck(item.command) && failedTestSummary(item.output));
+      const maskedScripts = realChecks.filter(item => testCheck(item.command) && maskedPackageTestScript(worktree, item.command));
       const checkSummary = verifier.commands.map(item => ({ command: item.command, exit_code: item.exitCode }));
       passed = realChecks.some(item => testCheck(item.command) && item.exitCode === 0 && executedTestCount(item.output, item.command) > 0)
-        && failedExecutions.length === 0 && suspicious.length === 0;
+        && failedExecutions.length === 0 && suspicious.length === 0
+        && failedTestOutputs.length === 0 && maskedScripts.length === 0;
       process.stdout.write(`\n### Independent final-tree verification (pass ${pass})\n${verifier.report}\n`);
       const followup = [
         `Prior confirmed findings and attempted fixes:\n${priorFindings}\n\nFixer summary:\n${fixer.report}`,
         `Actual AFTER-FIX executed check events (data; exit code 0 means pass): ${JSON.stringify(checkSummary)}`,
-        `Validation evidence gate: ${passed ? "PASS" : "BLOCKED"}. Unsuccessful command events: ${failedExecutions.length}; unsafe or unrecognized validation commands: ${suspicious.length}.`,
+        `Validation evidence gate: ${passed ? "PASS" : "BLOCKED"}. Unsuccessful command events: ${failedExecutions.length}; unsafe or unrecognized validation commands: ${suspicious.length}; test summaries reporting failures: ${failedTestOutputs.length}; masked package scripts: ${maskedScripts.length}.`,
         "Review the full working diff in this isolated branch as the exact eventual PR scope, including added tests. Only report issues introduced by these changes, tracing directly impacted callers as context.",
         `Include 'Unresolved findings (JSON): []' ONLY when the final review contains no unresolved P0-P2 findings; otherwise include a JSON array of unresolved findings with severity, file and summary. End with exact lines 'Remaining P0-P2 findings: none' ONLY if genuinely true, and 'PR readiness: READY TO OPEN PR' ONLY if the change is production-ready, all relevant checks have passed, and no known P0/P1/material P2 findings remain. Otherwise end with 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED'. ${publishPr ? "Publication requires these conditions." : "No PR will be opened; this is a local-only fix."}`,
       ].join("\n\n");

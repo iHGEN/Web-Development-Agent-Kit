@@ -59,11 +59,14 @@ if (phase === "fix") {
       "go-nonmatching-json": "go test -count=1 -json -run NoSuchTest ./...",
       "go-skipped": "go test -count=1 -json ./...",
       "go-cached": "go test -json ./...",
+      "go-masked-failure": "go test -count=1 -json ./...",
     };
     const command = goCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
       : mode?.startsWith("dotnet-") ? "dotnet test"
         : mode === "fake-checks" ? "echo npm test"
           : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
+            : ["masked-tap-in-script", "masked-jest", "masked-package-script", "masked-nested-package-script"].includes(mode) ? "npm test"
+              : mode === "masked-cargo" ? "cargo test"
             : mode === "help-only" ? "node --test --help"
               : mode === "help-only-short-version" ? "node --test -V"
               : mode === "help-only-npm" ? "npm test -- --help" : "node --test");
@@ -79,12 +82,18 @@ if (phase === "fix") {
       "go-nonmatching-json": `${JSON.stringify({ Action: "output", Package: "example.org/app", Output: "testing: warning: no tests to run\n" })}\n${goPackagePassed}\n`,
       "go-skipped": `${goSkipped}\n${goPackagePassed}\n`,
       "go-cached": `${goPassed}\n${goPackagePassed}\n`,
+      "go-masked-failure": `${goPassed}\n${JSON.stringify({ Action: "fail", Package: "example.org/app", Test: "TestBroken" })}\n`,
     };
     const otherOutputs = {
       "maven-success": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0\n",
       "maven-skipped": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 8\n",
       "dotnet-success": "Passed! - Failed: 0, Passed: 8, Skipped: 0, Total: 8\n",
       "dotnet-skipped": "Passed! - Failed: 0, Passed: 0, Skipped: 8, Total: 8\n",
+      "maven-masked-failure": "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0\nTests: 1 passed\n",
+      "dotnet-masked-failure": "Passed! - Failed: 1, Passed: 2, Skipped: 0, Total: 3\nTests: 2 passed\n",
+      "masked-tap-in-script": "TAP version 13\n# tests 2\n# pass 1\n# fail 1\n",
+      "masked-jest": "Test Suites: 1 failed, 1 passed\nTests: 1 failed, 1 passed\n",
+      "masked-cargo": "test result: FAILED. 2 passed; 1 failed\n",
       "noisy-output": `${"log output with no result\n".repeat(14000)}${tap}`,
       "help-only": "Usage: --help\n",
       "help-only-short-version": "Usage: --version\n",
@@ -109,7 +118,12 @@ if (phase === "fix") {
   const ready = fixed && process.env.WEB_KIT_REVIEW_TEST_MODE !== "not-ready";
   const jsonLine = process.env.WEB_KIT_REVIEW_TEST_MODE === "missing-unresolved-json" ? ""
     : `Unresolved findings (JSON): ${process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory-json" || !ready ? '[{"severity":"P1","file":"src/feature.js","summary":"data loss"}]' : "[]"}\n`;
-  const report = `# Fresh independent re-review\nFindings: ${process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory-findings" ? "P1 data loss" : ready ? "none" : "P1 unresolved"}\nSecurity checks: covered changed code.\n${jsonLine}Remaining P0-P2 findings: ${ready ? "none" : "P1 unresolved"}\nPR readiness: ${ready ? "READY TO OPEN PR" : "NOT READY"}`;
+  const mode = process.env.WEB_KIT_REVIEW_TEST_MODE;
+  const findings = mode === "contradictory-findings" ? "P1 data loss"
+    : mode === "contradictory-numbered" ? "\n1. [P1] Fixing file may delete user data"
+      : mode === "contradictory-table" ? "\n| P1 | Fixing file may delete user data |"
+        : ready ? "none" : "P1 unresolved";
+  const report = `# Fresh independent re-review\nFindings: ${findings}\nSecurity checks: covered changed code.\n${jsonLine}Remaining P0-P2 findings: ${ready ? "none" : "P1 unresolved"}\nPR readiness: ${ready ? "READY TO OPEN PR" : "NOT READY"}`;
   emit({ type: "item.completed", item: { type: "agent_message", text: process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory"
     ? report + "\nPR readiness: NOT READY" : report } });
 } else {

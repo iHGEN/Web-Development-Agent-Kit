@@ -167,6 +167,30 @@ try {
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
+  for (const mode of ["masked-tap-in-script", "masked-jest", "masked-cargo", "maven-masked-failure", "dotnet-masked-failure", "go-masked-failure"]) {
+    const hiddenFailure = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(hiddenFailure.status, 0, `${mode} must not authorize publication when tests failed inside a successful outer command`);
+    assert.match(hiddenFailure.stderr, /Auto-fix NOT READY/);
+    assert(!fs.existsSync(capture), `${mode} opened a PR despite failed tests`);
+    cleanIsolatedWorktrees();
+  }
+
+  const manifest = path.join(project, "package.json");
+  const originalManifest = fs.readFileSync(manifest, "utf8");
+  for (const [mode, scripts] of [
+    ["masked-package-script", { test: "node --test || true" }],
+    ["masked-nested-package-script", { test: "npm run unit", unit: "node --test || true" }],
+  ]) {
+    fs.writeFileSync(manifest, JSON.stringify({ name: "fixture", private: true, scripts }));
+    const hiddenScript = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(hiddenScript.status, 0, `${mode} must reject masking in the npm package script`);
+    assert.match(hiddenScript.stderr, /Auto-fix NOT READY/);
+    assert(!fs.existsSync(capture), `${mode} created a PR from a masked script`);
+    fs.writeFileSync(manifest, originalManifest);
+    cleanIsolatedWorktrees();
+  }
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Script masking tests must restore the original project");
+
   const failedAudit = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "failed-audit" });
   assert.notEqual(failedAudit.status, 0, "A failed security audit must invalidate otherwise green test evidence");
   assert.match(failedAudit.stderr, /Required executed test\/check evidence is missing/);
@@ -184,7 +208,7 @@ try {
   assert.match(contradictory.stderr, /Auto-fix NOT READY/);
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
-  for (const mode of ["contradictory-findings", "contradictory-json", "missing-unresolved-json"]) {
+  for (const mode of ["contradictory-findings", "contradictory-numbered", "contradictory-table", "contradictory-json", "missing-unresolved-json"]) {
     const contradiction = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(contradiction.status, 0, `${mode} must block a contradictory READY report`);
     assert.match(contradiction.stderr, /Auto-fix NOT READY/);
@@ -252,6 +276,27 @@ try {
     fs.rmSync(commitHook);
     cleanIsolatedWorktrees();
   }
+
+  // No credential store may be pushed, even when its contents are plain UTF-8
+  // and contain no recognized vendor-specific token prefix.
+  for (const name of [
+    "src/.netrc", "src/nested/.aws/credentials", "src/nested/.kube/config",
+    "src/nested/.docker/config.json", "src/config/credentials.json",
+  ]) {
+    const file = path.join(project, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "machine internal.example login service-bot password private-workflow-passphrase-123\n");
+    const beforePush = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname)", "refs/heads/review-fix"], root);
+    const rejected = run(process.execPath, args);
+    assert.notEqual(rejected.status, 0, `Sensitive file ${name} must block automatic PR publication`);
+    assert.match(rejected.stderr, /sensitive credential-like filenames|credential-like files/);
+    assert(!fs.existsSync(capture), `${name} created a PR`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname)", "refs/heads/review-fix"], root), beforePush,
+      `${name} pushed a branch before the sensitive file check`);
+    fs.rmSync(file);
+    cleanIsolatedWorktrees();
+  }
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Sensitive-file tests must preserve Git status");
 
   const credentialFixture = path.join(project, "src", "demo-credential.js");
   fs.writeFileSync(credentialFixture, "export const dummy = 'github_pat_abcdefghijklmnopqrstuvwxyz0123456789';\n");
