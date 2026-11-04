@@ -124,7 +124,7 @@ function verifyInstructions() {
   const policy = JSON.parse(read(".agent-core/routing/context-policy.json"));
   assert.equal(policy.session_control.task_handoff_engine, expectedRoute.task_registration_engine);
   assert.equal(policy.session_control.task_session_engine, expectedRoute.task_session_engine);
-  assert.match(policy.session_control.new_task_rule, /distinct trigger from context pressure/);
+  assert.match(policy.session_control.new_task_rule, /separate from the 50% context threshold/);
   assert.match(policy.session_control.new_task_completion_rule, /fresh-thread event.*completed turn/);
   assert.match(policy.session_control.claude.new_task_boundary, /Notification idle_prompt/);
   assert.deepEqual(fs.readFileSync(path.join(project, ".agent-core/rules/changes-review.md")),
