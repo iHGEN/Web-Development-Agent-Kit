@@ -533,8 +533,8 @@ function standaloneCodexBinary(env) {
     try {
       if (!fs.statSync(candidate).isFile()) continue;
       if (path.dirname(candidate).toLowerCase() === shim.toLowerCase()) continue;
-      if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
       if (/\.(?:js|mjs|cjs)$/i.test(candidate)) return { command: process.execPath, prefix: [candidate] };
+      if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
       if (!/\.cmd$/i.test(candidate)) return { command: candidate, prefix: [] };
       // Resolve standard npm Node shims without a command shell (safe literal arguments).
       const contents = fs.readFileSync(candidate, "utf8");
