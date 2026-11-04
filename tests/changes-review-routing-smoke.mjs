@@ -80,21 +80,20 @@ function verifyInstructions() {
     const managed = text.slice(first, last);
     const route = managed.split("\n").find(line => line.includes("review these changes") && line.includes("changes-review.md"));
     assert(route, `${relative}: standalone changes-review trigger missing`);
-    assert.match(route, /fresh native Codex\/Claude session/);
-    assert.match(route, /No subagent, same-session fallback/);
-    assert.match(route, /same outer context-supervisor\.mjs/);
-    assert.match(route, /end the current turn/);
+    assert.match(route, /fresh native Codex\/Claude session/, "supervised native route missing");
+    assert.match(route, /independent read-only Codex CLI/, "supervisor-free reviewer route missing");
+    assert.match(route, /context-supervisor\.mjs/, "existing native supervisor path missing");
+    assert.match(route, /end the current turn/, "native handoff boundary instruction missing");
     assert.match(route, /task-only handoff/);
     assert.match(route, /no builder conversation, summary capture or resume/);
-    assert.match(route, /supervisor exits and does not resume the builder/);
-    assert.match(route, /Codex agent-turn-complete or Claude Notification idle_prompt/);
-    assert.match(route, /unique new.*task/);
+    assert.match(route, /Codex.*agent-turn-complete.*Claude.*Notification idle_prompt/);
     assert.match(route, /task-handoff\.mjs request-review/);
-    assert.match(route, /task-handoff\.mjs report-ready/);
-    assert.match(route, /SMALL/);
-    assert.match(route, /--review-only/);
-    assert.match(route, /session ID/);
-    assert.match(route, /PR readiness: not assessed/);
+    assert.match(route, /same-session fallback/);
+    assert.match(managed, /unique new SMALL.*--review-only/, "review-only tracking missing");
+    assert.match(managed, /do not require the model to write report\.md or run report-ready/,
+      "managed reviewer still relies on model-side report file writes");
+    assert.match(managed, /PR readiness: not assessed/);
+    assert.match(managed, /real native session ID/);
     assert.doesNotMatch(route, /current-session analysis|disclosed-current-session|--task-id <resolved-id>|Missing eligible task\/scope evidence|run.*code-review\.mjs/,
       `${relative}: standalone review still permits a same-session substitute or requires the strict task runner`);
     assert.match(managed, /For every PR-bound implementation task.*code-review\.mjs/,
