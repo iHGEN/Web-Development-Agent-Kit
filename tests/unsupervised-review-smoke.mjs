@@ -47,8 +47,14 @@ try {
   git("add", "src/example.js");
   fs.writeFileSync(path.join(project, "src", "example.js"), "export const answer = 2;\n");
   fs.writeFileSync(path.join(project, "src", "untracked.js"), "export const preserveMe = true;\n");
+  // A review is supposed to write new .agent-core/state task bookkeeping.
+  // Exclude only that dedicated generated-state directory from the Git
+  // inventory assertion; existing staged, unstaged and other untracked work
+  // (including installed instructions) must remain byte- and status-identical.
+  const worktreeStatus = () => git("status", "--porcelain=v1", "--untracked-files=all",
+    "--", ".", ":(exclude).agent-core/state");
   const before = {
-    status: git("status", "--porcelain=v1", "--untracked-files=all"),
+    status: worktreeStatus(),
     tracked: fs.readFileSync(path.join(project, "src", "example.js")),
     untracked: fs.readFileSync(path.join(project, "src", "untracked.js")),
     index: git("show", ":src/example.js"),
@@ -89,7 +95,7 @@ try {
       assert(!fs.existsSync(path.join(reviewRoot, "ready.json")), "failure emitted fake receipt");
       assert(!fs.existsSync(path.join(reviewRoot, "report.md")), "failure emitted fake report");
     }
-    assert.equal(git("status", "--porcelain=v1", "--untracked-files=all"), before.status,
+    assert.equal(worktreeStatus(), before.status,
       "review changed git status or file inventory: " + mode);
     assert.deepEqual(fs.readFileSync(path.join(project, "src", "example.js")), before.tracked);
     assert.deepEqual(fs.readFileSync(path.join(project, "src", "untracked.js")), before.untracked);
