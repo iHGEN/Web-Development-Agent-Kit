@@ -84,6 +84,7 @@ function verifyInstructions() {
     assert.match(route, /ONLY current staged, unstaged and relevant untracked changes/, "review scope was not kept to current changes");
     assert.match(route, /--auto-fix=true/, "explicit automatic fixer route missing");
     assert.match(managed, /@autofix/, "chat auto-fix tag missing");
+    assert.match(managed, /--no-pr/, "local-only auto-fix instruction missing");
     assert.match(managed, /without review task\/handoff\/request\/receipt files/,
       "simple review still creates tracking artifacts");
     assert.doesNotMatch(route, /invoke `node \.agent-core\/bin\/task-handoff\.mjs|context-supervisor\.mjs launches|new SMALL/,
@@ -105,6 +106,8 @@ function verifyInstructions() {
     review_files_created: false,
     auto_fix_flag: "--auto-fix=true",
     auto_fix_tags: ["@autofix", "#autofix"],
+    auto_fix_local_flag: "--no-pr",
+    auto_fix_verification: "fresh-post-fix-session",
     auto_fix_isolated_worktree: true,
     auto_pr_requires_readiness: true,
     existing_task_required: false,
@@ -120,6 +123,7 @@ function verifyInstructions() {
   assert.equal(policy.session_control.standalone_changes_review_engine, expectedRoute.review_command);
   assert.match(policy.session_control.new_task_rule, /separate from the 50% context threshold/);
   assert.match(policy.session_control.new_task_rule, /--auto-fix=true/);
+  assert.match(policy.session_control.new_task_rule, /--no-pr/);
   assert.match(policy.session_control.new_task_completion_rule, /fresh-thread event.*completed turn/);
   assert.match(policy.session_control.claude.new_task_boundary, /Notification idle_prompt/);
   assert.deepEqual(fs.readFileSync(path.join(project, ".agent-core/rules/changes-review.md")),

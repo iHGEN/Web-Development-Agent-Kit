@@ -48,6 +48,7 @@ npx @ihgen/web-kit progress help
 npx @ihgen/web-kit review
 npx @ihgen/web-kit review --auto-fix=true
 npx @ihgen/web-kit review @autofix
+npx @ihgen/web-kit review @autofix --no-pr
 npx @ihgen/web-kit code-review --task-id TASK-042
 npx @ihgen/web-kit security-review
 ```
@@ -182,7 +183,7 @@ Ask **"review these changes"** from an installed Web Kit project, or run `npx @i
 2. The reviewer aggressively checks your **current** staged, unstaged and relevant untracked changes for security vulnerabilities, bugs, architecture problems, regressions, edge cases, performance risks and test gaps. It may inspect directly affected callers, but does not report unrelated code as findings.
 3. You receive its P0–P3 findings, evidence, remedies, coverage gaps and six category scores (0–5) directly.
 
-No review task IDs, handoff folders, `request.json`, `ready.json`, stored `report.md`, or supervisor replacement are involved. No hardcoded three-minute timeout is imposed by this helper; it waits for the independent review, which can be interrupted normally. Your existing builder context is not passed to the reviewer, and source/Git state remain unchanged. The reviewer reports findings and coverage gaps, but does not run project tests or certify PR readiness. The installed local CLI and permission to launch it are required; failures are shown directly, not converted into a fabricated report.
+No review task IDs, handoff folders, `request.json`, `ready.json`, stored `report.md`, or supervisor replacement are involved. Each independent Codex session has a 10-minute default timeout (adjustable with `--timeout SECONDS`). Your existing builder context is not passed to the reviewer, and source/Git state remain unchanged. The reviewer reports findings and coverage gaps, but does not run project tests or certify PR readiness. The installed local CLI and permission to launch it are required; failures are shown directly, not converted into a fabricated report.
 
 For a specific selection, use `node .agent-core/bin/changes-review.mjs --request 'review these files' --selection 'src/a.js and src/b.js'`. The separate strict `code-review --task-id ...` PR-readiness gate remains unchanged.
 
@@ -194,7 +195,9 @@ npx @ihgen/web-kit review --auto-fix=true
 
 The tag **`@autofix`** is an equivalent shortcut. In the **same Codex CLI chat**, type `review these changes` for an independent review, or `review these changes @autofix` to review, launch a fresh separate fixing session, run tests, re-review, and open a PR if ready. Your existing conversation remains in place; the reviewer/fixer processes get fresh context. You can also run `npx @ihgen/web-kit review @autofix` directly in a terminal. This is a chat shortcut, not an npm/Git release tag.
 
-That starts a second fresh Codex session to fix only the current changes in an isolated temporary Git worktree, executes actual tests/checks, then starts a fresh adversarial re-review. It retries up to three fix/re-review passes when needed. It commits, pushes and opens a GitHub PR **only** if required executed checks passed and the final independent review has no known blocking findings. Otherwise it stops, reports why, and retains the isolated worktree for recovery. The original index and working tree are never replaced. You need the local `gh` CLI authenticated for PR creation; no GitHub Actions workflow is manually dispatched. The previous strict `code-review` gate remains separate.
+To **fix locally without opening a PR**, say `review these changes @autofix --no-pr`, or run `npx @ihgen/web-kit review @autofix --no-pr`. Verified fixes are applied to the original working files only after a clean fresh verification and re-review; the original staged index stays untouched. This mode needs no GitHub CLI, remote, commit, push, or PR.
+
+That starts a second fresh Codex session to fix only the current changes in an isolated temporary Git worktree, then runs actual tests/checks **in a fresh verification session after the fixes are finished**. It rejects masked or failing validations, detects changes to the verified source snapshot, and blocks automatic publication of uninspectable binary files. A fresh adversarial re-review follows. It retries up to three passes when needed. With the default PR mode, it commits, pushes and opens a GitHub PR **only** if required executed checks passed and the final independent review has no known blocking findings. Otherwise it stops, reports why, and retains the isolated worktree for recovery. The original index and working tree are never replaced **in PR mode**. PR creation requires the local `gh` CLI authenticated; no GitHub Actions workflow is manually dispatched. The previous strict `code-review` gate remains separate.
 
 ### Strict PR-readiness isolation
 

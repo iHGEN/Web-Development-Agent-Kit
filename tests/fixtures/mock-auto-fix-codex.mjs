@@ -13,7 +13,7 @@ if (phase === "review" && process.env.WEB_KIT_REVIEW_TEST_PROMPT_CAPTURE) {
   fs.writeFileSync(process.env.WEB_KIT_REVIEW_TEST_PROMPT_CAPTURE, args.at(-1));
 }
 if (!args.includes("--ephemeral") || !args.includes("--json")) process.exit(5);
-if ((phase === "fix" ? "workspace-write" : "read-only") !== sandbox) process.exit(6);
+if ((["fix", "verify"].includes(phase) ? "workspace-write" : "read-only") !== sandbox) process.exit(6);
 
 const emit = event => console.log(JSON.stringify(event));
 emit({ type: "thread.started", thread_id: randomUUID() });
@@ -23,11 +23,21 @@ if (phase === "fix") {
   if (process.env.WEB_KIT_REVIEW_TEST_MODE === "out-of-scope") {
     fs.writeFileSync(path.join(project, "src", "unrelated-production.js"), "export const unrelated = true;\n");
   }
-  if (process.env.WEB_KIT_REVIEW_TEST_MODE !== "no-tests") {
-    emit({ type: "item.completed", item: { type: "command_execution",
-      command: process.env.WEB_KIT_REVIEW_TEST_MODE === "fake-checks" ? "echo npm test" : "node --test", exit_code: 0 } });
-  }
   emit({ type: "item.completed", item: { type: "agent_message", text: "Fixed the confirmed issue. Executed node --test in the isolated checkout." } });
+} else if (phase === "verify") {
+  const mode = process.env.WEB_KIT_REVIEW_TEST_MODE;
+  const emitCheck = (command, exit_code) => emit({ type: "item.completed", item: { type: "command_execution", command, exit_code } });
+  if (mode !== "no-tests") {
+    emitCheck(mode === "fake-checks" ? "echo npm test" : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true" : "node --test", 0);
+  }
+  if (mode === "masked-plus-real") emitCheck("node --test", 0);
+  if (mode === "audit-pass") emitCheck("npm run audit", 0);
+  if (mode === "failed-audit") emitCheck("npm run audit", 1);
+  if (mode === "stale-test") {
+    const target = path.join(project, "src", "feature.js");
+    fs.appendFileSync(target, "// modified AFTER verification started\n");
+  }
+  emit({ type: "item.completed", item: { type: "agent_message", text: "Verification complete (mock event stream)." } });
 } else if (phase === "re-review") {
   const fixed = fs.readFileSync(path.join(project, "src", "feature.js"), "utf8").includes("verified patch");
   const ready = fixed && process.env.WEB_KIT_REVIEW_TEST_MODE !== "not-ready";

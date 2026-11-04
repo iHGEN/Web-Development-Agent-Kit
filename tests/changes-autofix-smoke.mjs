@@ -103,6 +103,10 @@ try {
   assert.equal(fs.readFileSync(path.join(project, "src", "feature.js"), "utf8"), worktreeBefore);
 
   fs.rmSync(capture);
+  const audited = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "audit-pass" });
+  assert.equal(audited.status, 0, `A successful independent audit should not prevent a verified PR: ${audited.stderr}`);
+  assert.match(audited.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
   const notReady = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "not-ready" });
   assert.notEqual(notReady.status, 0, "Unresolved high severity finding should stop PR");
   assert.match(notReady.stderr, /Auto-fix NOT READY/);
@@ -123,9 +127,33 @@ try {
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
+  const maskedAlongsideReal = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "masked-plus-real" });
+  assert.notEqual(maskedAlongsideReal.status, 0, "A masked test must block PR even when another real test succeeds");
+  assert.match(maskedAlongsideReal.stderr, /Auto-fix NOT READY/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
   const fakeChecks = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "fake-checks" });
   assert.notEqual(fakeChecks.status, 0, "An echoed test command must not count as executed verification");
   assert.match(fakeChecks.stderr, /Required executed test\/check evidence is missing/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const maskedTest = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "masked-test" });
+  assert.notEqual(maskedTest.status, 0, "A masked 'npm test || true' must not count as passing tests");
+  assert.match(maskedTest.stderr, /Required executed test\/check evidence is missing/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const failedAudit = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "failed-audit" });
+  assert.notEqual(failedAudit.status, 0, "A failed security audit must invalidate otherwise green test evidence");
+  assert.match(failedAudit.stderr, /Required executed test\/check evidence is missing/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const staleTest = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "stale-test" });
+  assert.notEqual(staleTest.status, 0, "Post-test source mutations must invalidate the verified snapshot");
+  assert.match(staleTest.stderr, /Verification changed the source snapshot/);
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
@@ -173,10 +201,34 @@ try {
   fs.rmSync(credentialFixture);
   cleanIsolatedWorktrees();
 
+  const archive = path.join(project, "src", "debug.zip");
+  fs.writeFileSync(archive, Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]), Buffer.from("github_pat_abcdefghijklmnopqrstuvwxyz0123456789")]));
+  const binary = run(process.execPath, args);
+  assert.notEqual(binary.status, 0, "A binary artifact with embedded credentials must not be auto-published");
+  assert.match(binary.stderr, /Uninspectable or binary file/);
+  assert(!fs.existsSync(capture));
+  fs.rmSync(archive);
+  cleanIsolatedWorktrees();
+
   const badSelection = run(process.execPath, [script, "--auto-fix", "--selection", "src/feature.js"]);
   assert.notEqual(badSelection.status, 0);
   assert.match(badSelection.stderr, /omit --selection/);
   assert.equal(git(["status", "--porcelain=v1"]), statusBefore);
+
+  const noFixNoPr = run(process.execPath, [script, "--no-pr"]);
+  assert.notEqual(noFixNoPr.status, 0, "--no-pr must require an explicit auto-fix request");
+  assert.match(noFixNoPr.stderr, /--no-pr requires/);
+
+  git(["remote", "remove", "origin"]); // Local-only fixes must work offline, without a GitHub remote.
+  const noPrArgs = args.map(arg => arg === "--auto-fix=true" ? "@autofix" : arg);
+  noPrArgs.push("--no-pr");
+  const localOnly = run(process.execPath, noPrArgs, project, { WEB_KIT_REVIEW_GH_BIN: path.join(project, "missing-gh") });
+  assert.equal(localOnly.status, 0, `Local-only fix must not require GitHub CLI: ${localOnly.stderr}`);
+  assert.match(localOnly.stdout, /COMPLETED LOCALLY/);
+  assert.match(localOnly.stdout, /No commit, push, or PR/);
+  assert(!fs.existsSync(capture), "Local-only fix unexpectedly opened a PR");
+  assert.match(fs.readFileSync(path.join(project, "src", "feature.js"), "utf8"), /verified patch from isolated fixing session/);
+  assert.equal(git(["show", ":src/feature.js"]), stagedBefore, "Local-only fixes must not change the staged index");
   console.log("Auto-fix review: PASS (isolated fresh sessions, scoped remote PR, original index/worktree preserved, failure gates)");
 } finally {
   if (fs.existsSync(project)) {

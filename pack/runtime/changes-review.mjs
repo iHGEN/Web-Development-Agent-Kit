@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { readChangeSet, runAutoFix } from "./changes-autofix.mjs";
 
 const DEFAULT_SELECTION = "Current staged, unstaged and relevant untracked changes; exclude committed changes.";
+const DEFAULT_TIMEOUT_SECONDS = 600;
 
 function options(argv) {
   const values = {};
@@ -15,17 +16,20 @@ function options(argv) {
     const [rawName, inline] = argv[i].split(/=(.*)/s, 2);
     const name = ["--autofix", "@autofix", "#autofix"].includes(rawName.toLowerCase()) ? "--auto-fix" : rawName;
     if (name === "--help" && argv.length === 1) return { help: true };
-    if (!["--project", "--request", "--selection", "--auto-fix", "--base"].includes(name) || Object.hasOwn(values, name)) {
+    if (!["--project", "--request", "--selection", "--auto-fix", "--no-pr", "--base", "--timeout"].includes(name) || Object.hasOwn(values, name)) {
       throw new Error(`Unknown or repeated option: ${argv[i]}`);
     }
-    if (name === "--auto-fix") {
+    if (name === "--auto-fix" || name === "--no-pr") {
       const value = inline === undefined && ["true", "false"].includes(argv[i + 1]) ? argv[++i] : (inline ?? "true");
-      if (!["true", "false"].includes(value)) throw new Error("--auto-fix must be true or false.");
+      if (!["true", "false"].includes(value)) throw new Error(`${name} must be true or false.`);
       values[name] = value === "true";
       continue;
     }
     const value = inline === undefined ? argv[++i] : inline;
     if (!value || value.startsWith("--")) throw new Error(`${name} requires a value.`);
+    if (name === "--timeout" && (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 3600)) {
+      throw new Error("--timeout must be an integer from 1 to 3600 seconds.");
+    }
     values[name] = value;
   }
   return values;
@@ -79,17 +83,32 @@ function trustedProgram(project, env, program, overrideKey) {
   throw new Error(`No trusted ${program === "codex" ? "Codex CLI" : program} executable was found outside the project and Web Kit shims.`);
 }
 
-async function codexSession(executable, project, prompt, sandbox, phase) {
+async function codexSession(executable, project, prompt, sandbox, phase, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS) {
   const childEnv = { ...process.env, WEB_KIT_SIMPLE_REVIEW_ACTIVE: "1", WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
   childEnv.WEB_KIT_REVIEW_PHASE = phase;
   for (const key of ["WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE", "WEB_KIT_SUPERVISOR_ID", "WEB_KIT_LAUNCH_ID",
     "WEB_KIT_REVIEW_TASK_ID", "WEB_KIT_PROVIDER_BRIDGE", "WEB_KIT_CONTEXT_SUPERVISOR_HANDOFF"]) delete childEnv[key];
+  // GitHub, registry and cloud publish credentials belong to the caller. The
+  // model-operated fixer/verification subprocess never needs them.
+  for (const key of Object.keys(childEnv)) {
+    if (/^(?:GH_|GITHUB_|NPM_|NODE_AUTH_TOKEN$|AWS_|AZURE_|GOOGLE_APPLICATION_CREDENTIALS$|GCP_|DOCKER_|GITLAB_|CI_JOB_TOKEN$|GIT_ASKPASS$|SSH_ASKPASS$)/i.test(key)
+      || (!/^(?:OPENAI_API_KEY|CODEX_API_KEY|AZURE_OPENAI_API_KEY)$/i.test(key)
+        && /(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL|API_KEY|DATABASE_URL|MONGODB_URI)/i.test(key))) {
+      delete childEnv[key];
+    }
+  }
   const child = spawn(executable.command, [...executable.prefix, "exec", "--json", "--ephemeral", "--sandbox", sandbox, "-C", project, prompt], {
     cwd: project, env: childEnv, stdio: ["ignore", "pipe", "inherit"], windowsHide: true, shell: false,
   });
   process.stderr.write(`Starting fresh Codex ${phase} session...\n`);
   let pending = "", lastMessage = "", started = false, completed = false, providerError = "", commands = [];
-  let closed = false, stoppedAfterCompletion = false, completionTimer, forceTimer;
+  let closed = false, stoppedAfterCompletion = false, timedOut = false, completionTimer, forceTimer;
+  const deadlineTimer = setTimeout(() => {
+    if (closed) return;
+    timedOut = true;
+    child.kill("SIGTERM");
+    forceTimer = setTimeout(() => { if (!closed) child.kill("SIGKILL"); }, 1500);
+  }, timeoutSeconds * 1000);
   const eventLine = line => {
     if (!line.trim()) return;
     let event;
@@ -132,12 +151,14 @@ async function codexSession(executable, project, prompt, sandbox, phase) {
     child.on("error", reject);
     child.on("close", code => { closed = true; resolve(code); });
   }).finally(() => {
+    clearTimeout(deadlineTimer);
     clearTimeout(completionTimer);
     clearTimeout(forceTimer);
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
   });
   eventLine(pending);
+  if (timedOut) throw new Error(`Fresh Codex ${phase} timed out after ${timeoutSeconds} seconds.`);
   if ((exitCode !== 0 && !stoppedAfterCompletion) || providerError || !started || !completed || !lastMessage.trim()) {
     throw new Error(providerError || `Fresh Codex ${phase} did not return a complete response (exit ${exitCode}).`);
   }
@@ -163,7 +184,7 @@ function strictReviewPrompt(request, selection, changed, extra = "", final = fal
 async function review(argv) {
   const args = options(argv);
   if (args.help) {
-    process.stdout.write("Usage: node .agent-core/bin/changes-review.mjs [--request TEXT] [--selection TEXT] [--project PATH] [--auto-fix=true|false|@autofix] [--base BRANCH]\nStrict scoped review; @autofix starts a fresh fixing session, verifies, and opens a PR only when ready.\n");
+    process.stdout.write("Usage: node .agent-core/bin/changes-review.mjs [--request TEXT] [--selection TEXT] [--project PATH] [--auto-fix=true|false|@autofix] [--no-pr] [--base BRANCH] [--timeout SECONDS]\nStrict scoped review; @autofix fixes and verifies; --no-pr applies fixes locally without publishing.\n");
     return;
   }
   if (process.env.WEB_KIT_SIMPLE_REVIEW_ACTIVE === "1") throw new Error("A fresh review cannot start another review.");
@@ -175,6 +196,8 @@ async function review(argv) {
   if (args["--auto-fix"] && args["--selection"]) {
     throw new Error("For safe auto-fix PR scope, omit --selection to include all current changes.");
   }
+  if (args["--no-pr"] && !args["--auto-fix"]) throw new Error("--no-pr requires @autofix or --auto-fix=true.");
+  if (args["--no-pr"] && args["--base"]) throw new Error("--base is not used with local-only --no-pr fixes.");
   if (args["--base"] && !args["--auto-fix"]) throw new Error("--base requires --auto-fix=true.");
   const request = args["--request"] || "Review my uncommitted changes.";
   const selection = args["--selection"] || DEFAULT_SELECTION;
@@ -185,12 +208,14 @@ async function review(argv) {
     return;
   }
   const codex = trustedProgram(project, process.env, "codex", "WEB_KIT_STANDALONE_CODEX_BIN");
-  const initial = await codexSession(codex, project, strictReviewPrompt(request, selection, changes.paths), "read-only", "review");
+  const timeoutSeconds = Number(args["--timeout"] || DEFAULT_TIMEOUT_SECONDS);
+  const session = (executable, cwd, prompt, sandbox, phase) => codexSession(executable, cwd, prompt, sandbox, phase, timeoutSeconds);
+  const initial = await session(codex, project, strictReviewPrompt(request, selection, changes.paths), "read-only", "review");
   process.stdout.write(initial.report + "\n");
   if (args["--auto-fix"]) {
-    const gh = trustedProgram(project, process.env, "gh", "WEB_KIT_REVIEW_GH_BIN");
+    const gh = args["--no-pr"] ? null : trustedProgram(project, process.env, "gh", "WEB_KIT_REVIEW_GH_BIN");
     const result = await runAutoFix({ project, git, gh, codex, changes, request, initialReport: initial.report,
-      base: args["--base"], codexSession, strictReviewPrompt });
+      base: args["--base"], publishPr: !args["--no-pr"], codexSession: session, strictReviewPrompt });
     process.stdout.write(result + "\n");
   }
 }

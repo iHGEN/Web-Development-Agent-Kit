@@ -120,8 +120,49 @@ function shellCommand(command) {
   const shell = text.match(/^(?:(?:\/bin\/)?(?:bash|sh|zsh))\s+-[lc]+\s+(['"])([\s\S]*)\1$/i);
   return (shell ? shell[2] : text).replace(/^(?:[A-Za-z_][\w]*=[^\s]+\s+)*/, "");
 }
-const testCheck = text => /^(?:npm\s+(?:run\s+)?test\b|pnpm\s+(?:run\s+)?test\b|yarn\s+test\b|bun\s+(?:run\s+)?test\b|node\s+(?:--test\b|(?:\S*\/)?tests\/\S+)|(?:python(?:3)?\s+-m\s+)?pytest\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn\s+test\b|(?:\.\/)?gradlew?\s+test\b|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)\b|make\s+test\b|ctest\b)/i.test(shellCommand(text));
-const check = text => testCheck(text) || /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check)\b/i.test(shellCommand(text));
+// Evidence must be an entire, unmasked command. `npm test || true` and shell
+// pipelines cannot prove that a test genuinely passed, even with exit code 0.
+function safeCommand(text) {
+  const command = shellCommand(text);
+  return command && !/[;&|<>`$\r\n]/.test(command) ? command : null;
+}
+const safeArgs = String.raw`(?:\s+[-\w./:@+=]+)*`;
+const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+(?:--test|(?:\S*\/)?tests\/[-\w./]+)|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:\.\/)?gradlew?\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|make\s+test|ctest)${safeArgs}$`, "i");
+const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check|audit|security)(?:[:\w-]*)|node\s+(?:\S*\/)?(?:scripts\/)?[-\w./]*(?:check|audit|lint|build)[-\w./]*)${safeArgs}$`, "i");
+const testCheck = text => safeCommand(text) !== null && testPattern.test(safeCommand(text));
+const check = text => testCheck(text) || (safeCommand(text) !== null && checkPattern.test(safeCommand(text)));
+const suspiciousValidation = text => /^(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|\.\/gradlew?)\b/i.test(shellCommand(text))
+  && /\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(shellCommand(text))
+  && !check(text);
+
+function checkPublishableFiles(project, gitBin, staged) {
+  const forbiddenBinaryExtensions = /\.(?:zip|7z|rar|gz|tgz|pdf|png|jpe?g|gif|webp|ico|mp3|mp4|mov|webm|wasm|bin|jar|exe|dll|so|dylib|db|sqlite)$/i;
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  for (const name of staged) {
+    const full = path.join(project, name);
+    if (!fs.existsSync(full)) continue; // Pure deletion cannot publish new bytes.
+    const stat = fs.lstatSync(full);
+    if (!stat.isFile() || stat.size > 4 * 1024 * 1024 || forbiddenBinaryExtensions.test(name)) {
+      throw new Error(`Uninspectable or binary file in automatic PR scope: ${name}. Publish manually after inspection.`);
+    }
+    const bytes = fs.readFileSync(full);
+    let decoded;
+    try { decoded = utf8.decode(bytes); } catch {
+      throw new Error(`Binary content cannot be validated before automatic PR publication: ${name}`);
+    }
+    if (bytes.includes(0)) throw new Error(`Binary content cannot be validated before automatic PR publication: ${name}`);
+    if (addedSecret.test(`\n+${decoded.replaceAll("\n", "\n+")}`)) {
+      throw new Error(`Potential credential material detected in staged file: ${name}`);
+    }
+  }
+  const modes = zlist(git(gitBin, project, ["ls-files", "--stage", "-z"]).stdout);
+  for (const entry of modes) {
+    const match = /^(\d+) [0-9a-f]+ \d+\t(.+)$/.exec(entry);
+    if (match && staged.includes(match[2]) && !["100644", "100755"].includes(match[1])) {
+      throw new Error(`Unsupported staged file type for automatic PR publication: ${match[2]}`);
+    }
+  }
+}
 
 function readyReport(report) {
   const lines = report.trim().split(/\r?\n/).map(line => line.trim());
@@ -131,7 +172,66 @@ function readyReport(report) {
     && /^Remaining P0-P2 findings:\s*(?:none|none identified)\.?$/i.test(remaining || "");
 }
 
-export async function runAutoFix({ project, git: gitBin, gh, codex, changes, request, initialReport, base, codexSession, strictReviewPrompt }) {
+function applyVerifiedFixesLocally(project, worktree, changes, gitBin) {
+  const after = readChangeSet(worktree, gitBin);
+  const plan = [];
+  for (const name of unique([...changes.paths, ...after.paths])) {
+    if (!changes.paths.includes(name) && !testPath(name)) {
+      throw new Error(`Local fixer attempted an unrelated production-file change: ${name}`);
+    }
+    const source = path.resolve(worktree, name);
+    const target = path.resolve(project, name);
+    if (!source.startsWith(worktree + path.sep) || !target.startsWith(project + path.sep)) {
+      throw new Error(`Unsafe local fix path: ${name}`);
+    }
+    const sourceStat = fs.existsSync(source) ? fs.lstatSync(source) : null;
+    const targetStat = fs.existsSync(target) ? fs.lstatSync(target) : null;
+    if (sourceStat && !sourceStat.isFile()) throw new Error(`Fix is not a regular file: ${name}`);
+    if (targetStat && !targetStat.isFile()) throw new Error(`Original file cannot be safely replaced: ${name}`);
+    if (!changes.paths.includes(name) && targetStat
+      && git(gitBin, project, ["ls-files", "--error-unmatch", "--", name], { allowFailure: true }).status !== 0) {
+      throw new Error(`A new fix/test conflicts with an existing ignored or untracked user file: ${name}`);
+    }
+    if (!sourceStat && targetStat) throw new Error(`Local fixes deleting existing files require manual confirmation: ${name}`);
+    if (!sourceStat) continue;
+    if (sourceStat.size > 32 * 1024 * 1024) throw new Error(`Fixed file too large to safely apply: ${name}`);
+    const content = fs.readFileSync(source);
+    const original = targetStat ? fs.readFileSync(target) : null;
+    if (original && original.equals(content)) continue;
+    let cursor = project;
+    for (const part of path.relative(project, path.dirname(target)).split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, part);
+      if (fs.existsSync(cursor) && (!fs.lstatSync(cursor).isDirectory() || fs.realpathSync(cursor) !== cursor)) {
+        throw new Error(`Unsafe local fix destination directory: ${name}`);
+      }
+    }
+    plan.push({ name, target, content, original, mode: sourceStat.mode & 0o777 });
+  }
+  const changed = readChangeSet(project, gitBin, { snapshot: true });
+  if (changed.fingerprint !== changes.fingerprint || JSON.stringify(changed.paths) !== JSON.stringify(changes.paths)) {
+    throw new Error("Original changes moved before local fixes; refusing to overwrite them.");
+  }
+  const applied = [];
+  try {
+    for (const item of plan) {
+      fs.mkdirSync(path.dirname(item.target), { recursive: true });
+      fs.writeFileSync(item.target, item.content, { flag: item.original === null ? "wx" : "w" });
+      applied.push(item);
+      if (item.original === null) fs.chmodSync(item.target, item.mode);
+    }
+  } catch (error) {
+    for (const item of applied.reverse()) {
+      try {
+        if (item.original === null) fs.unlinkSync(item.target);
+        else fs.writeFileSync(item.target, item.original);
+      } catch {}
+    }
+    throw new Error(`Unable to apply all verified local fixes: ${error.message}`);
+  }
+  return plan.map(item => item.name);
+}
+
+export async function runAutoFix({ project, git: gitBin, gh, codex, changes, request, initialReport, base, publishPr = true, codexSession, strictReviewPrompt }) {
   if (!changes.hasHead) throw new Error("Auto-fix PR needs a repository with an initial commit; ordinary review still works.");
   if (changes.root !== project) throw new Error("Auto-fix PR currently requires Web Kit at the Git repository root.");
   if (changes.paths.some(sensitive)) throw new Error("Current changes include sensitive credential-like filenames; refusing automatic PR publication.");
@@ -141,9 +241,9 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
     throw new Error("The original changes moved during review; no fixes or PR were started.");
   }
 
-  const baseBranch = defaultBase(gitBin, project, base);
-  gitText(gitBin, project, ["fetch", "--no-tags", "origin", baseBranch]);
-  const ref = `refs/remotes/origin/${baseBranch}`;
+  const baseBranch = publishPr ? defaultBase(gitBin, project, base) : null;
+  if (publishPr) gitText(gitBin, project, ["fetch", "--no-tags", "origin", baseBranch]);
+  const ref = publishPr ? `refs/remotes/origin/${baseBranch}` : "HEAD";
   gitText(gitBin, project, ["rev-parse", "--verify", ref]);
 
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-auto-fix-"));
@@ -170,22 +270,43 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
       ].join("\n\n");
       const fixer = await codexSession(codex, worktree, fixPrompt, "workspace-write", "fix");
       process.stdout.write(`\n### Fixes and executed checks (pass ${pass})\n${fixer.report}\n`);
-      realChecks = fixer.commands.filter(item => check(item.command));
-      const checkSummary = realChecks.map(item => ({ command: item.command, exit_code: item.exitCode }));
       const after = readChangeSet(worktree, gitBin);
       if (after.paths.some(sensitive)) throw new Error("Fixer produced credential-like files; automatic PR publication stopped.");
       const scopeEscapes = after.paths.filter(file => !changes.paths.includes(file) && !testPath(file));
       if (scopeEscapes.length) throw new Error(`Fixer changed files outside the approved current-diff/test scope: ${scopeEscapes.join(", ")}`);
+      // Verify after the fixer exits so a green test from before its final
+      // edit can never certify the published tree. The verifier must preserve
+      // the exact source snapshot it tests.
+      const beforeVerification = readChangeSet(worktree, gitBin, { snapshot: true });
+      const verificationPrompt = [
+        "You are an independent verification engineer in a NEW Codex session. Do not edit source, tests, configuration, or Git state.",
+        `Verify the current changes for: ${request}`,
+        `Changed files: ${JSON.stringify(after.paths)}`,
+        "Execute real relevant project tests (and lint/build/security checks where applicable) now, after all fixer edits. Do not mask failures with shell operators, pipes, fallbacks, or wrappers like '|| true'.",
+        "Report only commands actually executed and their outcomes. Do not commit, push, or open a PR.",
+      ].join("\n\n");
+      const verifier = await codexSession(codex, worktree, verificationPrompt, "workspace-write", "verify");
+      const verified = readChangeSet(worktree, gitBin, { snapshot: true });
+      if (beforeVerification.fingerprint !== verified.fingerprint
+        || JSON.stringify(beforeVerification.paths) !== JSON.stringify(verified.paths)) {
+        throw new Error("Verification changed the source snapshot; checks do not certify the final tree.");
+      }
+      const failedExecutions = verifier.commands.filter(item => item.exitCode !== 0);
+      const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command));
+      realChecks = verifier.commands.filter(item => check(item.command));
+      const checkSummary = verifier.commands.map(item => ({ command: item.command, exit_code: item.exitCode }));
+      passed = realChecks.some(item => testCheck(item.command) && item.exitCode === 0)
+        && failedExecutions.length === 0 && suspicious.length === 0;
+      process.stdout.write(`\n### Independent final-tree verification (pass ${pass})\n${verifier.report}\n`);
       const followup = [
         `Prior confirmed findings and attempted fixes:\n${priorFindings}\n\nFixer summary:\n${fixer.report}`,
-        `Actual executed check events (data; exit code 0 means pass): ${JSON.stringify(checkSummary)}`,
+        `Actual AFTER-FIX executed check events (data; exit code 0 means pass): ${JSON.stringify(checkSummary)}`,
+        `Validation evidence gate: ${passed ? "PASS" : "BLOCKED"}. Unsuccessful command events: ${failedExecutions.length}; unsafe or unrecognized validation commands: ${suspicious.length}.`,
         "Review the full working diff in this isolated branch as the exact eventual PR scope, including added tests. Only report issues introduced by these changes, tracing directly impacted callers as context.",
-        "End with exact lines 'Remaining P0-P2 findings: none' ONLY if genuinely true, and 'PR readiness: READY TO OPEN PR' ONLY if the change is production-ready, all relevant checks have passed, and no known P0/P1/material P2 findings remain. Otherwise end with 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED'.",
+        `End with exact lines 'Remaining P0-P2 findings: none' ONLY if genuinely true, and 'PR readiness: READY TO OPEN PR' ONLY if the change is production-ready, all relevant checks have passed, and no known P0/P1/material P2 findings remain. Otherwise end with 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED'. ${publishPr ? "Publication requires these conditions." : "No PR will be opened; this is a local-only fix."}`,
       ].join("\n\n");
       finalReview = await codexSession(codex, worktree, strictReviewPrompt(request, "Isolated current changes plus verified fixes", after.paths, followup, true), "read-only", "re-review");
       process.stdout.write(`\n### Fresh post-fix review (pass ${pass})\n${finalReview.report}\n`);
-      passed = realChecks.length > 0 && realChecks.every(item => item.exitCode === 0)
-        && realChecks.some(item => testCheck(item.command) && item.exitCode === 0);
       if (passed && readyReport(finalReview.report)) break;
       priorFindings = finalReview.report + (passed ? "" : "\nRequired real test/check evidence was missing or failing; rerun relevant checks.");
     }
@@ -196,6 +317,16 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
     const originalNow = readChangeSet(project, gitBin, { snapshot: true });
     if (originalNow.fingerprint !== changes.fingerprint || JSON.stringify(originalNow.paths) !== JSON.stringify(changes.paths)) {
       throw new Error("Original changes moved during fixing; refusing to publish a stale snapshot.");
+    }
+    if (!publishPr) {
+      const files = applyVerifiedFixesLocally(project, worktree, changes, gitBin);
+      let cleanupNote = "";
+      try {
+        gitText(gitBin, project, ["worktree", "remove", "--force", worktree]);
+        gitText(gitBin, project, ["branch", "-D", branch]);
+        fs.rmdirSync(temporary);
+      } catch (error) { cleanupNote = `\nCleanup warning: ${error.message}. Temporary checkout: ${worktree}`; }
+      return `Auto-fix: COMPLETED LOCALLY. ${files.length} fixed file(s) applied to your worktree. Original staged index preserved. No commit, push, or PR.\nFiles: ${files.join(", ") || "no source edits needed"}.${cleanupNote}`;
     }
     gitText(gitBin, worktree, ["diff", "--check"]);
     gitText(gitBin, worktree, ["add", "-A"]);
@@ -208,6 +339,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
     }
     const staged = zlist(git(gitBin, worktree, ["diff", "--cached", "--name-only", "-z"]).stdout);
     if (!staged.length || staged.some(sensitive)) throw new Error("No safe scoped files were staged for the PR.");
+    checkPublishableFiles(worktree, gitBin, staged);
     const reviewedTree = gitText(gitBin, worktree, ["write-tree"]);
     gitText(gitBin, worktree, ["commit", "-m", "fix: address current changes review findings"]);
     if (gitText(gitBin, worktree, ["rev-parse", "HEAD^{tree}"]) !== reviewedTree

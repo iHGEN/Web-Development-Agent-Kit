@@ -19,8 +19,12 @@ if (process.env.WEB_KIT_REVIEW_TEST_MODE === "error") {
 }
 const emit = value => console.log(JSON.stringify(value));
 emit({ type: "thread.started", thread_id: randomUUID() });
+if (process.env.WEB_KIT_REVIEW_TEST_MODE === "stall") {
+  setInterval(() => {}, 1000);
+} else {
 emit({ type: "item.completed", item: { type: "agent_message", text: "# Changes review\n\nFindings: no confirmed defects in the mock fixture.\nCoverage: selected source.\nGaps: this is a mock, not a real AI review." } });
 if (process.env.WEB_KIT_REVIEW_TEST_MODE !== "incomplete") {
   emit({ type: "turn.completed" });
 }
 if (process.env.WEB_KIT_REVIEW_TEST_MODE === "linger") setInterval(() => {}, 1000);
+}

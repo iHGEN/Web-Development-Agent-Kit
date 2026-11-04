@@ -39,6 +39,8 @@ Only when the user explicitly requests auto-fix by saying `@autofix`,
 npx @ihgen/web-kit review --auto-fix=true
 # Equivalent terminal shorthand:
 npx @ihgen/web-kit review @autofix
+# No PR, fix in the current working files after independent verification:
+npx @ihgen/web-kit review @autofix --no-pr
 ```
 
 1. Perform the same adversarial **read-only review of current changes**.
@@ -46,15 +48,24 @@ npx @ihgen/web-kit review @autofix
    only that current diff into it. The original staged, unstaged and untracked
    work stays unchanged; old unrelated feature-branch commits are not copied.
 3. Start a **second fresh Codex session** with scoped write access to fix verified
-   findings in the original changed code and directly related test files, and
-   execute real tests/checks. Other production-file edits stop automatic PR
-   publication pending a separate scoped request.
-4. Start a fresh read-only re-review. Automatically repeat the fix/re-review
+   findings in the original changed code and directly related test files. Other
+   production-file edits stop automatic PR publication pending a separate scoped request.
+4. Start an independent **post-fix verification session**, run real tests/checks,
+   reject masked failures (such as `npm test || true`), all failed command events,
+   and any modifications to the verified source snapshot. Then start a fresh
+   read-only re-review. Automatically repeat the fix/verification/re-review
    cycle up to three times if findings or required checks remain unresolved.
 5. **Only** with successful executed tests, a clean Git diff and `READY TO OPEN
    PR` with no known P0/P1/material P2 findings, commit the isolated changes,
-   check for high-confidence credentials in added lines, push its new feature
-   branch and open a PR using the authenticated `gh` CLI.
+   check for high-confidence credentials in added lines and staged text files,
+   block uninspectable binary files, push its new feature branch and open a PR
+   using the authenticated `gh` CLI.
+
+The explicit `--no-pr` option is **local-only**: do not commit, push, or open a PR.
+After the same strict fix/verification/re-review gate, safely apply the approved
+fixes and directly related tests into the original working files while preserving
+the original Git index. This mode needs neither a GitHub CLI nor an `origin`
+remote. Do not apply fixes if the original changes moved during review.
 
 If checks are missing, verification fails, or the new PR diff cannot be isolated
 cleanly, **do not open a PR**. Explain the problem and retain the isolated
@@ -67,7 +78,9 @@ Inside an existing Codex CLI conversation, saying **"review these changes"**
 starts the separate read-only reviewer and returns its report in the same chat.
 Saying **"review these changes @autofix"** also starts the separate fresh
 fixing session and gated PR flow. Neither command clears or resets the original
-conversation; `@autofix` is a chat/CLI shortcut, **not a Git release tag**.
+conversation. Saying **"review these changes @autofix --no-pr"** performs the
+same gated fixing flow but applies results locally and never publishes a PR;
+`@autofix` is a chat/CLI shortcut, **not a Git release tag**.
 
 There is **no review task registration, handoff folder, request.json, ready.json,
 report.md, result.json or supervisor transition** for this ordinary review.

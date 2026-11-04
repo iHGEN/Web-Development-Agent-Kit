@@ -93,6 +93,11 @@ try {
   assert.match(incomplete.stderr, /did not return a complete response/);
   unchanged(before);
 
+  const stalled = run(process.execPath, [command, "--timeout", "1"], { env: { WEB_KIT_REVIEW_TEST_MODE: "stall" } });
+  assert.notEqual(stalled.status, 0, "Unresponsive Codex must be terminated by the deadline");
+  assert.match(stalled.stderr, /timed out after 1 seconds/);
+  unchanged(before);
+
   const failed = run(process.execPath, [command], { env: { WEB_KIT_REVIEW_TEST_MODE: "error" } });
   assert.notEqual(failed.status, 0);
   assert.match(failed.stderr, /exit 7/);
