@@ -23,16 +23,32 @@ if (phase === "fix") {
   if (process.env.WEB_KIT_REVIEW_TEST_MODE === "out-of-scope") {
     fs.writeFileSync(path.join(project, "src", "unrelated-production.js"), "export const unrelated = true;\n");
   }
-  emit({ type: "item.completed", item: { type: "agent_message", text: "Fixed the confirmed issue. Executed node --test in the isolated checkout." } });
+  if (process.env.WEB_KIT_REVIEW_TEST_MODE === "out-of-scope-test") {
+    const testDirectory = path.join(project, "tests");
+    fs.mkdirSync(testDirectory, { recursive: true });
+    fs.writeFileSync(path.join(testDirectory, "legacy-auth.test.mjs"), "export const unrelatedTest = true;\n");
+  }
+  if (process.env.WEB_KIT_REVIEW_TEST_MODE === "provider-key-leak") {
+    fs.appendFileSync(target, `// ${process.env.OPENAI_API_KEY}\n`);
+  }
+  emit({ type: "item.completed", item: { type: "agent_message", text: "Fixed the confirmed issue; independent verification follows." } });
 } else if (phase === "verify") {
   const mode = process.env.WEB_KIT_REVIEW_TEST_MODE;
-  const emitCheck = (command, exit_code) => emit({ type: "item.completed", item: { type: "command_execution", command, exit_code } });
+  const tap = "TAP version 13\n# tests 2\n# pass 2\n# fail 0\n";
+  const emitCheck = (command, exit_code, output = tap) => emit({ type: "item.completed", item: {
+    type: "command_execution", command, exit_code, aggregated_output: output,
+  } });
   if (mode !== "no-tests") {
-    emitCheck(mode === "fake-checks" ? "echo npm test" : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true" : "node --test", 0);
+    const command = mode === "fake-checks" ? "echo npm test"
+      : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
+        : mode === "help-only" ? "node --test --help"
+          : mode === "help-only-npm" ? "npm test -- --help" : "node --test";
+    emitCheck(command, 0, ["help-only", "help-only-npm"].includes(mode) ? "Usage: --help\n" : mode === "zero-tests" ? "TAP version 13\n# tests 0\n# pass 0\n" : mode === "all-skipped" ? "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n" : tap);
   }
   if (mode === "masked-plus-real") emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
   if (mode === "failed-audit") emitCheck("npm run audit", 1);
+  if (mode === "rg-no-match") emitCheck("rg nonexistent-symbol src/", 1, "");
   if (mode === "stale-test") {
     const target = path.join(project, "src", "feature.js");
     fs.appendFileSync(target, "// modified AFTER verification started\n");

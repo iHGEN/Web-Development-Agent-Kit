@@ -65,7 +65,13 @@ try {
   assert.match(success.stdout, /^# Changes review/m);
   assert.match(success.stderr, /fresh Codex review session/);
   const invoked = JSON.parse(fs.readFileSync(probe, "utf8"));
-  assert.deepEqual(invoked.args.slice(0, 7), ["exec", "--json", "--ephemeral", "--sandbox", "read-only", "-C", project]);
+  const execIndex = invoked.args.indexOf("exec");
+  assert(execIndex > 0, "Codex must receive shell credential exclusions before exec");
+  assert.deepEqual(invoked.args.slice(execIndex, execIndex + 7), ["exec", "--json", "--ephemeral", "--sandbox", "read-only", "-C", project]);
+  assert(invoked.args.includes("shell_environment_policy.ignore_default_excludes=false"));
+  for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "AZURE_OPENAI_API_KEY"]) {
+    assert(invoked.args.includes(`shell_environment_policy.filters.${key}=\"exclude\"`), `${key} must be excluded from model shell commands`);
+  }
   assert.match(invoked.prompt, /Review just the uncommitted code/);
   assert.match(invoked.prompt, /src\/feature\.js/);
   assert.match(invoked.prompt, /Review ONLY the current staged, unstaged and relevant untracked changes/);

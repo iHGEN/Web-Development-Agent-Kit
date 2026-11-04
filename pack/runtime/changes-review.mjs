@@ -89,15 +89,27 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
   for (const key of ["WEB_KIT_CONTEXT_SUPERVISOR_ACTIVE", "WEB_KIT_SUPERVISOR_ID", "WEB_KIT_LAUNCH_ID",
     "WEB_KIT_REVIEW_TASK_ID", "WEB_KIT_PROVIDER_BRIDGE", "WEB_KIT_CONTEXT_SUPERVISOR_HANDOFF"]) delete childEnv[key];
   // GitHub, registry and cloud publish credentials belong to the caller. The
-  // model-operated fixer/verification subprocess never needs them.
+  // model-operated fixer/verification subprocess never needs them. Provider
+  // credentials may be needed by the Codex process itself, but must not reach
+  // its model-operated shell commands.
   for (const key of Object.keys(childEnv)) {
+    if (/^(?:OPENAI_API_KEY|CODEX_API_KEY|AZURE_OPENAI_API_KEY)$/i.test(key)) continue;
     if (/^(?:GH_|GITHUB_|NPM_|NODE_AUTH_TOKEN$|AWS_|AZURE_|GOOGLE_APPLICATION_CREDENTIALS$|GCP_|DOCKER_|GITLAB_|CI_JOB_TOKEN$|GIT_ASKPASS$|SSH_ASKPASS$)/i.test(key)
-      || (!/^(?:OPENAI_API_KEY|CODEX_API_KEY|AZURE_OPENAI_API_KEY)$/i.test(key)
-        && /(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL|API_KEY|DATABASE_URL|MONGODB_URI)/i.test(key))) {
+      || /(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL|API_KEY|DATABASE_URL|MONGODB_URI)/i.test(key)) {
       delete childEnv[key];
     }
   }
-  const child = spawn(executable.command, [...executable.prefix, "exec", "--json", "--ephemeral", "--sandbox", sandbox, "-C", project, prompt], {
+  // Codex's documented shell environment policy applies to the actual
+  // commands it executes, even when provider authentication is still present
+  // for the Codex CLI itself. CLI overrides take precedence over project config.
+  const shellCredentialPolicy = [
+    "-c", "shell_environment_policy.ignore_default_excludes=false",
+    ...["OPENAI_API_KEY", "CODEX_API_KEY", "AZURE_OPENAI_API_KEY"].flatMap(key => [
+      "-c", `shell_environment_policy.filters.${key}=\"exclude\"`,
+    ]),
+  ];
+  const child = spawn(executable.command, [...executable.prefix, ...shellCredentialPolicy,
+    "exec", "--json", "--ephemeral", "--sandbox", sandbox, "-C", project, prompt], {
     cwd: project, env: childEnv, stdio: ["ignore", "pipe", "inherit"], windowsHide: true, shell: false,
   });
   process.stderr.write(`Starting fresh Codex ${phase} session...\n`);
@@ -116,7 +128,8 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
     if (event.type === "thread.started") started = Boolean(event.thread_id);
     if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") lastMessage = event.item.text;
     if (event.type === "item.completed" && event.item?.type === "command_execution") {
-      commands.push({ command: event.item.command || "", exitCode: event.item.exit_code });
+      commands.push({ command: event.item.command || "", exitCode: event.item.exit_code,
+        output: String(event.item.aggregated_output || event.item.output || "").slice(0, 256 * 1024) });
     }
     if (event.type === "turn.completed") {
       completed = true;

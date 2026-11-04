@@ -48,16 +48,22 @@ npx @ihgen/web-kit review @autofix --no-pr
    only that current diff into it. The original staged, unstaged and untracked
    work stays unchanged; old unrelated feature-branch commits are not copied.
 3. Start a **second fresh Codex session** with scoped write access to fix verified
-   findings in the original changed code and directly related test files. Other
-   production-file edits stop automatic PR publication pending a separate scoped request.
+   findings in the original changed code and directly related test files. New
+   test files must match the changed module's filename; unrelated existing tests
+   and production files are outside scope and stop automatic publication.
 4. Start an independent **post-fix verification session**, run real tests/checks,
-   reject masked failures (such as `npm test || true`), all failed command events,
-   and any modifications to the verified source snapshot. Then start a fresh
+   reject non-executing test options (such as `--help`), masked failures (such as
+   `npm test || true`), missing positive test counts, failed validations and
+   unexpected command errors. A read-only search yielding no matches (`rg`
+   exit 1) is not a failed validation. Reject any modifications to the verified
+   source snapshot. Codex's shell environment policy must exclude provider API
+   keys from model-run project commands. Then start a fresh
    read-only re-review. Automatically repeat the fix/verification/re-review
    cycle up to three times if findings or required checks remain unresolved.
 5. **Only** with successful executed tests, a clean Git diff and `READY TO OPEN
    PR` with no known P0/P1/material P2 findings, commit the isolated changes,
-   check for high-confidence credentials in added lines and staged text files,
+   check for high-confidence credentials including provider keys (`sk-proj-`)
+   in added lines and staged text files,
    block uninspectable binary files, push its new feature branch and open a PR
    using the authenticated `gh` CLI.
 

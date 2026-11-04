@@ -107,6 +107,10 @@ try {
   assert.equal(audited.status, 0, `A successful independent audit should not prevent a verified PR: ${audited.stderr}`);
   assert.match(audited.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
   fs.rmSync(capture);
+  const diagnostic = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "rg-no-match" });
+  assert.equal(diagnostic.status, 0, `Expected rg no-match must not invalidate passing tests: ${diagnostic.stderr}`);
+  assert.match(diagnostic.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
   const notReady = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "not-ready" });
   assert.notEqual(notReady.status, 0, "Unresolved high severity finding should stop PR");
   assert.match(notReady.stderr, /Auto-fix NOT READY/);
@@ -126,6 +130,14 @@ try {
   assert.match(noTests.stderr, /Required executed test\/check evidence is missing/);
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
+
+  for (const mode of ["help-only", "help-only-npm", "zero-tests", "all-skipped"]) {
+    const help = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(help.status, 0, `${mode} must not count as executed tests`);
+    assert.match(help.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} opened a PR without executing tests`);
+    cleanIsolatedWorktrees();
+  }
 
   const maskedAlongsideReal = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "masked-plus-real" });
   assert.notEqual(maskedAlongsideReal.status, 0, "A masked test must block PR even when another real test succeeds");
@@ -169,6 +181,12 @@ try {
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
+  const unrelatedTest = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "out-of-scope-test" });
+  assert.notEqual(unrelatedTest.status, 0, "A test unrelated to changed modules must not enter the automatic PR");
+  assert.match(unrelatedTest.stderr, /outside the approved current-diff\/test scope/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
   const stageRace = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "stage-race" });
   assert.notEqual(stageRace.status, 0, "Staged A->C while worktree B stays the same must invalidate review snapshot");
   assert.match(stageRace.stderr, /original changes moved during review/i);
@@ -201,6 +219,15 @@ try {
   fs.rmSync(credentialFixture);
   cleanIsolatedWorktrees();
 
+  const providerKey = run(process.execPath, args, project, {
+    WEB_KIT_REVIEW_TEST_MODE: "provider-key-leak",
+    OPENAI_API_KEY: "sk-proj-synthetic-for-test-only-abcdefghijklmnopq",
+  });
+  assert.notEqual(providerKey.status, 0, "Synthetic provider credential copied into source must block publication");
+  assert.match(providerKey.stderr, /Potential credential material detected/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
   const archive = path.join(project, "src", "debug.zip");
   fs.writeFileSync(archive, Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]), Buffer.from("github_pat_abcdefghijklmnopqrstuvwxyz0123456789")]));
   const binary = run(process.execPath, args);
@@ -222,6 +249,12 @@ try {
   git(["remote", "remove", "origin"]); // Local-only fixes must work offline, without a GitHub remote.
   const noPrArgs = args.map(arg => arg === "--auto-fix=true" ? "@autofix" : arg);
   noPrArgs.push("--no-pr");
+  const unrelatedLocalTest = run(process.execPath, noPrArgs, project, { WEB_KIT_REVIEW_TEST_MODE: "out-of-scope-test" });
+  assert.notEqual(unrelatedLocalTest.status, 0, "Local-only fix must refuse unrelated test changes");
+  assert.match(unrelatedLocalTest.stderr, /outside the approved current-diff\/test scope/);
+  assert.equal(fs.readFileSync(path.join(project, "src", "feature.js"), "utf8"), worktreeBefore);
+  assert.equal(git(["show", ":src/feature.js"]), stagedBefore);
+  cleanIsolatedWorktrees();
   const localOnly = run(process.execPath, noPrArgs, project, { WEB_KIT_REVIEW_GH_BIN: path.join(project, "missing-gh") });
   assert.equal(localOnly.status, 0, `Local-only fix must not require GitHub CLI: ${localOnly.stderr}`);
   assert.match(localOnly.stdout, /COMPLETED LOCALLY/);
