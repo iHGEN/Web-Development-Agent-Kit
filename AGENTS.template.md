@@ -70,9 +70,9 @@ Every code-changing Git feature branch must protect its intended change surface 
 .agent-core/bin/code-review.mjs
 ```
 
-Treat **"review these changes"** and equivalent standalone requests as a **new review task** under **Review-only intake** in `.agent-core/rules/workflow.md` and `.agent-core/rules/changes-review.md`. Invoke `task-handoff.mjs request-review` with the original request and source selection. The helper best-effort registers a unique new SMALL `--review-only` delivery task. When an active compatible supervisor owns the current session, end the current turn once queued: the same outer `context-supervisor.mjs` starts a fresh native Codex/Claude session using existing permissions, with a task-only handoff and no builder conversation, summary capture or resume. Codex `agent-turn-complete` or Claude `Notification idle_prompt` confirms the native boundary, and the supervisor exits after delivery. If no compatible supervisor is active, the same helper automatically launches an **independent read-only Codex CLI** process (`codex exec`), waits for its completed output, and returns the report directly to the caller. There is **no subagent, same-session fallback, or explicit Session Controller fallback**. The independent route requires a local Codex CLI and host permission to start it; missing capability is **Review not started**, not permission to review here. Tracking failure and missing requirements/scope/tests are coverage gaps; do not repair setup.
+For **"review these changes"** or equivalent standalone review-only requests, follow `.agent-core/rules/changes-review.md` and run `node .agent-core/bin/changes-review.mjs --request '<original request>'`, adding `--selection '<selected changes>'` **only** if the user specified a narrower scope. The command launches one **fresh, ephemeral, read-only Codex CLI session** and returns its report directly. By default select current staged, unstaged and relevant untracked changes, not old/unrelated committed code. Challenge the current diff rigorously for evidenced security, correctness, architecture, testing, performance and maintainability defects, giving P0–P3 severity and a weighted 0–5 score. Inspect relevant callers only for impact. Do not review in the existing conversation, run `task-handoff.mjs request-review`, register a task, switch the outer supervisor, or create review handoff/receipt/report folders.
 
-The fresh reviewer reads selected source and relevant callers, returns a full structured report with **PR readiness: not assessed**, and stops. The native completion hook or independent CLI helper stores the report and stages its receipt automatically; **do not require the model to write report.md or run report-ready**. Only a verified receipt and genuine provider completion are report-delivery evidence; record the real native session ID and mark only the report task `DONE`/final-validation `PASS`, never code approval. Preserve source, existing jobs/scope/queues, the global implementation context handoff and user policies. Do not run project code or invoke the strict PR-readiness runner. This intake precedes profile/Graphify setup and the implementation loop. A later fix request enters normal scoped implementation.
+The ordinary reviewer inspects selected source and callers without modifying files or executing project code/tests, and reports findings and gaps directly. No task ID, handoff file, receipt or report file is needed. Preserve existing work and user policies. If the independent CLI cannot complete, report the error without inventing a review. **Only** when the user explicitly says `@autofix`, `#autofix`, "auto fix true" or `--auto-fix=true` invoke the same command with `--auto-fix=true` and **omit `--selection`**: auto-fix safely includes all current changes. This works from the same provider CLI conversation: the separate fresh review/fix processes return their output to the calling chat without clearing or resuming its context. The isolated current changes are fixed in a second fresh Codex session, checked, re-reviewed (up to three passes), and made into a PR only after genuine local readiness. Never infer auto-fix from a plain review request; no unrelated edits, manual GitHub Actions or PR on failed checks. The original index/worktree must stay intact. The separate `code-review.mjs` gate and Dot CI/CD workflow remain unchanged.
 
 Machine-readable project metadata is:
 
@@ -137,7 +137,7 @@ Transparent rollover state lives under:
 .agent-core/state/context-handoff.json
 ```
 
-A queued standalone review is a separate trigger on the same supervisor and does not wait for 50% context usage. Its fresh session receives only the new task handoff, reviews once, and ends after report delivery. It never applies the old task's implementation resume or anti-slop state.
+Standalone changes review does not use the context-rollover supervisor: `changes-review.mjs` launches an independent fresh read-only Codex CLI process, then returns the report directly. It creates no task handoff or review state, and never applies implementation resume or anti-slop state.
 
 The Context Rollover Manager is an always-available control role. Context handoffs are routing/state evidence only; current source, current diff, tests/build, and runtime evidence remain authoritative.
 
@@ -145,13 +145,13 @@ The Context Rollover Manager is an always-available control role. Context handof
 
 Codex uses a process-local turn-complete notifier plus the active Codex session's local context/token-count state.
 
-Claude Code uses a temporary `--settings` overlay with a status-line bridge for `context_window.used_percentage`. New review transitions/report completion require `Notification idle_prompt`, normally after about 60 seconds waiting for input ([official hook reference](https://code.claude.com/docs/en/hooks#notification)); status-line callbacks and `Stop` are not completion boundaries. Codex uses native `agent-turn-complete`.
+Claude Code uses a temporary `--settings` overlay with a status-line bridge for `context_window.used_percentage`. Context rollover uses `Notification idle_prompt`, normally after about 60 seconds waiting for input ([official hook reference](https://code.claude.com/docs/en/hooks#notification)); status-line callbacks and `Stop` are not completion boundaries. Codex uses native `agent-turn-complete` for rollover. Standalone changes review does not depend on these hooks.
 
 Do not rewrite provider configuration files merely to monitor context. Preserve existing notify/status-line behavior when possible, and never weaken enterprise/managed provider policy to force monitoring.
 
 ### Explicit Session Controller fallback
 
-The deterministic/headless continuation fallback remains installed below. It cannot replace the native-supervisor contract for standalone reviews:
+The deterministic/headless continuation fallback remains installed below. It is not used by ordinary or auto-fix changes reviews:
 
 ```text
 .agent-core/bin/session-controller.mjs

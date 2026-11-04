@@ -26,14 +26,15 @@ Web Kit itself requires Node.js + npm only. Graphify remains optional and must n
 
 ## Review-only intake
 
-Treat standalone requests such as **"review these changes"**, **"review my changes"**, or **"review only"** as a new source-analysis task under `.agent-core/rules/changes-review.md`:
+Treat standalone **"review these changes"**, **"review my changes"** or **"review only"** as a strict, scoped source-analysis request:
 
-1. Select the user's diff/files/range, or current staged, unstaged and relevant untracked changes by default. Invoke `node .agent-core/bin/task-handoff.mjs request-review --request '<original request>' --selection '<selection>'`. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` report-delivery task; tracking failure is a disclosed gap.
-2. With an active compatible supervisor, end the current turn once the helper queues the request: Codex `agent-turn-complete` or Claude `Notification idle_prompt` launches a genuinely fresh native session. With no supervisor, the same helper starts a **separate read-only Codex CLI process** and waits for its independently completed report; it returns findings directly to the caller. This is not same-session analysis, a resumed builder, or the strict PR-readiness runner. If the executable cannot start or the response fails validation, report **Review not completed** with the reason.
-3. The fresh session reads the selected source and relevant callers once, then emits a full structured report with evidenced findings, coverage gaps and **PR readiness: not assessed**. A trusted provider callback (supervised) or the standalone CLI helper (unsupervised) stores `report.md` and its receipt without requiring the model to write task files. Existing tasks, scope/check evidence, profiles and strict-runner sandbox support are not prerequisites. Do not execute project code or repair setup. Report `NO SOURCE` or `NO CHANGES` honestly when applicable.
-4. Do not make model-side report writes or run `report-ready`. The helper validates completed output; under a supervisor it also requires the fresh session's native completion boundary. Only a verified report and identity-bound receipt allow the dedicated review-delivery task to reach `DONE --final-validation PASS`. That means report delivery completed, even with defects; leave review/quality-review approval pending. The supervised route exits its reviewer without resuming the builder; the independent CLI route returns the report to the caller.
+1. Run `node .agent-core/bin/changes-review.mjs --request '<original request>' --selection '<requested changes>'`; omit `--selection` for current staged, unstaged and relevant untracked changes.
+2. Wait for the new, independent, ephemeral, read-only Codex CLI session to challenge **only current changes**. Inspect affected callers for impact, but do not raise unrelated pre-existing issues. Demand evidenced P0–P3 bugs/security issues, negative-path investigation and weighted 0–5 category scores.
+3. Return its review report directly to the user. An ordinary review neither fixes nor opens a PR.
 
-This route precedes profile/Graphify setup and implementation/repair loops. Allow only new review task/handoff/report/receipt bookkeeping and normal helper aggregate updates; preserve source, existing jobs/scope/queues and the global implementation context handoff. Do not import approval evidence, complete an implementation task or publish anything. Explicit fix, check-execution or PR-readiness requests follow their normal authorized workflow. The strict PR-readiness gate below remains unchanged.
+When the user **explicitly** says `auto fix true`, `@autofix`, `#autofix`, or `--auto-fix=true`, run `node .agent-core/bin/changes-review.mjs --request '<original request>' --auto-fix=true` instead. The command itself starts a separate fresh fixing session on an isolated copy of current changes, executes real checks, repeats fresh re-review/fix up to three times, and opens a PR only after production-readiness evidence. This also works within the existing AI CLI conversation: keep the conversation open and return the independent session's report here. Do not independently invoke a same-session fixer, run unrelated modifications or bypass its checks. The user's original index and worktree remain unchanged; Dot still owns CI/CD.
+
+No task registration, handoff, receipt, stored report or supervisor transition is part of this route. If the reviewer fails, show the actual error. Explicit implementation, standalone test execution, security review and strict PR-readiness requests retain their separate workflows.
 
 ## Phase 0 — Intake and job creation
 
@@ -340,7 +341,7 @@ Do not invent application-completion percentages from intuition.
 
 ## Phase 12 — Context rollover
 
-Threshold rollover at 50% changes provider-session lifetime while preserving the same task and job/workflow state. A queued standalone review request is a separate trigger on the same outer supervisor: it starts a new task from its task-only handoff, reviews once, and exits after report delivery. Unsupervised requests instead launch a separate read-only Codex CLI reviewer without a terminal supervisor. It never resumes the old implementation task or applies that task's anti-slop state.
+Threshold rollover at 50% changes provider-session lifetime while preserving the same task and job/workflow state. Ordinary standalone changes reviews do not use this supervisor; `changes-review.mjs` starts a separate ephemeral read-only Codex session and returns its report directly. The review never resumes the old implementation task or applies that task's anti-slop state.
 
 The continuation rules below apply only to threshold rollover.
 
@@ -378,7 +379,7 @@ For work intended to become a PR, **before** marking the task done/opening a PR:
 
 This applies to all PR-bound task sizes and does not authorize a PR, push, or merge by itself. Follow the project's CI/CD ownership policy; do not manually dispatch GitHub Actions merely because a local readiness gate exists.
 
-The separate standalone review-delivery task uses **Review-only intake** above. An implementation job may be `DONE` only when:
+The standalone changes-review command does not register an implementation or review-delivery task. An implementation job may be `DONE` only when:
 
 - requested behavior is implemented;
 - relevant tests/build/checks pass or limitations are explicitly accepted by the user;

@@ -1,0 +1,186 @@
+#!/usr/bin/env node
+// End-to-end offline test: independent review -> isolated fix -> fresh re-review -> mock gh PR.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-auto-fix-test-"));
+const project = path.join(root, "Gamehub example");
+const remote = path.join(root, "remote.git");
+const capture = path.join(root, "created-pr.json");
+const reviewPrompt = path.join(root, "review-prompt.txt");
+const mockCodex = path.join(source, "tests", "fixtures", "mock-auto-fix-codex.mjs");
+const mockGh = path.join(source, "tests", "fixtures", "mock-pr-gh.mjs");
+const env = {
+  ...process.env,
+  WEB_KIT_DISABLE_CONTEXT_SUPERVISOR: "1",
+  WEB_KIT_DISABLE_SHELL_PROFILE: "1",
+  WEB_KIT_STANDALONE_CODEX_BIN: mockCodex,
+  WEB_KIT_REVIEW_GH_BIN: mockGh,
+  WEB_KIT_REVIEW_TEST_CAPTURE: capture,
+  WEB_KIT_REVIEW_TEST_PROMPT_CAPTURE: reviewPrompt,
+};
+function run(command, args, cwd = project, overrides = {}) {
+  return spawnSync(command, args, { cwd, encoding: "utf8", timeout: 60000, maxBuffer: 8 * 1024 * 1024,
+    env: { ...env, ...overrides }, windowsHide: true });
+}
+function ok(command, args, cwd) {
+  const result = run(command, args, cwd);
+  assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`);
+  return result.stdout.trim();
+}
+const git = args => ok("git", args);
+function cleanIsolatedWorktrees() {
+  const worktrees = git(["worktree", "list", "--porcelain"]);
+  for (const line of worktrees.split("\n")) {
+    if (!line.startsWith("worktree ")) continue;
+    const directory = line.slice("worktree ".length);
+    if (directory === project || directory.startsWith(root + path.sep)) continue;
+    if (!path.basename(path.dirname(directory)).startsWith("web-kit-auto-fix-")) continue;
+    git(["worktree", "remove", "--force", directory]);
+    fs.rmdirSync(path.dirname(directory));
+  }
+}
+try {
+  fs.mkdirSync(project);
+  fs.mkdirSync(path.join(project, "src"));
+  fs.writeFileSync(path.join(project, "src", "feature.js"), "export const safe = false;\n");
+  fs.writeFileSync(path.join(project, "package.json"), '{"name":"fixture","private":true}\n');
+  ok("git", ["init", "-q", "-b", "main"]);
+  git(["config", "user.name", "Web Kit Smoke Test"]);
+  git(["config", "user.email", "web-kit-test@example.invalid"]);
+  const install = run(process.execPath, [path.join(source, "scripts", "agent-kit.mjs"), "install", project]);
+  assert.equal(install.status, 0, install.stderr);
+  git(["add", "-A"]);
+  git(["-c", "commit.gpgsign=false", "commit", "-qm", "fixture baseline"]);
+  ok("git", ["init", "-q", "--bare", "--initial-branch=main", remote], root);
+  git(["remote", "add", "origin", remote]);
+  git(["push", "-q", "origin", "main"]);
+  git(["remote", "set-head", "origin", "-a"]);
+  git(["switch", "-q", "-c", "fix/current"]);
+
+  // This earlier branch-only commit is unrelated to the *current* diff and must not reach the new PR.
+  fs.writeFileSync(path.join(project, "src", "old-unrelated.js"), "export const old = true;\n");
+  git(["add", "src/old-unrelated.js"]);
+  git(["-c", "commit.gpgsign=false", "commit", "-qm", "old unrelated feature commit"]);
+
+  fs.writeFileSync(path.join(project, "src", "feature.js"), "export const safe = 'staged A';\n");
+  git(["add", "src/feature.js"]);
+  fs.writeFileSync(path.join(project, "src", "feature.js"), "export const safe = 'worktree B';\n");
+  fs.writeFileSync(path.join(project, "src", "new.js"), "export const newFeature = true;\n");
+  const statusBefore = git(["status", "--porcelain=v1"]);
+  const stagedBefore = git(["show", ":src/feature.js"]);
+  const worktreeBefore = fs.readFileSync(path.join(project, "src", "feature.js"), "utf8");
+  const script = path.join(project, ".agent-core", "bin", "changes-review.mjs");
+  const args = [path.join(source, "bin", "web-kit-entry.js"), "review", "--project", project,
+    "--auto-fix=true", "--request", "Review only current changes; fix confirmed bugs and open PR"];
+  const published = run(process.execPath, args);
+  assert.equal(published.status, 0, published.stderr);
+  assert.match(published.stdout, /Fresh post-fix review/);
+  assert.match(published.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  const initialPrompt = fs.readFileSync(reviewPrompt, "utf8");
+  assert.match(initialPrompt, /src\/feature\.js/);
+  assert.doesNotMatch(initialPrompt, /old-unrelated\.js/, "Unrelated committed source appeared in current-review scope");
+  const created = JSON.parse(fs.readFileSync(capture, "utf8"));
+  assert.equal(created.args[created.args.indexOf("--base") + 1], "main");
+  const prBody = created.args[created.args.indexOf("--body") + 1];
+  assert.match(prBody, /Verification/);
+  assert.doesNotMatch(prBody, /P1 verified issue|node --test/, "Potentially sensitive report or command leaked into public PR body");
+  const head = created.args[created.args.indexOf("--head") + 1];
+  assert.match(head, /^review-fix\//);
+  const publishedCode = ok("git", ["--git-dir", remote, "show", `${head}:src/feature.js`], root);
+  assert.match(publishedCode, /worktree B/);
+  assert.match(publishedCode, /verified patch from isolated fixing session/);
+  assert.match(ok("git", ["--git-dir", remote, "show", `${head}:src/new.js`], root), /newFeature/);
+  const unrelated = run("git", ["--git-dir", remote, "cat-file", "-e", `${head}:src/old-unrelated.js`], root);
+  assert.notEqual(unrelated.status, 0, "An unrelated earlier branch commit entered the new PR");
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Original Git status changed");
+  assert.equal(git(["show", ":src/feature.js"]), stagedBefore, "Original staged content changed");
+  assert.equal(fs.readFileSync(path.join(project, "src", "feature.js"), "utf8"), worktreeBefore);
+
+  fs.rmSync(capture);
+  const notReady = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "not-ready" });
+  assert.notEqual(notReady.status, 0, "Unresolved high severity finding should stop PR");
+  assert.match(notReady.stderr, /Auto-fix NOT READY/);
+  assert(!fs.existsSync(capture), "PR command ran despite an unresolved finding");
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore);
+  cleanIsolatedWorktrees();
+
+  const tagArgs = args.map(arg => arg === "--auto-fix=true" ? "@autofix" : arg);
+  const tagNotReady = run(process.execPath, tagArgs, project, { WEB_KIT_REVIEW_TEST_MODE: "not-ready" });
+  assert.notEqual(tagNotReady.status, 0, "@autofix should run the automatic fix-and-PR gate");
+  assert.match(tagNotReady.stderr, /Auto-fix NOT READY/);
+  assert(!fs.existsSync(capture), "@autofix opened a PR despite an unresolved finding");
+  cleanIsolatedWorktrees();
+
+  const noTests = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "no-tests" });
+  assert.notEqual(noTests.status, 0, "No test evidence should stop PR");
+  assert.match(noTests.stderr, /Required executed test\/check evidence is missing/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const fakeChecks = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "fake-checks" });
+  assert.notEqual(fakeChecks.status, 0, "An echoed test command must not count as executed verification");
+  assert.match(fakeChecks.stderr, /Required executed test\/check evidence is missing/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const contradictory = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "contradictory" });
+  assert.notEqual(contradictory.status, 0, "Final NOT READY must override an earlier READY line");
+  assert.match(contradictory.stderr, /Auto-fix NOT READY/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const escaped = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "out-of-scope" });
+  assert.notEqual(escaped.status, 0, "An unrelated production file must block auto PR");
+  assert.match(escaped.stderr, /outside the approved current-diff\/test scope/);
+  assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  const stageRace = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "stage-race" });
+  assert.notEqual(stageRace.status, 0, "Staged A->C while worktree B stays the same must invalidate review snapshot");
+  assert.match(stageRace.stderr, /original changes moved during review/i);
+  assert(!fs.existsSync(capture));
+  assert.equal(fs.readFileSync(path.join(project, "src", "feature.js"), "utf8"), worktreeBefore);
+  assert.match(git(["show", ":src/feature.js"]), /staged C/);
+  fs.writeFileSync(path.join(project, "src", "feature.js"), "export const safe = 'staged A';\n");
+  git(["add", "src/feature.js"]);
+  fs.writeFileSync(path.join(project, "src", "feature.js"), worktreeBefore);
+  assert.equal(git(["show", ":src/feature.js"]), stagedBefore);
+
+  if (process.platform !== "win32") {
+    const commitHook = path.join(project, ".git", "hooks", "pre-commit");
+    fs.writeFileSync(commitHook, "#!/bin/sh\nprintf '// changed by commit hook\\n' >> src/feature.js\ngit add src/feature.js\n");
+    fs.chmodSync(commitHook, 0o755);
+    const hookChanged = run(process.execPath, args);
+    assert.notEqual(hookChanged.status, 0, "Commit hook mutation must not be published without re-review");
+    assert.match(hookChanged.stderr, /Commit hooks changed reviewed content/);
+    assert(!fs.existsSync(capture));
+    fs.rmSync(commitHook);
+    cleanIsolatedWorktrees();
+  }
+
+  const credentialFixture = path.join(project, "src", "demo-credential.js");
+  fs.writeFileSync(credentialFixture, "export const dummy = 'github_pat_abcdefghijklmnopqrstuvwxyz0123456789';\n");
+  const credential = run(process.execPath, args);
+  assert.notEqual(credential.status, 0, "New credential-like content must prevent automatic publication");
+  assert.match(credential.stderr, /Potential credential material detected/);
+  assert(!fs.existsSync(capture));
+  fs.rmSync(credentialFixture);
+  cleanIsolatedWorktrees();
+
+  const badSelection = run(process.execPath, [script, "--auto-fix", "--selection", "src/feature.js"]);
+  assert.notEqual(badSelection.status, 0);
+  assert.match(badSelection.stderr, /omit --selection/);
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore);
+  console.log("Auto-fix review: PASS (isolated fresh sessions, scoped remote PR, original index/worktree preserved, failure gates)");
+} finally {
+  if (fs.existsSync(project)) {
+    try { cleanIsolatedWorktrees(); } catch {}
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+}
