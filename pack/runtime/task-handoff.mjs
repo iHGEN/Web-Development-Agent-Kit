@@ -523,31 +523,62 @@ function findReviewProject(start) {
   }
 }
 
-function standaloneCodexBinary(env) {
-  const override = env.WEB_KIT_STANDALONE_CODEX_BIN;
+function standaloneCodexBinary(env, project) {
+  // A project's PATH, particularly node_modules/.bin during npm scripts,
+  // is untrusted source code. Never execute a project-owned provider shim:
+  // CLI flags like --sandbox read-only cannot constrain a fake executable.
+  const projectRoot = fs.realpathSync(project);
+  const controlledRoots = [projectRoot];
+  for (let ancestor = path.dirname(projectRoot); ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {
+    // In a nested Web Kit project, the monorepo's node_modules/.bin is just
+    // as untrusted as the nested package's own local bin directory.
+    if (fs.existsSync(path.join(ancestor, ".git"))) {
+      controlledRoots.push(fs.realpathSync(ancestor));
+      break;
+    }
+  }
   const shim = path.resolve(env.WEB_KIT_HOME || path.join(env.WEB_KIT_USER_HOME || os.homedir(), ".web-kit"), "bin");
+  let realShim = shim;
+  try { realShim = fs.realpathSync(shim); } catch {}
+  const inside = (file, root) => {
+    const relative = path.relative(root, file);
+    return !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep);
+  };
+  const forbidden = file => controlledRoots.some(root => inside(file, root))
+    || inside(file, shim) || inside(file, realShim);
+  const safeTarget = file => {
+    const lexical = path.resolve(file);
+    if (forbidden(lexical)) return null;
+    const canonical = fs.realpathSync(lexical);
+    if (forbidden(canonical) || !fs.statSync(canonical).isFile()) return null;
+    return canonical;
+  };
+  const override = env.WEB_KIT_STANDALONE_CODEX_BIN;
   const candidates = override ? [path.resolve(override)] : String(env.PATH || "").split(path.delimiter).filter(Boolean)
-    .filter(dir => path.resolve(dir).toLowerCase() !== shim.toLowerCase())
-    .flatMap(dir => (process.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"]).map(name => path.resolve(dir, name)));
+    .flatMap(dir => (process.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"])
+      .map(name => path.resolve(dir, name)));
   for (const candidate of candidates) {
     try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      if (path.dirname(candidate).toLowerCase() === shim.toLowerCase()) continue;
-      if (/\.(?:js|mjs|cjs)$/i.test(candidate)) return { command: process.execPath, prefix: [candidate] };
-      if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
-      if (!/\.cmd$/i.test(candidate)) return { command: candidate, prefix: [] };
-      // Resolve standard npm Node shims without a command shell (safe literal arguments).
-      const contents = fs.readFileSync(candidate, "utf8");
-      const scripts = [...contents.matchAll(/"([^"\r\n]+\.(?:mjs|cjs|js))"/gi)];
-      for (let i = scripts.length - 1; i >= 0; i--) {
-        let script = scripts[i][1].replace(/%~?dp0%?/gi, path.dirname(candidate) + path.sep);
-        if (!path.isAbsolute(script)) script = path.resolve(path.dirname(candidate), script);
-        try { if (fs.statSync(script).isFile()) return { command: process.execPath, prefix: [script] }; }
-        catch {}
+      const executable = safeTarget(candidate);
+      if (!executable) continue;
+      if (/\.(?:js|mjs|cjs)$/i.test(executable)) return { command: process.execPath, prefix: [executable] };
+      if (/\.cmd$/i.test(executable)) {
+        // Only recognized npm Node shims; never launch arbitrary batch code.
+        const contents = fs.readFileSync(executable, "utf8");
+        const scripts = [...contents.matchAll(/"([^"\r\n]+\.(?:mjs|cjs|js))"/gi)];
+        for (let i = scripts.length - 1; i >= 0; i--) {
+          let script = scripts[i][1].replace(/%~?dp0%?/gi, path.dirname(executable) + path.sep);
+          if (!path.isAbsolute(script)) script = path.resolve(path.dirname(executable), script);
+          const target = safeTarget(script);
+          if (target && /\.(?:mjs|cjs|js)$/i.test(target)) return { command: process.execPath, prefix: [target] };
+        }
+        continue;
       }
+      if (process.platform !== "win32") fs.accessSync(executable, fs.constants.X_OK);
+      return { command: executable, prefix: [] };
     } catch {}
   }
-  throw new UnavailableError("Review not started: no independent Codex CLI executable is available. Install the Codex CLI or use the supervised terminal launcher.");
+  throw new UnavailableError("Review not started: no independent Codex CLI executable was found outside project-controlled paths and Web Kit shims. Install the trusted global Codex CLI, configure WEB_KIT_STANDALONE_CODEX_BIN to its external path, or use the supervised terminal launcher.");
 }
 
 function collectUnsupervisedCodexReport(raw) {
@@ -577,7 +608,7 @@ function runUnsupervisedReview(originalRequest, selection, env) {
     "Cannot start another review inside an active review task.");
   const project = findReviewProject(process.cwd());
   if (!project) throw new UnavailableError("Review not started: no installed Web Kit project found from the current directory.");
-  const executable = standaloneCodexBinary(env); // No task/job artifacts on missing-provider failure.
+  const executable = standaloneCodexBinary(env, project); // No task/job artifacts on missing-provider failure.
   const taskId = "changes-review-" + randomUUID();
   const supervisorId = randomUUID(), launchId = randomUUID();
   const paths = statePaths(project, supervisorId, launchId, taskId);
