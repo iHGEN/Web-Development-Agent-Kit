@@ -684,15 +684,26 @@ function runUnsupervisedReview(originalRequest, selection, env) {
       task_id: taskId, request_id: task.request_id, session_id: sessionId,
       report_path: paths.report, report_digest: report.digest, report_bytes: report.bytes,
       delivered_at: nowIso(), certifies: "report-delivery-only",
-      registered: task.registered, tracking_gaps: task.tracking_gaps,
+      registered: task.registered, tracking_gaps: [...task.tracking_gaps],
+      tracking_status: task.registered ? "PENDING" : "UNREGISTERED",
       execution: "independent-codex-cli",
     };
+    // Publish the verified report delivery before optional progress bookkeeping.
     writeJson(project, paths.result, delivered);
-    if (task.registered) runProgress(task, paths, ["update", "--status", "DONE",
-      "--final-validation", "PASS", "--evidence", "Independent Codex report delivered: " + paths.report]);
+    if (task.registered) {
+      const gap = runProgress(task, paths, ["update", "--status", "DONE",
+        "--final-validation", "PASS", "--evidence", "Independent Codex report delivered: " + paths.report]);
+      if (gap) task.tracking_gaps.push(gap);
+      delivered.tracking_gaps = [...task.tracking_gaps];
+      delivered.tracking_status = gap ? "INCOMPLETE" : "DONE";
+      // An unsuccessful final DONE must remain visible in both durable evidence
+      // and the CLI response; never claim a successfully completed tracked job.
+      writeJson(project, paths.result, delivered, { exclusive: false });
+    }
     return { status: "delivered", task_id: taskId, session_id: sessionId,
       report_path: paths.report, result_path: paths.result,
-      report: reportText, tracking_gaps: task.tracking_gaps, execution: "independent-codex-cli",
+      report: reportText, tracking_gaps: [...task.tracking_gaps],
+      tracking_status: delivered.tracking_status, execution: "independent-codex-cli",
       pr_readiness: "not assessed" };
   } catch (error) {
     if (task.registered) runProgress(task, paths, ["update", "--status", "FAILED",
