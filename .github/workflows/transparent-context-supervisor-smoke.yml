@@ -12,10 +12,12 @@ on:
       - "pack/router/context-policy.json"
       - "tests/transparent-context-supervisor-smoke.mjs"
       - "tests/task-context-supervisor-smoke.mjs"
+      - "tests/unsupervised-review-smoke.mjs"
       - "tests/provider-bridge-progress-smoke.mjs"
       - "tests/linux-provider-process-tree-smoke.mjs"
       - "tests/fixtures/mock-transparent-provider.mjs"
       - "tests/fixtures/mock-task-context-provider.mjs"
+      - "tests/fixtures/mock-standalone-codex.mjs"
       - "tests/fixtures/mock-provider-tree-root.mjs"
       - "tests/fixtures/mock-provider-tree-leaf.mjs"
       - ".github/workflows/transparent-context-supervisor-smoke.yml"
@@ -30,10 +32,12 @@ on:
       - "pack/router/context-policy.json"
       - "tests/transparent-context-supervisor-smoke.mjs"
       - "tests/task-context-supervisor-smoke.mjs"
+      - "tests/unsupervised-review-smoke.mjs"
       - "tests/provider-bridge-progress-smoke.mjs"
       - "tests/linux-provider-process-tree-smoke.mjs"
       - "tests/fixtures/mock-transparent-provider.mjs"
       - "tests/fixtures/mock-task-context-provider.mjs"
+      - "tests/fixtures/mock-standalone-codex.mjs"
       - "tests/fixtures/mock-provider-tree-root.mjs"
       - "tests/fixtures/mock-provider-tree-leaf.mjs"
       - ".github/workflows/transparent-context-supervisor-smoke.yml"
@@ -74,10 +78,12 @@ jobs:
           node --check pack/runtime/work-progress.mjs
           node --check tests/fixtures/mock-transparent-provider.mjs
           node --check tests/fixtures/mock-task-context-provider.mjs
+          node --check tests/fixtures/mock-standalone-codex.mjs
           node --check tests/fixtures/mock-provider-tree-root.mjs
           node --check tests/fixtures/mock-provider-tree-leaf.mjs
           node --check tests/transparent-context-supervisor-smoke.mjs
           node --check tests/task-context-supervisor-smoke.mjs
+          node --check tests/unsupervised-review-smoke.mjs
           node --check tests/provider-bridge-progress-smoke.mjs
           node --check tests/linux-provider-process-tree-smoke.mjs
           node -e "const p=require('./pack/router/context-policy.json'); if(p.version!==9 || (!p.session_control?.normal_install_installs_user_supervisor || p.efficiency_policy?.repeat_no_progress_threshold!==2)) process.exit(1)"
@@ -93,6 +99,12 @@ jobs:
         run: |
           set -euo pipefail
           node tests/task-context-supervisor-smoke.mjs
+
+      - name: Verify unsupervised requests spawn independent read-only reviews and fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/unsupervised-review-smoke.mjs
 
       - name: Verify provider turns update evidence-based progress
         shell: bash
