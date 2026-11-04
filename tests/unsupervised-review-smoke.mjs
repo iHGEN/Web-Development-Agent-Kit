@@ -43,6 +43,29 @@ try {
   assert.equal(setup.status, 0, "Web Kit installation failed: " + setup.stdout + setup.stderr);
   assert.equal(json(path.join(project, ".agent-kit.json")).kit, "web-dev-agent-kit");
   const helper = path.join(project, ".agent-core", "bin", "task-handoff.mjs");
+  // Inject failure only for final DONE, after the real tracking engine has
+  // registered and advanced the review task. The report must still be
+  // delivered while its tracking gap is made visible and durable.
+  const progress = path.join(project, ".agent-core", "bin", "work-progress.mjs");
+  fs.renameSync(progress, path.join(project, ".agent-core", "bin", "work-progress-unwrapped.mjs"));
+  fs.writeFileSync(progress, [
+    '#!/usr/bin/env node',
+    'import { spawnSync } from "node:child_process";',
+    'import { fileURLToPath } from "node:url";',
+    'const args = process.argv.slice(2);',
+    'const i = args.indexOf("--status");',
+    'if (process.env.WEB_KIT_TEST_FINAL_TRACKING_FAIL === "1" && args[0] === "update" && i >= 0 && args[i + 1] === "DONE") {',
+    '  console.error("injected-final-DONE failure");',
+    '  process.exitCode = 27;',
+    '} else {',
+    '  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./work-progress-unwrapped.mjs", import.meta.url)), ...args],',
+    '    { stdio: "inherit", windowsHide: true });',
+    '  if (result.error) throw result.error;',
+    '  process.exitCode = result.status ?? 1;',
+    '}',
+    ''
+  ].join("\n"));
+
   fs.writeFileSync(path.join(project, "src", "example.js"), "export const answer = 1;\n");
   git("add", "src/example.js");
   fs.writeFileSync(path.join(project, "src", "example.js"), "export const answer = 2;\n");
@@ -60,11 +83,12 @@ try {
     index: git("show", ":src/example.js"),
   };
   const tasks = new Set();
-  const scenarios = ["success", "invalid", "wrong-task", "no-completion", "no-thread", "crash"];
+  const scenarios = ["success", "final-tracking-failure", "invalid", "wrong-task", "no-completion", "no-thread", "crash"];
   for (const mode of scenarios) {
     const result = run([helper, "request-review", "--request", "review these changes",
       "--selection", "current staged, unstaged and relevant untracked changes"], {
-      env: { ...env, WEB_KIT_TEST_STANDALONE_MODE: mode, WEB_KIT_TEST_STANDALONE_OBSERVATION: observations }
+      env: { ...env, WEB_KIT_TEST_STANDALONE_MODE: mode, WEB_KIT_TEST_STANDALONE_OBSERVATION: observations,
+        WEB_KIT_TEST_FINAL_TRACKING_FAIL: mode === "final-tracking-failure" ? "1" : "0" }
     });
     const observation = json(observations);
     assert(!tasks.has(observation.taskId), "fresh request reused the review task");
@@ -73,7 +97,7 @@ try {
     const reviewRoot = path.join(project, ".agent-core", "state", "reviews", observation.taskId);
     const record = json(path.join(reviewRoot, "result.json"));
     const job = json(path.join(project, ".agent-core", "state", "jobs", observation.taskId + ".json"));
-    if (mode === "success") {
+    if (mode === "success" || mode === "final-tracking-failure") {
       assert.equal(result.status, 0, result.stderr);
       const output = JSON.parse(result.stdout);
       assert.equal(output.status, "delivered");
@@ -81,7 +105,18 @@ try {
       assert.equal(output.execution, "independent-codex-cli");
       assert.equal(record.status, "delivered");
       assert.equal(record.certifies, "report-delivery-only");
-      assert.equal(job.status, "DONE");
+      if (mode === "final-tracking-failure") {
+        assert.equal(job.status, "REVIEWING", "injected failure should leave tracking incomplete");
+        assert.equal(record.tracking_status, "INCOMPLETE");
+        assert.equal(output.tracking_status, "INCOMPLETE");
+        assert(record.tracking_gaps.some(gap => gap.includes("injected-final-DONE failure")));
+        assert(output.tracking_gaps.some(gap => gap.includes("injected-final-DONE failure")));
+      } else {
+        assert.equal(job.status, "DONE");
+        assert.equal(record.tracking_status, "DONE");
+        assert.equal(output.tracking_status, "DONE");
+        assert.deepEqual(output.tracking_gaps, []);
+      }
       assert.equal(job.review.status, "PENDING");
       assert.equal(job.quality.code_review.status, "PENDING");
       const receipt = json(path.join(reviewRoot, "ready.json"));
@@ -110,6 +145,46 @@ try {
   assert.equal(fs.readdirSync(path.join(project, ".agent-core", "state", "reviews")).length, countBefore,
     "unavailable executable registered a bogus review task");
   console.log("Unsupervised review process case: PASS (provider unavailable)");
+
+  // A project can prepend an executable named codex to PATH, including from
+  // npm scripts. The resolver must reject it and any external symlink to it
+  // BEFORE launching code, without creating a fake review task.
+  const localBin = path.join(project, "node_modules", ".bin");
+  const marker = path.join(root, "poisoned-codex-executed.txt");
+  fs.mkdirSync(localBin, { recursive: true });
+  const poison = path.join(localBin, process.platform === "win32" ? "codex.cmd" : "codex");
+  fs.writeFileSync(poison, process.platform === "win32"
+    ? '@echo off\r\necho POISONED>"' + marker + '"\r\nexit /b 42\r\n'
+    : '#!/bin/sh\nprintf POISONED > "' + marker + '"\nexit 42\n');
+  if (process.platform !== "win32") fs.chmodSync(poison, 0o755);
+  const rejectExecutable = (extraEnv, label) => {
+    const priorTasks = fs.readdirSync(path.join(project, ".agent-core", "state", "reviews")).length;
+    const denied = run([helper, "request-review", "--request", "review these changes",
+      "--selection", "current changes"], { env: { ...env, ...extraEnv } });
+    assert.notEqual(denied.status, 0, label + ": unexpectedly started the reviewer");
+    assert.match(denied.stderr, /no independent Codex CLI executable/, label + ": untrusted path was not rejected");
+    assert.equal(fs.readdirSync(path.join(project, ".agent-core", "state", "reviews")).length, priorTasks,
+      label + ": registered a review task before rejecting the program");
+    assert(!fs.existsSync(marker), label + ": project-controlled executable was run");
+  };
+  rejectExecutable({ WEB_KIT_STANDALONE_CODEX_BIN: "", PATH: localBin }, "poisoned local PATH");
+  rejectExecutable({ WEB_KIT_STANDALONE_CODEX_BIN: poison, PATH: localBin }, "poisoned explicit path");
+  if (process.platform !== "win32") {
+    const externalDir = path.join(root, "external-symlink-bin");
+    fs.mkdirSync(externalDir);
+    fs.symlinkSync(poison, path.join(externalDir, "codex"));
+    rejectExecutable({ WEB_KIT_STANDALONE_CODEX_BIN: "", PATH: externalDir }, "symlink into project");
+  } else {
+    const externalDir = path.join(root, "external-shim-bin");
+    fs.mkdirSync(externalDir);
+    const localScript = path.join(project, "poison-script.js");
+    fs.writeFileSync(localScript, 'require("node:fs").writeFileSync(' + JSON.stringify(marker) + ', "POISONED");');
+    fs.writeFileSync(path.join(externalDir, "codex.cmd"), '@echo off\r\nnode "' + localScript + '" %*\r\n');
+    rejectExecutable({ WEB_KIT_STANDALONE_CODEX_BIN: "", PATH: externalDir },
+      "external npm shim targeting project code");
+  }
+  console.log("Unsupervised review process case: PASS (poisoned PATH, aliases, override)");
+
   console.log("Unsupervised Changes Review smoke: PASS (" + process.platform + "; mocked Codex CLI)");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
