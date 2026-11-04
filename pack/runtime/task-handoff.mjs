@@ -615,7 +615,7 @@ function runUnsupervisedReview(originalRequest, selection, env) {
       "Do not invoke task-handoff.mjs, do not queue further tasks, and do not use a prior session transcript.",
       "Include confirmed P0-P3 findings with paths, evidence and minimal remedies; disclose missing evidence.",
       "Reply with exactly one plain-text report starting with 'Changes review: COMPLETED' (or PARTIAL, NO CHANGES, NO SOURCE).",
-      "Include these full lines: 'Task: " + taskId + "', 'Execution: fresh native supervisor session',",
+      "Include these full lines: 'Task: " + taskId + "', 'Execution: independent fresh Codex CLI session',",
       "'Session: independent Codex CLI', 'Selection: ...', 'Findings: ...', 'Coverage: ...',",
       "'Checks: no project checks executed', 'Gaps: ...', 'PR readiness: not assessed'.",
       "Do not claim strict PR approval or that you executed checks."
@@ -769,7 +769,7 @@ function completeReviewText(message, taskId) {
   if (!report.startsWith("Changes review: ")
     || !/^Changes review: (?:COMPLETED|PARTIAL|NO CHANGES|NO SOURCE)\r?$/m.test(report)
     || !report.split(/\r?\n/).some(line => line === "Task: " + taskId)
-    || !/^Execution: fresh native supervisor session\r?$/m.test(report)
+    || !/^Execution: (?:fresh native supervisor session|independent fresh Codex CLI session)\r?$/m.test(report)
     || !/^Selection: .+$/m.test(report) || !/^Findings: .+$/m.test(report)
     || !/^Coverage: .+$/m.test(report) || !/^Checks: .+$/m.test(report)
     || !/^Gaps: .+$/m.test(report) || !/^PR readiness: not assessed\r?$/m.test(report)) return null;
