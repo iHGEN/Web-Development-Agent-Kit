@@ -185,6 +185,19 @@ try {
       unit: "node --test --test-reporter=tap test/unit.test.js",
       integration: "node --test --test-reporter=tap test/integration.test.js > /dev/null 2>&1 || true",
     }],
+    ["masked-pretest-lifecycle", {
+      pretest: "node test/security-check.mjs > /dev/null 2>&1 || true",
+      test: "node --test",
+    }],
+    ["masked-posttest-lifecycle", {
+      test: "node --test",
+      posttest: "node test/integration-check.mjs > /dev/null 2>&1 || true",
+    }],
+    ["masked-nested-lifecycle", {
+      test: "npm run unit && node --test",
+      preunit: "node test/audit.mjs > /dev/null 2>&1 || true",
+      unit: "node --test",
+    }],
   ]) {
     fs.writeFileSync(manifest, JSON.stringify({ name: "fixture", private: true, scripts }));
     const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
@@ -207,6 +220,17 @@ try {
   const safeChain = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "safe-chained-package-script" });
   assert.equal(safeChain.status, 0, `A fully checked fail-fast npm script chain should pass: ${safeChain.stderr}`);
   assert.match(safeChain.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
+  fs.writeFileSync(manifest, originalManifest);
+  cleanIsolatedWorktrees();
+  // Safe implicit hooks must not block an otherwise valid npm test.
+  fs.writeFileSync(manifest, JSON.stringify({ name: "fixture", private: true, scripts: {
+    pretest: "node --test", test: "npm run unit", posttest: "node --test",
+    preunit: "node --test", unit: "node --test", postunit: "node --test",
+  } }));
+  const safeLifecycle = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "safe-lifecycle" });
+  assert.equal(safeLifecycle.status, 0, `Safe npm lifecycle scripts should pass: ${safeLifecycle.stderr}`);
+  assert.match(safeLifecycle.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
   fs.rmSync(capture);
   fs.writeFileSync(manifest, originalManifest);
   cleanIsolatedWorktrees();

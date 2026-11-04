@@ -173,9 +173,7 @@ function maskedPackageTestScript(project, command) {
   let scripts;
   try { scripts = JSON.parse(fs.readFileSync(manifest, "utf8")).scripts; } catch { return true; }
   const visiting = new Set();
-  const unsafe = name => {
-    if (visiting.has(name)) return true; // Recursive scripts cannot prove a bounded test run.
-    const script = scripts?.[name];
+  const unsafeBody = script => {
     if (typeof script !== "string" || !script.trim()) return true;
     // Only a simple fail-fast && sequence is supported. Pipes, fallbacks,
     // redirects, substitutions, background jobs and arbitrary shell flow may
@@ -184,15 +182,25 @@ function maskedPackageTestScript(project, command) {
       || /&/.test(script.replaceAll("&&", ""))) return true;
     const commands = script.split(/\s*&&\s*/);
     if (commands.some(part => !part.trim())) return true;
+    return commands.some(part => {
+      const simple = part.trim();
+      const child = simple.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)$/i);
+      if (child) return unsafe(child[1]);
+      // An opaque wrapper or non-test command could swallow a failure and
+      // manufacture pass-looking output. Require recognizable direct checks.
+      return !check(simple);
+    });
+  };
+  const unsafe = name => {
+    if (visiting.has(name)) return true; // Recursive scripts cannot prove a bounded test run.
     visiting.add(name);
     try {
-      return commands.some(part => {
-        const simple = part.trim();
-        const child = simple.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)$/i);
-        if (child) return unsafe(child[1]);
-        // An opaque wrapper or non-test command could swallow a failure and
-        // manufacture pass-looking output. Require recognizable direct checks.
-        return !check(simple);
+      // npm test (and npm run <name>) automatically executes pre<name> and
+      // post<name>, which can suppress failed checks before/after a green test.
+      // Validate those implicit hooks for every explicitly invoked script.
+      return [`pre${name}`, name, `post${name}`].some(lifecycle => {
+        if (!Object.hasOwn(scripts ?? {}, lifecycle)) return lifecycle === name;
+        return unsafeBody(scripts[lifecycle]);
       });
     } finally { visiting.delete(name); }
   };

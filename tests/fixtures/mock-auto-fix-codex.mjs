@@ -70,7 +70,8 @@ if (phase === "fix") {
         : mode === "fake-checks" ? "echo npm test"
           : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
             : ["masked-tap-in-script", "masked-jest", "masked-package-script", "masked-nested-package-script",
-              "masked-chained-package-script", "safe-chained-package-script"].includes(mode) ? "npm test"
+              "masked-chained-package-script", "safe-chained-package-script", "masked-pretest-lifecycle",
+              "masked-posttest-lifecycle", "masked-nested-lifecycle", "safe-lifecycle"].includes(mode) ? "npm test"
               : mode === "masked-cargo" ? "cargo test"
             : mode === "help-only" ? "node --test --help"
               : mode === "help-only-short-version" ? "node --test -V"
