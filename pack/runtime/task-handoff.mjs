@@ -585,6 +585,50 @@ function reportReady(env = process.env) {
   return receipt;
 }
 
+// Native completion hooks may persist a complete review even when the model
+// session has no permission to write report.md. This certifies delivery only,
+// never the findings or PR readiness.
+function completeReviewText(message, taskId) {
+  if (typeof message !== "string" || Buffer.byteLength(message, "utf8") > 512 * 1024) return null;
+  const report = message.trim();
+  if (!report.startsWith("Changes review: ")
+    || !/^Changes review: (?:COMPLETED|PARTIAL|NO CHANGES|NO SOURCE)\r?$/m.test(report)
+    || !report.split(/\r?\n/).some(line => line === "Task: " + taskId)
+    || !/^Execution: fresh native supervisor session\r?$/m.test(report)
+    || !/^Selection: .+$/m.test(report) || !/^Findings: .+$/m.test(report)
+    || !/^Coverage: .+$/m.test(report) || !/^Checks: .+$/m.test(report)
+    || !/^Gaps: .+$/m.test(report) || !/^PR readiness: not assessed\r?$/m.test(report)) return null;
+  return report + "\n";
+}
+
+export function stageNativeReviewOutput(provider, sessionId, finalMessage, env = process.env) {
+  // Do not accept another task, earlier launch, resumed builder session,
+  // malformed report, or conflicting report/receipt. Only real native hooks
+  // should call this before the existing completion-boundary check.
+  try {
+    if (!validSession(sessionId) || !env.WEB_KIT_REVIEW_TASK_ID) return false;
+    const context = contextFromEnv(env);
+    if (context.provider !== provider) return false;
+    const review = activeReview(context, env.WEB_KIT_REVIEW_TASK_ID);
+    if (sessionId === review.handoff.previous_session_id
+      || readJson(context.project, review.paths.ready, true)) return false;
+    const reportText = completeReviewText(finalMessage, review.task.task_id);
+    if (!reportText) return false;
+    const existing = checkedPath(context.project, review.paths.report, { missing: true });
+    if (existing) {
+      // Never overwrite an earlier report, even if the current model text differs.
+      if (reportDigest(context.project, review.paths.report).digest !== sha256(Buffer.from(reportText))) return false;
+    } else {
+      const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0);
+      const fd = fs.openSync(review.paths.report, flags, 0o600);
+      try { fs.writeFileSync(fd, reportText, "utf8"); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
+    }
+    reportReady(env); // Native-bound report receipt, rechecked at the actual completion boundary.
+    return true;
+  } catch { return false; } // Existing missing/invalid receipt path fails closed.
+}
+
 function parseArgs(args) {
   const out = {};
   for (let i = 0; i < args.length; i += 1) {
