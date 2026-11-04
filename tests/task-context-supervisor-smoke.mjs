@@ -150,6 +150,8 @@ try {
   assert(process.argv.length === 2 || (process.argv.length === 4 && selectedCase), "Usage: task-context-supervisor-smoke.mjs [--case <provider-scenario>]");
   const scenarios = [
     ["codex", "success"], ["claude", "success"],
+    ["codex", "auto-success"], ["claude", "auto-success"],
+    ["codex", "auto-incomplete"], ["claude", "auto-incomplete"],
     ["codex", "empty-selection"], ["claude", "empty-selection"],
     ["codex", "no-boundary"], ["claude", "no-boundary"],
     ["codex", "launch-failure"], ["claude", "launch-failure"],
@@ -210,7 +212,7 @@ try {
     const eventLog = path.join(logs, "events.jsonl");
     const diagnostic = name + ":\n" + result.stdout + "\n" + result.stderr +
       (fs.existsSync(eventLog) ? "\nRecent fixture events:\n" + jsonLines(eventLog).slice(-6).map(item => JSON.stringify(item)).join("\n") : "");
-    if (["success", "empty-selection"].includes(scenario)) assert.equal(result.status, 0, diagnostic);
+    if (["success", "empty-selection", "auto-success"].includes(scenario)) assert.equal(result.status, 0, diagnostic);
     else if (scenario !== "no-boundary") assert.notEqual(result.status, 0, diagnostic);
     assert(fs.existsSync(path.join(logs, "queued.json")), "request was not queued:\n" + diagnostic);
     const queued = readJson(path.join(logs, "queued.json"));
@@ -261,11 +263,19 @@ try {
       assert(observed("ignored-old-launch-callback"), "old builder callback affected the fresh review");
       assert(observed("same-native-session-rejected"), "the builder's native session completed the fresh review");
     }
-    if (["success", "empty-selection"].includes(scenario)) {
-      assert(observed("receipt-waiting-for-real-boundary"), "receipt alone completed the review");
-      const staged = readJson(path.join(logs, "job-after-receipt.json"));
-      assert.equal(staged.status, "REVIEWING");
-      assert.equal(staged.final_validation.status, "PENDING");
+    if (["success", "empty-selection", "auto-success"].includes(scenario)) {
+      if (scenario !== "auto-success") {
+        assert(observed("receipt-waiting-for-real-boundary"), "receipt alone completed the review");
+        const staged = readJson(path.join(logs, "job-after-receipt.json"));
+        assert.equal(staged.status, "REVIEWING");
+        assert.equal(staged.final_validation.status, "PENDING");
+      } else {
+        assert(observed("native-final-output"), "automatic review did not deliver its native final message");
+        const ready = readJson(path.join(taskRoot, "ready.json"));
+        assert.equal(ready.status, "report-ready", "native hook did not stage a verified receipt");
+        assert.equal(ready.task_id, queued.task_id);
+        assert.match(fs.readFileSync(path.join(taskRoot, "report.md"), "utf8"), /^Changes review: COMPLETED/);
+      }
       assert.equal(job.status, "DONE");
       assert.equal(job.final_validation.status, "PASS");
       assert.equal(job.progress, 100);
@@ -278,6 +288,11 @@ try {
       assert.notEqual(job.final_validation.status, "PASS");
       assert.equal(readJson(path.join(taskRoot, "result.json")).status, "failed");
       assert.equal(result.stdout.split(marker).length - 1, 0, "failed review claimed report delivery");
+      if (scenario === "auto-incomplete") {
+        assert(observed("native-final-output"), "incomplete native review was not delivered to the hook");
+        assert(!fs.existsSync(path.join(taskRoot, "report.md")), "incomplete output fabricated a review");
+        assert(!fs.existsSync(path.join(taskRoot, "ready.json")), "incomplete output fabricated a receipt");
+      }
       if (["missing-receipt", "stale-receipt"].includes(scenario)) {
         assert(observed(scenario + "-waiting-for-real-boundary"), "invalid notification or status refresh stopped the reviewer");
         assert(observed(scenario + "-old-session-ignored"), "the builder session terminated the fresh review");
