@@ -148,23 +148,43 @@ function executedTestCount(output) {
     /\bTests?:\s*(\d+)\s+passed\b/gim, // Jest
     /\bTests?\s+(\d+)\s+passed\b/gim, // Vitest
     /\b(\d+)\s+(?:tests?\s+)?passed\b/gim, // pytest, Cargo, Jest, .NET
+    /(?:^|\n)\s*ok\s+\S+\s+\d+(?:\.\d+)?s(?:\s|$)/gim, // Go: successful package, not "[no test files]"
+    /(?:^|\n)[^\n]*\bPassed!\s*-\s*Failed:\s*0,\s*Passed:\s*(\d+)\b/gim, // dotnet test
   ];
   let highest = 0;
   for (const expression of expressions) {
-    for (const match of plain.matchAll(expression)) highest = Math.max(highest, Number(match[1]));
+    for (const match of plain.matchAll(expression)) highest = Math.max(highest, match[1] === undefined ? 1 : Number(match[1]));
+  }
+  // Maven Surefire counts skipped tests in "Tests run"; they must not
+  // establish positive execution evidence, nor can failed tests do so.
+  for (const match of plain.matchAll(/(?:^|\n)\s*Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)(?:,\s*Skipped:\s*(\d+))?/gim)) {
+    if (Number(match[2]) === 0 && Number(match[3]) === 0) {
+      highest = Math.max(highest, Number(match[1]) - Number(match[4] || 0));
+    }
   }
   return highest;
+}
+
+// Treat an application's tests as belonging to its package, not every other
+// application that happens to have an "auth", "index", or "main" module.
+function packageScope(file) {
+  const parts = file.toLowerCase().split("/");
+  if (["packages", "apps", "services", "modules", "projects"].includes(parts[0]) && parts.length >= 3) {
+    return parts.slice(0, 2).join("/");
+  }
+  return parts.length > 1 && !["src", "lib", "test", "tests", "__tests__", "fixtures"].includes(parts[0])
+    ? parts[0] : "";
 }
 
 function directlyRelatedTest(file, originalPaths) {
   if (originalPaths.includes(file)) return true;
   if (!testPath(file)) return false;
   const filename = path.posix.basename(file).toLowerCase().replace(/^test[-_]/, "");
-  const originalStems = originalPaths.filter(name => !testPath(name)).flatMap(name => {
+  const originalStems = originalPaths.filter(name => !testPath(name) && packageScope(name) === packageScope(file)).flatMap(name => {
     const segments = name.toLowerCase().split("/");
     const base = segments.at(-1)?.replace(/\.[^.]+$/, "") || "";
     return [base, base === "index" ? segments.at(-2) : ""].filter(Boolean);
-  }).filter(stem => stem.length >= 3 && !["index", "main", "app", "src", "lib"].includes(stem));
+  }).filter(stem => stem.length >= 3 && !["src", "lib"].includes(stem));
   return originalStems.some(stem => filename.startsWith(`${stem}.`)
     || filename.startsWith(`${stem}-`) || filename.startsWith(`${stem}_`));
 }
@@ -202,8 +222,19 @@ function readyReport(report) {
   const lines = report.trim().split(/\r?\n/).map(line => line.trim());
   const readiness = lines.filter(line => /^PR readiness:/i.test(line)).at(-1);
   const remaining = lines.filter(line => /^Remaining P0-P2 findings:/i.test(line)).at(-1);
+  const unresolvedLine = lines.filter(line => /^Unresolved findings \(JSON\):/i.test(line)).at(-1);
+  let unresolved;
+  try { unresolved = JSON.parse(unresolvedLine?.replace(/^Unresolved findings \(JSON\):\s*/i, "") || "null"); } catch { return false; }
+  // A 'READY' summary cannot override a P0-P2 finding in the actual review.
+  const finding = /(?:\*\*)?\[?P[012]\]?(?:\*\*)?(?=\s|[:—-])/i;
+  const contradictoryFinding = lines.some(line => {
+    const inline = line.match(/^(?:#{1,6}\s*)?Findings:\s*(.*)$/i);
+    return (inline && finding.test(inline[1]))
+      || /^(?:[-*]\s*)?(?:\*\*)?\[?P[012]\]?(?:\*\*)?(?=\s|[:—-])/i.test(line);
+  });
   return /^PR readiness:\s*READY TO OPEN PR$/i.test(readiness || "")
-    && /^Remaining P0-P2 findings:\s*(?:none|none identified)\.?$/i.test(remaining || "");
+    && /^Remaining P0-P2 findings:\s*(?:none|none identified)\.?$/i.test(remaining || "")
+    && Array.isArray(unresolved) && unresolved.length === 0 && !contradictoryFinding;
 }
 
 function applyVerifiedFixesLocally(project, worktree, changes, gitBin) {
@@ -337,7 +368,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
         `Actual AFTER-FIX executed check events (data; exit code 0 means pass): ${JSON.stringify(checkSummary)}`,
         `Validation evidence gate: ${passed ? "PASS" : "BLOCKED"}. Unsuccessful command events: ${failedExecutions.length}; unsafe or unrecognized validation commands: ${suspicious.length}.`,
         "Review the full working diff in this isolated branch as the exact eventual PR scope, including added tests. Only report issues introduced by these changes, tracing directly impacted callers as context.",
-        `End with exact lines 'Remaining P0-P2 findings: none' ONLY if genuinely true, and 'PR readiness: READY TO OPEN PR' ONLY if the change is production-ready, all relevant checks have passed, and no known P0/P1/material P2 findings remain. Otherwise end with 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED'. ${publishPr ? "Publication requires these conditions." : "No PR will be opened; this is a local-only fix."}`,
+        `Include 'Unresolved findings (JSON): []' ONLY when the final review contains no unresolved P0-P2 findings; otherwise include a JSON array of unresolved findings with severity, file and summary. End with exact lines 'Remaining P0-P2 findings: none' ONLY if genuinely true, and 'PR readiness: READY TO OPEN PR' ONLY if the change is production-ready, all relevant checks have passed, and no known P0/P1/material P2 findings remain. Otherwise end with 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED'. ${publishPr ? "Publication requires these conditions." : "No PR will be opened; this is a local-only fix."}`,
       ].join("\n\n");
       finalReview = await codexSession(codex, worktree, strictReviewPrompt(request, "Isolated current changes plus verified fixes", after.paths, followup, true), "read-only", "re-review");
       process.stdout.write(`\n### Fresh post-fix review (pass ${pass})\n${finalReview.report}\n`);

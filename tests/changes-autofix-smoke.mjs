@@ -111,6 +111,12 @@ try {
   assert.equal(diagnostic.status, 0, `Expected rg no-match must not invalidate passing tests: ${diagnostic.stderr}`);
   assert.match(diagnostic.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
   fs.rmSync(capture);
+  for (const mode of ["go-success", "maven-success", "dotnet-success", "noisy-output"]) {
+    const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
+    assert.match(verified.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+    fs.rmSync(capture);
+  }
   const notReady = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "not-ready" });
   assert.notEqual(notReady.status, 0, "Unresolved high severity finding should stop PR");
   assert.match(notReady.stderr, /Auto-fix NOT READY/);
@@ -131,7 +137,7 @@ try {
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
-  for (const mode of ["help-only", "help-only-npm", "zero-tests", "all-skipped"]) {
+  for (const mode of ["help-only", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests", "maven-skipped", "dotnet-skipped"]) {
     const help = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(help.status, 0, `${mode} must not count as executed tests`);
     assert.match(help.stderr, /Required executed test\/check evidence is missing/);
@@ -174,12 +180,45 @@ try {
   assert.match(contradictory.stderr, /Auto-fix NOT READY/);
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
+  for (const mode of ["contradictory-findings", "contradictory-json", "missing-unresolved-json"]) {
+    const contradiction = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(contradiction.status, 0, `${mode} must block a contradictory READY report`);
+    assert.match(contradiction.stderr, /Auto-fix NOT READY/);
+    assert(!fs.existsSync(capture), `${mode} created a PR despite unresolved findings`);
+    cleanIsolatedWorktrees();
+  }
 
   const escaped = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "out-of-scope" });
   assert.notEqual(escaped.status, 0, "An unrelated production file must block auto PR");
   assert.match(escaped.stderr, /outside the approved current-diff\/test scope/);
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
+
+  // Entry-point modules are valid test targets within the same package.
+  for (const entry of ["index", "main", "app"]) {
+    const entrySource = path.join(project, "src", `${entry}.ts`);
+    fs.writeFileSync(entrySource, `export const ${entry}Function = true;\n`);
+    const related = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: `related-${entry}-test` });
+    assert.equal(related.status, 0, `A test for a changed ${entry} module should be allowed: ${related.stderr}`);
+    assert.match(related.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+    assert(!fs.existsSync(path.join(project, "tests", `${entry}.test.ts`)), "Isolated tests must not alter the original project");
+    fs.rmSync(entrySource);
+    fs.rmSync(capture);
+    cleanIsolatedWorktrees();
+  }
+
+  // Identical module names in independent packages must NOT expand the fix scope.
+  const frontendDirectory = path.join(project, "frontend", "src");
+  fs.mkdirSync(frontendDirectory, { recursive: true });
+  const frontendAuth = path.join(frontendDirectory, "auth.ts");
+  fs.writeFileSync(frontendAuth, "export const authFunction = true;\n");
+  const crossPackage = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "cross-package-test" });
+  assert.notEqual(crossPackage.status, 0, "Backend tests may not be introduced for a frontend-only auth change");
+  assert.match(crossPackage.stderr, /outside the approved current-diff\/test scope/);
+  assert(!fs.existsSync(capture), "A cross-package test bypassed the scope check");
+  fs.rmSync(frontendAuth);
+  cleanIsolatedWorktrees();
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Scope tests must restore the original worktree");
 
   const unrelatedTest = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "out-of-scope-test" });
   assert.notEqual(unrelatedTest.status, 0, "A test unrelated to changed modules must not enter the automatic PR");

@@ -129,7 +129,7 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
     if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") lastMessage = event.item.text;
     if (event.type === "item.completed" && event.item?.type === "command_execution") {
       commands.push({ command: event.item.command || "", exitCode: event.item.exit_code,
-        output: String(event.item.aggregated_output || event.item.output || "").slice(0, 256 * 1024) });
+        output: String(event.item.aggregated_output || event.item.output || "").slice(-256 * 1024) });
     }
     if (event.type === "turn.completed") {
       completed = true;
@@ -189,7 +189,7 @@ function strictReviewPrompt(request, selection, changed, extra = "", final = fal
     "For each verified finding, use P0 (critical), P1 (high), P2 (medium) or P3 (low), precise changed file/line, trigger, impact, reproduction/evidence and minimal fix. Distinguish verified bugs from hypotheses and never claim every bug has been found.",
     "Score applicable categories 0–5: security 25%, architecture 20%, correctness 20%, testing 15%, performance 10%, maintainability 10%. Do not let a high score override a blocker.",
     "Do not edit files, create review records, run project code/tests, change Git state, approve code or open a PR. Report checks as NOT RUN unless actual prior evidence was supplied.",
-    `Return one report with: Scope, Findings, Security checks, Coverage, Checks, Gaps, category scores and overall score, Remaining P0-P2 findings, and an exact final line ${final ? "'PR readiness: READY TO OPEN PR', 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED' according to the evidence" : "'PR readiness: NOT ASSESSED'"}. Do not invent successful checks or findings.`,
+    `Return one report with: Scope, Findings, Security checks, Coverage, Checks, Gaps, category scores and overall score, Remaining P0-P2 findings, and an exact final line ${final ? "'PR readiness: READY TO OPEN PR', 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED' according to the evidence" : "'PR readiness: NOT ASSESSED'"}. ${final ? "Before the final readiness line, include 'Unresolved findings (JSON): []' if no P0-P2 findings remain, otherwise a valid JSON array of {severity,file,summary} objects. Never contradict this array in Findings or Remaining findings." : ""} Do not invent successful checks or findings.`,
     extra,
   ].filter(Boolean).join("\n\n");
 }

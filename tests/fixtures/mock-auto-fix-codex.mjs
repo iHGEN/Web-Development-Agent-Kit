@@ -28,6 +28,17 @@ if (phase === "fix") {
     fs.mkdirSync(testDirectory, { recursive: true });
     fs.writeFileSync(path.join(testDirectory, "legacy-auth.test.mjs"), "export const unrelatedTest = true;\n");
   }
+  const relatedEntry = /^related-(index|main|app)-test$/.exec(process.env.WEB_KIT_REVIEW_TEST_MODE || "");
+  if (relatedEntry) {
+    const testDirectory = path.join(project, "tests");
+    fs.mkdirSync(testDirectory, { recursive: true });
+    fs.writeFileSync(path.join(testDirectory, `${relatedEntry[1]}.test.ts`), "export const relatedEntryTest = true;\n");
+  }
+  if (process.env.WEB_KIT_REVIEW_TEST_MODE === "cross-package-test") {
+    const testDirectory = path.join(project, "backend", "tests");
+    fs.mkdirSync(testDirectory, { recursive: true });
+    fs.writeFileSync(path.join(testDirectory, "auth.test.ts"), "export const unrelatedAuthTest = true;\n");
+  }
   if (process.env.WEB_KIT_REVIEW_TEST_MODE === "provider-key-leak") {
     fs.appendFileSync(target, `// ${process.env.OPENAI_API_KEY}\n`);
   }
@@ -39,11 +50,24 @@ if (phase === "fix") {
     type: "command_execution", command, exit_code, aggregated_output: output,
   } });
   if (mode !== "no-tests") {
-    const command = mode === "fake-checks" ? "echo npm test"
+    const command = mode?.startsWith("go-") ? "go test ./..."
+      : mode?.startsWith("maven-") ? "mvn test"
+        : mode?.startsWith("dotnet-") ? "dotnet test"
+          : mode === "fake-checks" ? "echo npm test"
       : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
         : mode === "help-only" ? "node --test --help"
           : mode === "help-only-npm" ? "npm test -- --help" : "node --test";
-    emitCheck(command, 0, ["help-only", "help-only-npm"].includes(mode) ? "Usage: --help\n" : mode === "zero-tests" ? "TAP version 13\n# tests 0\n# pass 0\n" : mode === "all-skipped" ? "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n" : tap);
+    const output = mode === "go-success" ? "ok  example.org/app 0.004s\n"
+      : mode === "go-no-tests" ? "?  example.org/app [no test files]\n"
+        : mode === "maven-success" ? "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0\n"
+          : mode === "maven-skipped" ? "Tests run: 8, Failures: 0, Errors: 0, Skipped: 8\n"
+            : mode === "dotnet-success" ? "Passed! - Failed: 0, Passed: 8, Skipped: 0, Total: 8\n"
+              : mode === "dotnet-skipped" ? "Passed! - Failed: 0, Passed: 0, Skipped: 8, Total: 8\n"
+                : mode === "noisy-output" ? `${"log output with no result\n".repeat(14000)}${tap}`
+                  : ["help-only", "help-only-npm"].includes(mode) ? "Usage: --help\n"
+                    : mode === "zero-tests" ? "TAP version 13\n# tests 0\n# pass 0\n"
+                      : mode === "all-skipped" ? "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n" : tap;
+    emitCheck(command, 0, output);
   }
   if (mode === "masked-plus-real") emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
@@ -57,7 +81,9 @@ if (phase === "fix") {
 } else if (phase === "re-review") {
   const fixed = fs.readFileSync(path.join(project, "src", "feature.js"), "utf8").includes("verified patch");
   const ready = fixed && process.env.WEB_KIT_REVIEW_TEST_MODE !== "not-ready";
-  const report = `# Fresh independent re-review\nFindings: ${ready ? "none" : "P1 unresolved"}\nSecurity checks: covered changed code.\nRemaining P0-P2 findings: ${ready ? "none" : "P1 unresolved"}\nPR readiness: ${ready ? "READY TO OPEN PR" : "NOT READY"}`;
+  const jsonLine = process.env.WEB_KIT_REVIEW_TEST_MODE === "missing-unresolved-json" ? ""
+    : `Unresolved findings (JSON): ${process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory-json" || !ready ? '[{"severity":"P1","file":"src/feature.js","summary":"data loss"}]' : "[]"}\n`;
+  const report = `# Fresh independent re-review\nFindings: ${process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory-findings" ? "P1 data loss" : ready ? "none" : "P1 unresolved"}\nSecurity checks: covered changed code.\n${jsonLine}Remaining P0-P2 findings: ${ready ? "none" : "P1 unresolved"}\nPR readiness: ${ready ? "READY TO OPEN PR" : "NOT READY"}`;
   emit({ type: "item.completed", item: { type: "agent_message", text: process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory"
     ? report + "\nPR readiness: NOT READY" : report } });
 } else {
