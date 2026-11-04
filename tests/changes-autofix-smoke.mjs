@@ -180,15 +180,36 @@ try {
   for (const [mode, scripts] of [
     ["masked-package-script", { test: "node --test || true" }],
     ["masked-nested-package-script", { test: "npm run unit", unit: "node --test || true" }],
+    ["masked-chained-package-script", {
+      test: "npm run unit && npm run integration",
+      unit: "node --test --test-reporter=tap test/unit.test.js",
+      integration: "node --test --test-reporter=tap test/integration.test.js > /dev/null 2>&1 || true",
+    }],
   ]) {
     fs.writeFileSync(manifest, JSON.stringify({ name: "fixture", private: true, scripts }));
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
     const hiddenScript = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(hiddenScript.status, 0, `${mode} must reject masking in the npm package script`);
     assert.match(hiddenScript.stderr, /Auto-fix NOT READY/);
     assert(!fs.existsSync(capture), `${mode} created a PR from a masked script`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch despite masked tests`);
     fs.writeFileSync(manifest, originalManifest);
     cleanIsolatedWorktrees();
   }
+  // Fail-fast chains with *both* test scripts verifiable must still work.
+  fs.writeFileSync(manifest, JSON.stringify({ name: "fixture", private: true, scripts: {
+    test: "npm run unit && npm run integration",
+    unit: "node --test --test-reporter=tap test/unit.test.js",
+    integration: "node --test --test-reporter=tap test/integration.test.js",
+  } }));
+  const safeChain = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "safe-chained-package-script" });
+  assert.equal(safeChain.status, 0, `A fully checked fail-fast npm script chain should pass: ${safeChain.stderr}`);
+  assert.match(safeChain.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
+  fs.writeFileSync(manifest, originalManifest);
+  cleanIsolatedWorktrees();
   assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Script masking tests must restore the original project");
 
   const failedAudit = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "failed-audit" });
@@ -208,7 +229,7 @@ try {
   assert.match(contradictory.stderr, /Auto-fix NOT READY/);
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
-  for (const mode of ["contradictory-findings", "contradictory-numbered", "contradictory-table", "contradictory-json", "missing-unresolved-json"]) {
+  for (const mode of ["contradictory-findings", "contradictory-numbered", "contradictory-table", "contradictory-heading", "contradictory-json", "missing-unresolved-json"]) {
     const contradiction = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(contradiction.status, 0, `${mode} must block a contradictory READY report`);
     assert.match(contradiction.stderr, /Auto-fix NOT READY/);
@@ -343,6 +364,47 @@ try {
   assert.equal(fs.readFileSync(path.join(project, "src", "feature.js"), "utf8"), worktreeBefore);
   assert.equal(git(["show", ":src/feature.js"]), stagedBefore);
   cleanIsolatedWorktrees();
+  const localTarget = path.join(project, "src", "feature.js");
+  const originalLocalBytes = fs.readFileSync(localTarget);
+  const originalLocalMode = fs.statSync(localTarget).mode & 0o777;
+  if (process.platform !== "win32") {
+    const modeOnly = run(process.execPath, noPrArgs, project, { WEB_KIT_REVIEW_TEST_MODE: "local-mode-only" });
+    assert.equal(modeOnly.status, 0, `Mode-only verified fixes must apply locally: ${modeOnly.stderr}`);
+    assert.match(modeOnly.stdout, /COMPLETED LOCALLY/);
+    assert(fs.readFileSync(localTarget).equals(originalLocalBytes), "Mode-only fixes must not alter file contents");
+    assert.equal(fs.statSync(localTarget).mode & 0o777, 0o755, "The verified executable-bit change was lost");
+    assert.equal(git(["show", ":src/feature.js"]), stagedBefore, "Mode-only changes must not touch the staged index");
+    fs.chmodSync(localTarget, originalLocalMode);
+    cleanIsolatedWorktrees();
+  }
+  const partialWrite = run(process.execPath, noPrArgs, project, {
+    WEB_KIT_REVIEW_TEST_MODE: "local-write-error", WEB_KIT_REVIEW_TEST_LOCAL_WRITE_FAILURE: "1",
+  });
+  assert.notEqual(partialWrite.status, 0, "An injected partial local write must fail closed");
+  assert.match(partialWrite.stderr, /Injected partial replacement write failure/);
+  assert(fs.readFileSync(localTarget).equals(originalLocalBytes), "Partial write must not truncate the original user file");
+  assert.equal(fs.statSync(localTarget).mode & 0o777, originalLocalMode);
+  assert.equal(git(["show", ":src/feature.js"]), stagedBefore);
+  assert(!fs.readdirSync(path.dirname(localTarget)).some(name => name.startsWith(".web-kit-autofix-")),
+    "Failed preparation left temporary user-directory files behind");
+  cleanIsolatedWorktrees();
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Failed local writes must preserve staged/unstaged state");
+  const secondTarget = path.join(project, "src", "new.js");
+  const originalSecondBytes = fs.readFileSync(secondTarget);
+  const partialApply = run(process.execPath, noPrArgs, project, {
+    WEB_KIT_REVIEW_TEST_MODE: "local-apply-rollback", WEB_KIT_REVIEW_TEST_LOCAL_APPLY_FAILURE: "1",
+  });
+  assert.notEqual(partialApply.status, 0, "An error after a replacement must roll back every applied file");
+  assert.match(partialApply.stderr, /Injected failure after a local replacement/);
+  assert(fs.readFileSync(localTarget).equals(originalLocalBytes), "Rollback must restore the first replaced user file");
+  assert(fs.readFileSync(secondTarget).equals(originalSecondBytes), "Rollback must preserve later user files");
+  assert.equal(fs.statSync(localTarget).mode & 0o777, originalLocalMode);
+  assert.equal(git(["show", ":src/feature.js"]), stagedBefore);
+  assert(!fs.readdirSync(path.dirname(localTarget)).some(name => name.startsWith(".web-kit-autofix-")),
+    "Rollback left temporary backups in the user's working tree");
+  cleanIsolatedWorktrees();
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Rollback must preserve the original Git status");
+
   const localOnly = run(process.execPath, noPrArgs, project, { WEB_KIT_REVIEW_GH_BIN: path.join(project, "missing-gh") });
   assert.equal(localOnly.status, 0, `Local-only fix must not require GitHub CLI: ${localOnly.stderr}`);
   assert.match(localOnly.stdout, /COMPLETED LOCALLY/);

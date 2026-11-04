@@ -144,7 +144,8 @@ const benignSearchMiss = event => event.exitCode === 1
   && safeCommand(event.command) !== null;
 
 // An npm script can hide a failing child command even when the outer command
-// is just `npm test`. Inspect common failure summaries AND direct script masks.
+// is just `npm test`. Inspect common failure summaries AND every script in a
+// shell chain. If shell control flow cannot be checked safely, fail closed.
 function failedTestSummary(output) {
   const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "");
   const patterns = [
@@ -168,20 +169,34 @@ function maskedPackageTestScript(project, command) {
   const match = shellCommand(command).match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test[\w:-]*)(?:\s|$)/i);
   if (!match) return false;
   const manifest = path.join(project, "package.json");
-  if (!fs.existsSync(manifest)) return false;
+  if (!fs.existsSync(manifest)) return true;
   let scripts;
   try { scripts = JSON.parse(fs.readFileSync(manifest, "utf8")).scripts; } catch { return true; }
-  const seen = new Set();
-  const masked = name => {
-    if (seen.has(name)) return false;
-    seen.add(name);
+  const visiting = new Set();
+  const unsafe = name => {
+    if (visiting.has(name)) return true; // Recursive scripts cannot prove a bounded test run.
     const script = scripts?.[name];
-    if (typeof script !== "string") return false;
-    if (/\|\|\s*(?:true\b|:|exit\s+0\b)|(?:;|&&)\s*exit\s+0\b/i.test(script)) return true;
-    const next = script.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)(?:\s|$)/i);
-    return next ? masked(next[1]) : false;
+    if (typeof script !== "string" || !script.trim()) return true;
+    // Only a simple fail-fast && sequence is supported. Pipes, fallbacks,
+    // redirects, substitutions, background jobs and arbitrary shell flow may
+    // conceal failures or their output; none can establish green-suite proof.
+    if (/[;|<>`$\r\n()]/.test(script.replaceAll("&&", ""))
+      || /&/.test(script.replaceAll("&&", ""))) return true;
+    const commands = script.split(/\s*&&\s*/);
+    if (commands.some(part => !part.trim())) return true;
+    visiting.add(name);
+    try {
+      return commands.some(part => {
+        const simple = part.trim();
+        const child = simple.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)$/i);
+        if (child) return unsafe(child[1]);
+        // An opaque wrapper or non-test command could swallow a failure and
+        // manufacture pass-looking output. Require recognizable direct checks.
+        return !check(simple);
+      });
+    } finally { visiting.delete(name); }
   };
-  return masked(match[1]);
+  return unsafe(match[1]);
 }
 
 // A successful process exit is not evidence that tests ran (e.g. --help).
@@ -291,7 +306,7 @@ function readyReport(report) {
   const finding = /^(?:\*\*)?\[?P[012]\]?(?:\*\*)?(?=\s|[:|—-])/i;
   const contradictoryFinding = lines.some(line => {
     const inline = line.match(/^(?:#{1,6}\s*)?Findings:\s*(.*)$/i);
-    const candidate = (inline ? inline[1] : line).replace(/^(?:[-*]\s+|\d+[.)]\s+|\|\s*)/, "");
+    const candidate = (inline ? inline[1] : line).replace(/^(?:(?:#{1,6}\s+|[-*]\s+|\d+[.)]\s+|\|\s*))+/g, "");
     return finding.test(candidate);
   });
   return /^PR readiness:\s*READY TO OPEN PR$/i.test(readiness || "")
@@ -324,7 +339,9 @@ function applyVerifiedFixesLocally(project, worktree, changes, gitBin) {
     if (sourceStat.size > 32 * 1024 * 1024) throw new Error(`Fixed file too large to safely apply: ${name}`);
     const content = fs.readFileSync(source);
     const original = targetStat ? fs.readFileSync(target) : null;
-    if (original && original.equals(content)) continue;
+    const mode = sourceStat.mode & 0o777;
+    const originalMode = targetStat ? targetStat.mode & 0o777 : null;
+    if (original && original.equals(content) && originalMode === mode) continue;
     let cursor = project;
     for (const part of path.relative(project, path.dirname(target)).split(path.sep).filter(Boolean)) {
       cursor = path.join(cursor, part);
@@ -332,28 +349,79 @@ function applyVerifiedFixesLocally(project, worktree, changes, gitBin) {
         throw new Error(`Unsafe local fix destination directory: ${name}`);
       }
     }
-    plan.push({ name, target, content, original, mode: sourceStat.mode & 0o777 });
+    plan.push({ name, target, content, original, mode, originalMode });
   }
   const changed = readChangeSet(project, gitBin, { snapshot: true });
   if (changed.fingerprint !== changes.fingerprint || JSON.stringify(changed.paths) !== JSON.stringify(changes.paths)) {
     throw new Error("Original changes moved before local fixes; refusing to overwrite them.");
   }
+  // Prepare replacements and recovery copies before touching any user file.
+  // A partial write (for example ENOSPC) can only damage a temporary file.
+  const prepared = [];
   const applied = [];
+  let succeeded = false;
+  const writePrepared = (filename, bytes, mode, injectFailure = false) => {
+    const fd = fs.openSync(filename, "wx", 0o600);
+    try {
+      if (injectFailure && process.env.WEB_KIT_REVIEW_TEST_LOCAL_WRITE_FAILURE === "1") {
+        fs.writeSync(fd, bytes.subarray(0, Math.max(1, Math.floor(bytes.length / 2))));
+        throw new Error("Injected partial replacement write failure");
+      }
+      fs.writeFileSync(fd, bytes);
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    fs.chmodSync(filename, mode);
+  };
   try {
     for (const item of plan) {
       fs.mkdirSync(path.dirname(item.target), { recursive: true });
-      fs.writeFileSync(item.target, item.content, { flag: item.original === null ? "wx" : "w" });
-      applied.push(item);
-      if (item.original === null) fs.chmodSync(item.target, item.mode);
+      const token = crypto.randomUUID();
+      const preparedItem = { item, replacement: path.join(path.dirname(item.target), `.web-kit-autofix-${token}.tmp`),
+        backup: item.original === null ? null : path.join(path.dirname(item.target), `.web-kit-autofix-${token}.bak`), restored: false };
+      prepared.push(preparedItem);
+      writePrepared(preparedItem.replacement, item.content, item.mode, true);
+      if (preparedItem.backup) writePrepared(preparedItem.backup, item.original, item.originalMode);
     }
+    for (const entry of prepared) {
+      if (applied.length > 0 && process.env.WEB_KIT_REVIEW_TEST_LOCAL_APPLY_FAILURE === "1") {
+        throw new Error("Injected failure after a local replacement");
+      }
+      const { item } = entry;
+      const current = fs.existsSync(item.target) ? fs.lstatSync(item.target) : null;
+      if ((item.original === null && current) || (item.original !== null && (!current || !current.isFile()
+        || (current.mode & 0o777) !== item.originalMode
+        || !fs.readFileSync(item.target).equals(item.original)))) {
+        throw new Error(`Original file changed while preparing local fix: ${item.name}`);
+      }
+      if (item.original === null) fs.linkSync(entry.replacement, item.target); // Must not replace a racing new user file.
+      else fs.renameSync(entry.replacement, item.target); // Atomic same-directory replacement.
+      applied.push(entry);
+      const written = fs.lstatSync(item.target);
+      if (!written.isFile() || (written.mode & 0o777) !== item.mode
+        || !fs.readFileSync(item.target).equals(item.content)) {
+        throw new Error(`Local fix did not match verified bytes and mode: ${item.name}`);
+      }
+    }
+    succeeded = true;
   } catch (error) {
-    for (const item of applied.reverse()) {
+    const failures = [];
+    for (const entry of applied.reverse()) {
       try {
-        if (item.original === null) fs.unlinkSync(item.target);
-        else fs.writeFileSync(item.target, item.original);
-      } catch {}
+        if (entry.item.original === null) fs.unlinkSync(entry.item.target);
+        else fs.renameSync(entry.backup, entry.item.target);
+        entry.restored = true;
+      } catch (rollbackError) { failures.push(`${entry.item.name}: ${rollbackError.message}`); }
     }
-    throw new Error(`Unable to apply all verified local fixes: ${error.message}`);
+    throw new Error(`Unable to apply all verified local fixes: ${error.message}${failures.length
+      ? `. Rollback incomplete; recovery copies retained: ${failures.join("; ")}` : ". Original files restored."}`);
+  } finally {
+    for (const entry of prepared) {
+      try { if (fs.existsSync(entry.replacement)) fs.unlinkSync(entry.replacement); } catch {}
+      // Keep a recovery backup if restoring the corresponding user file failed.
+      if (entry.backup && (succeeded || entry.restored || !applied.includes(entry))) {
+        try { if (fs.existsSync(entry.backup)) fs.unlinkSync(entry.backup); } catch {}
+      }
+    }
   }
   return plan.map(item => item.name);
 }

@@ -19,7 +19,11 @@ const emit = event => console.log(JSON.stringify(event));
 emit({ type: "thread.started", thread_id: randomUUID() });
 if (phase === "fix") {
   const target = path.join(project, "src", "feature.js");
-  fs.appendFileSync(target, "// verified patch from isolated fixing session\n");
+  if (process.env.WEB_KIT_REVIEW_TEST_MODE === "local-mode-only") fs.chmodSync(target, 0o755);
+  else fs.appendFileSync(target, "// verified patch from isolated fixing session\n");
+  if (process.env.WEB_KIT_REVIEW_TEST_MODE === "local-apply-rollback") {
+    fs.appendFileSync(path.join(project, "src", "new.js"), "// second local fix\n");
+  }
   if (process.env.WEB_KIT_REVIEW_TEST_MODE === "out-of-scope") {
     fs.writeFileSync(path.join(project, "src", "unrelated-production.js"), "export const unrelated = true;\n");
   }
@@ -65,7 +69,8 @@ if (phase === "fix") {
       : mode?.startsWith("dotnet-") ? "dotnet test"
         : mode === "fake-checks" ? "echo npm test"
           : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
-            : ["masked-tap-in-script", "masked-jest", "masked-package-script", "masked-nested-package-script"].includes(mode) ? "npm test"
+            : ["masked-tap-in-script", "masked-jest", "masked-package-script", "masked-nested-package-script",
+              "masked-chained-package-script", "safe-chained-package-script"].includes(mode) ? "npm test"
               : mode === "masked-cargo" ? "cargo test"
             : mode === "help-only" ? "node --test --help"
               : mode === "help-only-short-version" ? "node --test -V"
@@ -114,7 +119,10 @@ if (phase === "fix") {
   }
   emit({ type: "item.completed", item: { type: "agent_message", text: "Verification complete (mock event stream)." } });
 } else if (phase === "re-review") {
-  const fixed = fs.readFileSync(path.join(project, "src", "feature.js"), "utf8").includes("verified patch");
+  const feature = path.join(project, "src", "feature.js");
+  const fixed = process.env.WEB_KIT_REVIEW_TEST_MODE === "local-mode-only"
+    ? (fs.statSync(feature).mode & 0o111) !== 0
+    : fs.readFileSync(feature, "utf8").includes("verified patch");
   const ready = fixed && process.env.WEB_KIT_REVIEW_TEST_MODE !== "not-ready";
   const jsonLine = process.env.WEB_KIT_REVIEW_TEST_MODE === "missing-unresolved-json" ? ""
     : `Unresolved findings (JSON): ${process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory-json" || !ready ? '[{"severity":"P1","file":"src/feature.js","summary":"data loss"}]' : "[]"}\n`;
@@ -122,6 +130,7 @@ if (phase === "fix") {
   const findings = mode === "contradictory-findings" ? "P1 data loss"
     : mode === "contradictory-numbered" ? "\n1. [P1] Fixing file may delete user data"
       : mode === "contradictory-table" ? "\n| P1 | Fixing file may delete user data |"
+        : mode === "contradictory-heading" ? "\n### [P1] A user file may be overwritten"
         : ready ? "none" : "P1 unresolved";
   const report = `# Fresh independent re-review\nFindings: ${findings}\nSecurity checks: covered changed code.\n${jsonLine}Remaining P0-P2 findings: ${ready ? "none" : "P1 unresolved"}\nPR readiness: ${ready ? "READY TO OPEN PR" : "NOT READY"}`;
   emit({ type: "item.completed", item: { type: "agent_message", text: process.env.WEB_KIT_REVIEW_TEST_MODE === "contradictory"
