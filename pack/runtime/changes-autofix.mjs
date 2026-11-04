@@ -124,8 +124,10 @@ function shellCommand(command) {
 // pipelines cannot prove that a test genuinely passed, even with exit code 0.
 function safeCommand(text) {
   const command = shellCommand(text);
-  const noTests = /(?:^|\s)(?:-h|-V|--(?:help|version|list-?tests?(?:only|files)?|collect-only|dry-?run|show-?config|test-list))(?:=\S+|\s|$)/i;
-  return command && !/[;&|<>`$\r\n]/.test(command) && !noTests.test(command) ? command : null;
+  const noTests = /(?:^|\s)(?:-h|--(?:help|version|list-?tests?(?:only|files)?|collect-only|dry-?run|show-?config|test-list))(?:=\S+|\s|$)/i;
+  // -V usually means version, while lowercase -v enables Go's verbose test output.
+  const versionOnly = /(?:^|\s)-V(?:=\S+|\s|$)/;
+  return command && !/[;&|<>`$\r\n]/.test(command) && !noTests.test(command) && !versionOnly.test(command) ? command : null;
 }
 const safeArgs = String.raw`(?:\s+[-\w./:@+=]+)*`;
 const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+(?:--test|(?:\S*\/)?tests\/[-\w./]+)|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:\.\/)?gradlew?\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|make\s+test|ctest)${safeArgs}$`, "i");
@@ -140,20 +142,37 @@ const benignSearchMiss = event => event.exitCode === 1
   && safeCommand(event.command) !== null;
 
 // A successful process exit is not evidence that tests ran (e.g. --help).
-// Require an actual non-zero test count in the command's captured output.
-function executedTestCount(output) {
+// Go prints "ok" even for -run patterns matching no tests, and can replay
+// cached results. Require uncached, test-level passes from -json or -v.
+function executedTestCount(output, command) {
   const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "");
+  const executedCommand = shellCommand(command);
+  if (/^go\s+test(?:\s|$)/i.test(executedCommand)) {
+    if (!/(?:^|\s)-count=1(?:\s|$)/i.test(executedCommand)) return 0;
+    let passed = 0;
+    if (/(?:^|\s)-json(?:\s|$)/i.test(executedCommand)) {
+      for (const line of plain.split(/\r?\n/)) {
+        try {
+          const event = JSON.parse(line);
+          if (event?.Action === "pass" && typeof event.Test === "string" && event.Test.length > 0) passed += 1;
+        } catch { /* Non-JSON or truncated output is not test evidence. */ }
+      }
+    }
+    if (/(?:^|\s)-v(?:\s|$)/i.test(executedCommand)) {
+      passed += [...plain.matchAll(/^\s*--- PASS:\s+\S+/gm)].length;
+    }
+    return passed;
+  }
   const expressions = [
     /(?:^|\n)\s*#\s*pass\s+(\d+)\b/gim, // node --test TAP; skipped tests aren't counted
     /\bTests?:\s*(\d+)\s+passed\b/gim, // Jest
     /\bTests?\s+(\d+)\s+passed\b/gim, // Vitest
     /\b(\d+)\s+(?:tests?\s+)?passed\b/gim, // pytest, Cargo, Jest, .NET
-    /(?:^|\n)\s*ok\s+\S+\s+\d+(?:\.\d+)?s(?:\s|$)/gim, // Go: successful package, not "[no test files]"
     /(?:^|\n)[^\n]*\bPassed!\s*-\s*Failed:\s*0,\s*Passed:\s*(\d+)\b/gim, // dotnet test
   ];
   let highest = 0;
   for (const expression of expressions) {
-    for (const match of plain.matchAll(expression)) highest = Math.max(highest, match[1] === undefined ? 1 : Number(match[1]));
+    for (const match of plain.matchAll(expression)) highest = Math.max(highest, Number(match[1]));
   }
   // Maven Surefire counts skipped tests in "Tests run"; they must not
   // establish positive execution evidence, nor can failed tests do so.
@@ -347,7 +366,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
         "You are an independent verification engineer in a NEW Codex session. Do not edit source, tests, configuration, or Git state.",
         `Verify the current changes for: ${request}`,
         `Changed files: ${JSON.stringify(after.paths)}`,
-        "Execute real relevant project tests (and lint/build/security checks where applicable) now, after all fixer edits. Do not mask failures with shell operators, pipes, fallbacks, or wrappers like '|| true'.",
+        "Execute real relevant project tests (and lint/build/security checks where applicable) now, after all fixer edits. For Go use 'go test -count=1 -json ./...' or '-count=1 -v' to prove actual, uncached test-level passes; a package-level 'ok' is not enough. Do not mask failures with shell operators, pipes, fallbacks, or wrappers like '|| true'.",
         "Report only commands actually executed and their outcomes. Do not commit, push, or open a PR.",
       ].join("\n\n");
       const verifier = await codexSession(codex, worktree, verificationPrompt, "workspace-write", "verify");
@@ -360,7 +379,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
       const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command));
       realChecks = verifier.commands.filter(item => check(item.command));
       const checkSummary = verifier.commands.map(item => ({ command: item.command, exit_code: item.exitCode }));
-      passed = realChecks.some(item => testCheck(item.command) && item.exitCode === 0 && executedTestCount(item.output) > 0)
+      passed = realChecks.some(item => testCheck(item.command) && item.exitCode === 0 && executedTestCount(item.output, item.command) > 0)
         && failedExecutions.length === 0 && suspicious.length === 0;
       process.stdout.write(`\n### Independent final-tree verification (pass ${pass})\n${verifier.report}\n`);
       const followup = [

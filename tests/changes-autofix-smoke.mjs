@@ -111,7 +111,7 @@ try {
   assert.equal(diagnostic.status, 0, `Expected rg no-match must not invalidate passing tests: ${diagnostic.stderr}`);
   assert.match(diagnostic.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
   fs.rmSync(capture);
-  for (const mode of ["go-success", "maven-success", "dotnet-success", "noisy-output"]) {
+  for (const mode of ["go-success", "go-verbose-success", "maven-success", "dotnet-success", "noisy-output"]) {
     const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
     assert.match(verified.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
@@ -137,7 +137,11 @@ try {
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
-  for (const mode of ["help-only", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests", "maven-skipped", "dotnet-skipped"]) {
+  for (const mode of [
+    "help-only", "help-only-short-version", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests",
+    "go-package-only", "go-nonmatching-run", "go-nonmatching-json", "go-skipped", "go-cached",
+    "maven-skipped", "dotnet-skipped",
+  ]) {
     const help = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(help.status, 0, `${mode} must not count as executed tests`);
     assert.match(help.stderr, /Required executed test\/check evidence is missing/);

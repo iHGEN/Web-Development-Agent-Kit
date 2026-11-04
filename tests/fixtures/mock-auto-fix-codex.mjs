@@ -50,23 +50,49 @@ if (phase === "fix") {
     type: "command_execution", command, exit_code, aggregated_output: output,
   } });
   if (mode !== "no-tests") {
-    const command = mode?.startsWith("go-") ? "go test ./..."
-      : mode?.startsWith("maven-") ? "mvn test"
-        : mode?.startsWith("dotnet-") ? "dotnet test"
-          : mode === "fake-checks" ? "echo npm test"
-      : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
-        : mode === "help-only" ? "node --test --help"
-          : mode === "help-only-npm" ? "npm test -- --help" : "node --test";
-    const output = mode === "go-success" ? "ok  example.org/app 0.004s\n"
-      : mode === "go-no-tests" ? "?  example.org/app [no test files]\n"
-        : mode === "maven-success" ? "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0\n"
-          : mode === "maven-skipped" ? "Tests run: 8, Failures: 0, Errors: 0, Skipped: 8\n"
-            : mode === "dotnet-success" ? "Passed! - Failed: 0, Passed: 8, Skipped: 0, Total: 8\n"
-              : mode === "dotnet-skipped" ? "Passed! - Failed: 0, Passed: 0, Skipped: 8, Total: 8\n"
-                : mode === "noisy-output" ? `${"log output with no result\n".repeat(14000)}${tap}`
-                  : ["help-only", "help-only-npm"].includes(mode) ? "Usage: --help\n"
-                    : mode === "zero-tests" ? "TAP version 13\n# tests 0\n# pass 0\n"
-                      : mode === "all-skipped" ? "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n" : tap;
+    const goCommands = {
+      "go-success": "go test -count=1 -json ./...",
+      "go-verbose-success": "go test -count=1 -v ./...",
+      "go-no-tests": "go test -count=1 -json ./...",
+      "go-package-only": "go test -count=1 ./...",
+      "go-nonmatching-run": "go test -count=1 -run NoSuchTest ./...",
+      "go-nonmatching-json": "go test -count=1 -json -run NoSuchTest ./...",
+      "go-skipped": "go test -count=1 -json ./...",
+      "go-cached": "go test -json ./...",
+    };
+    const command = goCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
+      : mode?.startsWith("dotnet-") ? "dotnet test"
+        : mode === "fake-checks" ? "echo npm test"
+          : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
+            : mode === "help-only" ? "node --test --help"
+              : mode === "help-only-short-version" ? "node --test -V"
+              : mode === "help-only-npm" ? "npm test -- --help" : "node --test");
+    const goPassed = JSON.stringify({ Action: "pass", Package: "example.org/app", Test: "TestFeature" });
+    const goSkipped = JSON.stringify({ Action: "skip", Package: "example.org/app", Test: "TestFeature" });
+    const goPackagePassed = JSON.stringify({ Action: "pass", Package: "example.org/app" });
+    const goOutputs = {
+      "go-success": `${goPassed}\n${goPackagePassed}\n`,
+      "go-verbose-success": "=== RUN   TestFeature\n--- PASS: TestFeature (0.00s)\nPASS\nok example.org/app 0.004s\n",
+      "go-no-tests": "?  example.org/app [no test files]\n",
+      "go-package-only": "ok example.org/app 0.004s\n",
+      "go-nonmatching-run": "ok example.org/app 0.004s [no tests to run]\n",
+      "go-nonmatching-json": `${JSON.stringify({ Action: "output", Package: "example.org/app", Output: "testing: warning: no tests to run\n" })}\n${goPackagePassed}\n`,
+      "go-skipped": `${goSkipped}\n${goPackagePassed}\n`,
+      "go-cached": `${goPassed}\n${goPackagePassed}\n`,
+    };
+    const otherOutputs = {
+      "maven-success": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0\n",
+      "maven-skipped": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 8\n",
+      "dotnet-success": "Passed! - Failed: 0, Passed: 8, Skipped: 0, Total: 8\n",
+      "dotnet-skipped": "Passed! - Failed: 0, Passed: 0, Skipped: 8, Total: 8\n",
+      "noisy-output": `${"log output with no result\n".repeat(14000)}${tap}`,
+      "help-only": "Usage: --help\n",
+      "help-only-short-version": "Usage: --version\n",
+      "help-only-npm": "Usage: --help\n",
+      "zero-tests": "TAP version 13\n# tests 0\n# pass 0\n",
+      "all-skipped": "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n",
+    };
+    const output = goOutputs[mode] ?? otherOutputs[mode] ?? tap;
     emitCheck(command, 0, output);
   }
   if (mode === "masked-plus-real") emitCheck("node --test", 0);
