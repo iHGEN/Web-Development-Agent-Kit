@@ -45,6 +45,10 @@ npx @ihgen/web-kit graphify
 npx @ihgen/web-kit status
 npx @ihgen/web-kit status --task-id TASK-042
 npx @ihgen/web-kit progress help
+npx @ihgen/web-kit review
+npx @ihgen/web-kit review --auto-fix=true
+npx @ihgen/web-kit review @autofix
+npx @ihgen/web-kit review @autofix --no-pr
 npx @ihgen/web-kit code-review --task-id TASK-042
 npx @ihgen/web-kit security-review
 ```
@@ -173,19 +177,27 @@ npx @ihgen/web-kit code-review --task-id TASK-042 --provider codex
 
 ### Review changes without preparing a PR
 
-Ask **"review these changes"** from an installed Web Kit project. With a supervised `codex` or `claude` terminal, the native handoff is used. Without a compatible supervisor, the helper attempts an independent local read-only Codex CLI review. The installed instructions invoke `task-handoff.mjs request-review` with your original request and source selection, then end the current turn. The helper saves a task-only handoff and best-effort registers a unique new SMALL `--review-only` task. The **same outer supervisor used for 50% context rollover** ends the idle old TUI and starts the same native provider fresh for that new review task. Every request gets a new task and session, with no builder conversation, summary capture or resume.
+Ask **"review these changes"** from an installed Web Kit project, or run `npx @ihgen/web-kit review` in its terminal. That's it:
 
-The request need not wait for 50% context usage. Codex transitions at native `agent-turn-complete`; Claude transitions at `Notification idle_prompt`, normally after about 60 seconds waiting for input ([official hook reference](https://code.claude.com/docs/en/hooks#notification)). Status-line updates and Claude `Stop` do not confirm this boundary. The new session uses the existing provider launch settings, model, authentication and permissions. It examines your selected files/diff/range, or current staged, unstaged and relevant untracked changes by default.
+1. Web Kit starts a **new, independent, ephemeral Codex CLI session** with a read-only sandbox.
+2. The reviewer aggressively checks your **current** staged, unstaged and relevant untracked changes for security vulnerabilities, bugs, architecture problems, regressions, edge cases, performance risks and test gaps. It may inspect directly affected callers, but does not report unrelated code as findings.
+3. You receive its P0–P3 findings, evidence, remedies, coverage gaps and six category scores (0–5) directly.
 
-If no compatible native supervisor owns the current session, Web Kit attempts a genuinely independent `codex exec --sandbox read-only` process. It requires an accessible local Codex CLI and permission to start it; the app or IDE may still deny subprocess creation. The helper returns only a completed, validated report and records an explicit failure otherwise. There is no same-session analysis or manual `/new`/`/clear` substitute. The helper queues supervised requests; unsupervised requests run synchronously and return the report.
+No review task IDs, handoff folders, `request.json`, `ready.json`, stored `report.md`, or supervisor replacement are involved. Each independent Codex session has a 10-minute default timeout (adjustable with `--timeout SECONDS`). Your existing builder context is not passed to the reviewer, and source/Git state remain unchanged. The reviewer reports findings and coverage gaps, but does not run project tests or certify PR readiness. The installed local CLI and permission to launch it are required; failures are shown directly, not converted into a fabricated report.
 
-Existing task IDs, scope reconciliation, passing tests and Graphify setup are not prerequisites. Tracking failures, missing requirements/tests/comparison evidence and inaccessible files become specific gaps while accessible code is analyzed. `NO SOURCE` and `NO CHANGES` are reported honestly. The supervised reviewer preserves the active provider's permissions; the standalone Codex CLI reviewer explicitly requests its read-only sandbox. Neither review certifies the strict OS isolation required for PR-readiness approval.
+For a specific selection, use `node .agent-core/bin/changes-review.mjs --request 'review these files' --selection 'src/a.js and src/b.js'`. The separate strict `code-review --task-id ...` PR-readiness gate remains unchanged.
 
-The fresh session presents one complete structured review as its final response. The provider completion hook (Codex) or Stop hook (Claude) persists `.agent-core/state/reviews/<new-task-id>/report.md` and stages its receipt without model-side filesystem writes; the verified native boundary then completes report delivery. Without a supervisor, the independent Codex CLI process produces a fresh thread/result; Web Kit verifies and stores its report and receipt before returning findings to the caller. Missing or malformed output still fails closed. Supervised delivery requires the authentic native completion boundary. The independent CLI requires fresh-thread and completed-turn evidence. Both paths record a report receipt and complete only the new review-delivery task. `DONE`/final-validation `PASS` mean **report delivered**, including reports that find bugs; code approval stays pending. The supervisor then exits. It does not restart or resume the builder.
+If you explicitly want the tool to **fix verified findings and open a PR when genuinely ready**, say "review my changes, auto fix true", or run:
 
-If the fresh review ends with a missing or invalid receipt, the supervisor stops it and records the new review task as failed. It does not wait indefinitely or mark an unverified report delivered.
+```bash
+npx @ihgen/web-kit review --auto-fix=true
+```
 
-Managed review records and normal aggregate bookkeeping may change; existing source, jobs, scope manifests, review queues and the global implementation context handoff remain intact. The review does not run project code/tests, invoke the strict runner, repair setup, fix findings or publish anything. A later **"fix the findings"** request enters the normal scoped implementation and readiness workflow.
+The tag **`@autofix`** is an equivalent shortcut. In the **same Codex CLI chat**, type `review these changes` for an independent review, or `review these changes @autofix` to review, launch a fresh separate fixing session, run tests, re-review, and open a PR if ready. Your existing conversation remains in place; the reviewer/fixer processes get fresh context. You can also run `npx @ihgen/web-kit review @autofix` directly in a terminal. This is a chat shortcut, not an npm/Git release tag.
+
+To **fix locally without opening a PR**, say `review these changes @autofix --no-pr`, or run `npx @ihgen/web-kit review @autofix --no-pr`. Verified fixes are applied to the original working files only after a clean fresh verification and re-review; the original staged index stays untouched. This mode needs no GitHub CLI, remote, commit, push, or PR.
+
+That starts a second fresh Codex session to fix only the current changes in an isolated temporary Git worktree, then runs actual tests/checks **in a fresh verification session after the fixes are finished**. Every validation command must explicitly enter the isolated Git root in the same fail-fast shell invocation (`cd "<absolute-worktree>" && <test-or-check>`); commands with an unverified working directory cannot certify tests because Codex's command events do not reliably report cwd. For workspace tests, the verifier uses explicit package-manager workspace selectors from that root. It rejects masked or non-executing test commands (including `--help` and zero-test runs), requires recorded positive test counts, distinguishes harmless `rg` no-match exits from actual validation failures, and detects changes to the verified source snapshot. Test evidence with inline environment assignments or opaque `env` wrappers is rejected because it may run a different script than the validated one; npm workspace-selecting or custom-script-shell `.npmrc` settings similarly block automatic publication until independently resolved. Native Node.js spec and Bun test-runner pass/fail summaries are recognized, and `bun test` does not require a package script (unlike `bun run test`). New test files must be named after an original changed module; unrelated test edits are blocked. Codex's shell environment policy prevents provider API keys from reaching model-operated project commands, and the publication gate checks for provider-key patterns and uninspectable binaries. A fresh adversarial re-review follows. It retries up to three passes when needed. With the default PR mode, it commits, pushes and opens a GitHub PR **only** if required executed checks passed and the final independent review has no known blocking findings. Otherwise it stops, reports why, and retains the isolated worktree for recovery. The original index and working tree are never replaced **in PR mode**. PR creation requires the local `gh` CLI authenticated; no GitHub Actions workflow is manually dispatched. The previous strict `code-review` gate remains separate.
 
 ### Strict PR-readiness isolation
 
@@ -382,15 +394,15 @@ Web Kit does **not** fake `/clear` or `/new` terminal keystrokes and does not re
 
 The threshold is checked at a provider turn boundary, so Web Kit does not intentionally kill an AI in the middle of an edit/tool call to hit exactly 50.000%.
 
-### A new task uses the same supervisor
+### Standalone changes review stays separate
 
-Standalone review intake queues a task handoff independently of the threshold when supervised. After the current native turn completes, the supervisor starts a new review task in a fresh native session from only that task handoff. In unsupervised environments, the same helper executes a distinct read-only Codex CLI review with no resumed conversation and returns its report to the caller. It does not capture a continuation summary or reuse the implementation handoff. The review session delivers one report, and its receipt plus native completion boundary ends supervision. The builder is not resumed. See [Review changes without preparing a PR](#review-changes-without-preparing-a-pr) for the request and completion contract.
+Standalone changes review runs `changes-review.mjs`, which starts a fresh ephemeral read-only Codex CLI session and returns its report. This does not replace the builder's native session or create task/handoff/receipt state. See [Review changes without preparing a PR](#review-changes-without-preparing-a-pr).
 
 ### Provider telemetry and work evidence
 
 Codex is supervised with a process-local turn-complete notifier. The notifier gives Web Kit the active thread/session ID, which is used to read that Codex session's current context/token-count state. Existing user notify configuration is preserved on a best-effort basis.
 
-Claude Code is supervised with a temporary `--settings` overlay. Its status-line bridge receives `context_window.used_percentage` and preserves existing status-line behavior when possible. Its additive `Notification idle_prompt` hook confirms native boundaries for new review tasks and reports; status-line callbacks and `Stop` do not. This event normally arrives after about 60 seconds waiting for input ([Claude hook reference](https://code.claude.com/docs/en/hooks#notification)).
+Claude Code is supervised with a temporary `--settings` overlay. Its status-line bridge receives `context_window.used_percentage` and preserves existing status-line behavior when possible. Its `Notification idle_prompt` hook confirms safe context-rollover boundaries; status-line callbacks and `Stop` do not.
 
 For supervised Codex/Claude sessions, the provider bridge also compares bounded repository fingerprints at safe turns. Real repository changes can be recorded as implementation evidence; repeated no-delta turns during implementation feed the anti-slop guard. Generated Web-Kit state/security-review artifacts are excluded from implementation evidence, and raw untracked file contents are not persisted by this progress fingerprinting.
 
@@ -416,7 +428,7 @@ Project-local state is kept under:
 
 A rollover handoff is routing/state evidence only. Current repository source, current diff, relevant tests/build, and runtime evidence remain authoritative.
 
-For threshold continuation, the **Context Rollover Manager** tells the fresh AI to verify compact state, preserve completed work and resume the exact next action. For a new review task, it enforces only the task handoff and report contract; prior implementation/anti-slop state cannot turn the review into resumed building.
+For threshold continuation, the **Context Rollover Manager** tells the fresh AI to verify compact state, preserve completed work and resume the exact next action. Standalone changes review is independent of this continuation machinery.
 
 ### Global configuration
 

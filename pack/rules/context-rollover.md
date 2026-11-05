@@ -24,18 +24,18 @@ Default rollover threshold:
 50% current context used
 ```
 
-The explicit `.agent-core/bin/session-controller.mjs` remains available for CI/headless/debug continuation workflows. It is not a fallback for new standalone review tasks.
+The explicit `.agent-core/bin/session-controller.mjs` remains available for CI/headless/debug continuation workflows. It is not used for ordinary changes reviews.
 
-## Two triggers, one supervisor when available
+## Context rollover stays separate from review
 
 | Trigger | Fresh session input | Completion behavior |
 | --- | --- | --- |
 | Current context reaches 50% (or the configured threshold) | Compact continuation handoff for the same task | Verify current evidence and continue the recorded next action |
-| Standalone review queues `task-handoff.mjs request-review` | Task-only handoff with original request, source selection and a unique new review task | Review once, deliver the report, then the supervisor exits |
+| Standalone `review these changes` | Independent `changes-review.mjs` Codex CLI prompt | Return one report without supervisor state or handoff files |
 
-A new review request does not wait for the context threshold. It ends the current turn, then the same supervisor replaces the idle native TUI using the existing launch settings, permissions and authentication. The new review never inherits builder history, invokes builder summary capture, resumes the old session or returns to the old task after its report.
+A new review request does not wait for the context threshold and does not transition this supervisor. The caller runs an independent, ephemeral, read-only Codex CLI process and returns its report.
 
-Follow `.agent-core/rules/changes-review.md` for review intake and automatic report delivery. When the native supervisor is absent, the helper starts a **separate read-only Codex CLI process** if available and returns the completed report directly; it does not use the explicit Session Controller or analyze source in the existing session. If no independent provider can be started, report **Review not started**. Best-effort tracking failures are gaps. Preserve existing jobs/scope/queues and the global implementation `context-handoff.json`.
+Follow `.agent-core/rules/changes-review.md` for the simple review command. Do not queue a task-only handoff or write report/receipt state. Preserve existing jobs/scope/queues and the global implementation `context-handoff.json`.
 
 ## Safe-boundary rule
 
@@ -52,7 +52,7 @@ measure context
 
 ## Implementation-first threshold rollover contract
 
-This continuation contract applies only to the context-threshold trigger. It preserves the same task and must not restart the workflow. A new review task follows its own handoff and report-only completion contract above.
+This continuation contract applies only to the context-threshold trigger. It preserves the same task and must not restart the workflow. Standalone changes review runs independently without a handoff.
 
 Before rollover, preserve:
 - original request / task ID;
@@ -120,9 +120,9 @@ The transparent supervisor uses the native `agent-turn-complete` notification to
 
 ### Claude Code
 
-The transparent supervisor uses temporary settings with a status-line bridge for context telemetry. For a new review task and report completion, only the native `Notification` event with `notification_type: "idle_prompt"` confirms the boundary/session identity. Status-line callbacks and `Stop` are not sufficient. Claude normally emits `idle_prompt` after waiting for input for about 60 seconds ([official hook reference](https://code.claude.com/docs/en/hooks#notification)). Existing hook/status-line behavior is preserved and temporary settings are removed afterward.
+The transparent supervisor uses temporary settings with a status-line bridge for context telemetry. Its `Notification` event with `notification_type: "idle_prompt"` confirms a safe threshold rollover boundary/session identity. Status-line callbacks and `Stop` are not sufficient. Existing hook/status-line behavior is preserved and temporary settings are removed afterward.
 
-Provider-specific telemetry is an adapter concern. The canonical workflow and progress state remain provider-neutral. Supervised reviews require an automatically verified report receipt and authentic native completion boundary. Independent Codex CLI reviews require a fresh-thread event, completed turn and validated structured report. Queuing a request or writing a receipt alone does not prove delivery.
+Provider-specific telemetry is an adapter concern. The canonical implementation workflow and progress state remain provider-neutral. Ordinary changes reviews use `changes-review.mjs` outside this supervisor and return the independent Codex CLI report directly.
 
 ## Authority
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Verify installed supervisor routing and the report-task tracker contract with explicit fixtures.
-// This suite never launches a native review session or claims an AI review ran.
-// Native supervisor transitions and receipt delivery have separate process integration coverage.
+// Verify the simple installed review route and preserve the separate progress tracker contract.
+// This suite does not launch an AI provider; the simple CLI has its own process smoke test.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -80,22 +79,16 @@ function verifyInstructions() {
     const managed = text.slice(first, last);
     const route = managed.split("\n").find(line => line.includes("review these changes") && line.includes("changes-review.md"));
     assert(route, `${relative}: standalone changes-review trigger missing`);
-    assert.match(route, /fresh native Codex\/Claude session/, "supervised native route missing");
-    assert.match(route, /independent read-only Codex CLI/, "supervisor-free reviewer route missing");
-    assert.match(route, /context-supervisor\.mjs/, "existing native supervisor path missing");
-    assert.match(route, /end the current turn/, "native handoff boundary instruction missing");
-    assert.match(route, /task-only handoff/);
-    assert.match(route, /no builder conversation, summary capture or resume/);
-    assert.match(route, /Codex.*agent-turn-complete.*Claude.*Notification idle_prompt/);
-    assert.match(route, /task-handoff\.mjs request-review/);
-    assert.match(route, /same-session fallback/);
-    assert.match(managed, /unique new SMALL.*--review-only/, "review-only tracking missing");
-    assert.match(managed, /do not require the model to write report\.md or run report-ready/,
-      "managed reviewer still relies on model-side report file writes");
-    assert.match(managed, /PR readiness: not assessed/);
-    assert.match(managed, /real native session ID/);
-    assert.doesNotMatch(route, /current-session analysis|disclosed-current-session|--task-id <resolved-id>|Missing eligible task\/scope evidence|run.*code-review\.mjs/,
-      `${relative}: standalone review still permits a same-session substitute or requires the strict task runner`);
+    assert.match(route, /changes-review\.mjs/, "simple direct reviewer route missing");
+    assert.match(route, /independent fresh ephemeral read-only Codex reviewer/, "fresh read-only reviewer missing");
+    assert.match(route, /ONLY current staged, unstaged and relevant untracked changes/, "review scope was not kept to current changes");
+    assert.match(route, /--auto-fix=true/, "explicit automatic fixer route missing");
+    assert.match(managed, /@autofix/, "chat auto-fix tag missing");
+    assert.match(managed, /--no-pr/, "local-only auto-fix instruction missing");
+    assert.match(managed, /without review task\/handoff\/request\/receipt files/,
+      "simple review still creates tracking artifacts");
+    assert.doesNotMatch(route, /invoke `node \.agent-core\/bin\/task-handoff\.mjs|context-supervisor\.mjs launches|new SMALL/,
+      `${relative}: standalone review still routes through legacy task bookkeeping`);
     assert.match(managed, /For every PR-bound implementation task.*code-review\.mjs/,
       `${relative}: changes analysis must not replace the strict readiness route`);
     assert.doesNotMatch(managed, /OLD_STANDALONE_REVIEW_ROUTE/, `${relative}: stale installed instructions survived`);
@@ -106,13 +99,17 @@ function verifyInstructions() {
     rule: ".agent-core/rules/changes-review.md",
     trigger: "review these changes",
     mode: "source-analysis",
-    execution: "fresh-native-supervisor-or-independent-codex-cli",
+    execution: "fresh-independent-codex-cli",
     fresh_session_required: true,
     same_session_fallback: false,
-    unsupervised_backend: "codex-cli-read-only",
-    task_registration_engine: ".agent-core/bin/task-handoff.mjs",
-    task_session_engine: ".agent-core/bin/context-supervisor.mjs",
-    task_registration_mode: "review-only",
+    review_command: ".agent-core/bin/changes-review.mjs",
+    review_files_created: false,
+    auto_fix_flag: "--auto-fix=true",
+    auto_fix_tags: ["@autofix", "#autofix"],
+    auto_fix_local_flag: "--no-pr",
+    auto_fix_verification: "fresh-post-fix-session",
+    auto_fix_isolated_worktree: true,
+    auto_pr_requires_readiness: true,
     existing_task_required: false,
     readiness_evidence: false,
   };
@@ -120,11 +117,13 @@ function verifyInstructions() {
     assert.deepEqual(compatibility.changes_review, expectedRoute);
     assert.equal(compatibility.pr_readiness_review_engine, ".agent-core/bin/code-review.mjs");
   }
-  assert(fs.existsSync(path.join(project, expectedRoute.task_registration_engine)), "Task handoff helper must be installed with its routing instructions");
+  assert(fs.existsSync(path.join(project, expectedRoute.review_command)), "Simple review command must be installed");
+  assert(fs.existsSync(path.join(project, ".agent-core/bin/changes-autofix.mjs")), "Auto-fix continuation must be installed");
   const policy = JSON.parse(read(".agent-core/routing/context-policy.json"));
-  assert.equal(policy.session_control.task_handoff_engine, expectedRoute.task_registration_engine);
-  assert.equal(policy.session_control.task_session_engine, expectedRoute.task_session_engine);
+  assert.equal(policy.session_control.standalone_changes_review_engine, expectedRoute.review_command);
   assert.match(policy.session_control.new_task_rule, /separate from the 50% context threshold/);
+  assert.match(policy.session_control.new_task_rule, /--auto-fix=true/);
+  assert.match(policy.session_control.new_task_rule, /--no-pr/);
   assert.match(policy.session_control.new_task_completion_rule, /fresh-thread event.*completed turn/);
   assert.match(policy.session_control.claude.new_task_boundary, /Notification idle_prompt/);
   assert.deepEqual(fs.readFileSync(path.join(project, ".agent-core/rules/changes-review.md")),
@@ -278,8 +277,8 @@ try {
   assertPreserved(installed, "review lifecycle changed installed instructions");
   assertPreserved(preserved, "review lifecycle changed unrelated source/task/scope/seven-item queue data");
   console.log("Changes-review instruction installation/update: PASS (five clients, exact user content, stale route replacement and idempotency).");
-  console.log("Installed review-only tracker lifecycle: PASS (distinct requests, fixture report delivery with findings, pending code approval, blocked launch failure and preserved existing work).");
-  console.log("Native sessions and reports above are explicit test fixtures; actual native launch and independent source analysis are not simulated or claimed.");
+  console.log("Legacy tracking compatibility: PASS (existing fixture records and unrelated work preserved).");
+  console.log("Legacy reports above are fixtures; the simple fresh review path has separate process coverage.");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
