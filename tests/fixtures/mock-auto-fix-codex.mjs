@@ -76,10 +76,18 @@ if (phase === "fix") {
       "unsupported-workspace-selector": "npm run test --workspace=packages/missing",
       "safe-workspace": "npm run test --workspace=packages/web",
       "safe-workspace-all": "npm run test --workspaces",
+      "masked-workspace-env": "npm_config_workspace=packages/api npm run test",
+      "masked-workspace-env-shell": "bash -lc 'npm_config_workspace=packages/api npm run test'",
+      "masked-workspace-env-with-real": "env npm_config_workspace=packages/api npm run test",
+      "masked-workspace-env-absolute": "/usr/bin/env npm_config_workspace=packages/api npm run test",
+      "masked-workspace-prefixed-shell": "set -e; npm_config_workspace=packages/api npm run test",
     };
     const command = goCommands[mode] || workspaceCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
       : mode?.startsWith("dotnet-") ? "dotnet test"
         : mode === "fake-checks" ? "echo npm test"
+          : mode === "env-unrelated-diagnostic" ? "env NODE_ENV=test npm --version"
+            : mode?.startsWith("bun-direct-") ? "bun test"
+            : mode === "bun-run-missing-script" ? "bun run test"
           : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
             : ["masked-tap-in-script", "masked-jest", "masked-package-script", "masked-nested-package-script",
               "masked-chained-package-script", "safe-chained-package-script", "masked-pretest-lifecycle",
@@ -109,6 +117,12 @@ if (phase === "fix") {
       "dotnet-skipped": "Passed! - Failed: 0, Passed: 0, Skipped: 8, Total: 8\n",
       "maven-masked-failure": "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0\nTests: 1 passed\n",
       "dotnet-masked-failure": "Passed! - Failed: 1, Passed: 2, Skipped: 0, Total: 3\nTests: 2 passed\n",
+      "node-spec-success": "ℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ skipped 0\n",
+      "node-spec-skipped": "ℹ tests 2\nℹ pass 0\nℹ fail 0\nℹ skipped 2\n",
+      "node-spec-masked-failure": "ℹ tests 2\nℹ pass 1\nℹ fail 1\n",
+      "bun-direct-success": "test/example.test.ts:\n(pass) adds numbers\n(pass) subtracts numbers\n\n 2 pass\n 0 fail\n Ran 2 tests across 1 file.\n",
+      "bun-direct-zero": "0 pass\n0 fail\nRan 0 tests across 0 files.\n",
+      "bun-direct-masked-failure": "1 pass\n1 fail\nRan 2 tests across 1 file.\n",
       "masked-tap-in-script": "TAP version 13\n# tests 2\n# pass 1\n# fail 1\n",
       "masked-jest": "Test Suites: 1 failed, 1 passed\nTests: 1 failed, 1 passed\n",
       "masked-cargo": "test result: FAILED. 2 passed; 1 failed\n",
@@ -122,7 +136,8 @@ if (phase === "fix") {
     const output = goOutputs[mode] ?? otherOutputs[mode] ?? tap;
     emitCheck(command, 0, output);
   }
-  if (mode === "masked-plus-real") emitCheck("node --test", 0);
+  if (["masked-plus-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
+    "masked-workspace-prefixed-shell", "env-unrelated-diagnostic"].includes(mode)) emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
   if (mode === "failed-audit") emitCheck("npm run audit", 1);
   if (mode === "rg-no-match") emitCheck("rg nonexistent-symbol src/", 1, "");

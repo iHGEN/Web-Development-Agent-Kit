@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { maskedPackageTestScript } from "../pack/runtime/changes-autofix.mjs";
 
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-auto-fix-test-"));
@@ -46,6 +47,25 @@ function cleanIsolatedWorktrees() {
   }
 }
 try {
+  // npmrc may select a workspace even for an unqualified `npm test` command.
+  // This file can predate the reviewed diff, so no changed-file name scan
+  // can substitute for inspecting npm's effective test-script selection.
+  const npmrcProject = path.join(root, "npmrc-config-project");
+  fs.mkdirSync(path.join(npmrcProject, "packages", "api"), { recursive: true });
+  fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root",
+    private: true, workspaces: ["packages/*"], scripts: { test: "node --test" } }));
+  fs.writeFileSync(path.join(npmrcProject, "packages", "api", "package.json"), JSON.stringify({
+    name: "fixture-api", scripts: { test: "node --test || true" },
+  }));
+  fs.writeFileSync(path.join(npmrcProject, ".npmrc"), "workspace=packages/api\n");
+  assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
+    "A configured npm workspace must not bypass root-script validation");
+  fs.writeFileSync(path.join(npmrcProject, ".npmrc"), "script-shell=/bin/sh\n");
+  assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
+    "A configured npm script interpreter must not bypass root-script validation");
+  assert.equal(maskedPackageTestScript(npmrcProject, "bun test"), false,
+    "Bun's direct runner does not depend on npm workspace configuration");
+
   fs.mkdirSync(project);
   fs.mkdirSync(path.join(project, "src"));
   fs.writeFileSync(path.join(project, "src", "feature.js"), "export const safe = false;\n");
@@ -111,7 +131,11 @@ try {
   assert.equal(diagnostic.status, 0, `Expected rg no-match must not invalidate passing tests: ${diagnostic.stderr}`);
   assert.match(diagnostic.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
   fs.rmSync(capture);
-  for (const mode of ["go-success", "go-verbose-success", "maven-success", "dotnet-success", "noisy-output"]) {
+  const unrelatedEnv = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "env-unrelated-diagnostic" });
+  assert.equal(unrelatedEnv.status, 0, `A nonvalidation environment diagnostic must not invalidate real tests: ${unrelatedEnv.stderr}`);
+  fs.rmSync(capture);
+  for (const mode of ["go-success", "go-verbose-success", "maven-success", "dotnet-success", "noisy-output",
+    "node-spec-success", "bun-direct-success"]) {
     const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
     assert.match(verified.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
@@ -140,7 +164,8 @@ try {
   for (const mode of [
     "help-only", "help-only-short-version", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests",
     "go-package-only", "go-nonmatching-run", "go-nonmatching-json", "go-skipped", "go-cached",
-    "maven-skipped", "dotnet-skipped",
+    "maven-skipped", "dotnet-skipped", "node-spec-skipped", "bun-direct-zero",
+    "bun-run-missing-script",
   ]) {
     const help = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(help.status, 0, `${mode} must not count as executed tests`);
@@ -167,7 +192,8 @@ try {
   assert(!fs.existsSync(capture));
   cleanIsolatedWorktrees();
 
-  for (const mode of ["masked-tap-in-script", "masked-jest", "masked-cargo", "maven-masked-failure", "dotnet-masked-failure", "go-masked-failure"]) {
+  for (const mode of ["masked-tap-in-script", "masked-jest", "masked-cargo", "maven-masked-failure", "dotnet-masked-failure", "go-masked-failure",
+    "node-spec-masked-failure", "bun-direct-masked-failure"]) {
     const hiddenFailure = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(hiddenFailure.status, 0, `${mode} must not authorize publication when tests failed inside a successful outer command`);
     assert.match(hiddenFailure.stderr, /Auto-fix NOT READY/);
@@ -284,6 +310,23 @@ try {
     assert.equal(result.status, 0, `${mode} must accept verifiably safe npm workspace scripts: ${result.stderr}`);
     assert.match(result.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
     fs.rmSync(capture);
+    cleanIsolatedWorktrees();
+  }
+  // An inline npm_config_workspace assignment changes the actual npm script
+  // even though the root package has a safe test script. Both direct and
+  // shell-wrapped assignments must fail closed; an opaque `env` wrapper must
+  // not be ignored when another genuine test also passes.
+  writeApiScripts(maskedWorkspaceScripts);
+  for (const mode of ["masked-workspace-env", "masked-workspace-env-shell", "masked-workspace-env-with-real",
+    "masked-workspace-env-absolute", "masked-workspace-prefixed-shell"]) {
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const result = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(result.status, 0, `${mode} must reject an unverified environment-selected workspace test`);
+    assert.match(result.stderr, /Auto-fix NOT READY/);
+    assert(!fs.existsSync(capture), `${mode} created a PR with masked workspace tests`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch`);
     cleanIsolatedWorktrees();
   }
   fs.writeFileSync(manifest, originalManifest);

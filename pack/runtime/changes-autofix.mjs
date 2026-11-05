@@ -117,14 +117,20 @@ function copyUntracked(original, temporary, names) {
 const sensitive = file => /(?:^|\/)(?:\.env(?:\..+)?|\.npmrc|\.pypirc|\.netrc|_netrc|\.git-credentials|\.aws\/(?:credentials|config)|\.kube\/config|\.docker\/config\.json|\.config\/(?:gh\/hosts\.yml|gcloud\/(?:application_default_credentials\.json|credentials\.db))|id_(?:rsa|ed25519)|[^/]+\.(?:pem|key|p12|pfx)|[^/]*(?:secret|credential|service[-_]?account)[^/]*\.(?:json|ya?ml|ini|toml|txt|conf|cfg|properties))$/i.test(file);
 const testPath = file => /(?:^|\/)(?:tests?|__tests__|fixtures)\/|(?:\.test|\.spec)\.[^/]+$/i.test(file);
 const addedSecret = /(?:^|\n)\+[^\n]*(?:-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{36,}|AKIA[A-Z0-9]{16}|sk_live_[A-Za-z0-9]{20,}|sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{12,})/;
-function shellCommand(command) {
+function unwrappedShellCommand(command) {
   const text = String(command).trim();
   const shell = text.match(/^(?:(?:\/bin\/)?(?:bash|sh|zsh))\s+-[lc]+\s+(['"])([\s\S]*)\1$/i);
-  return (shell ? shell[2] : text).replace(/^(?:[A-Za-z_][\w]*=[^\s]+\s+)*/, "");
+  return shell ? shell[2] : text;
+}
+function shellCommand(command) {
+  return unwrappedShellCommand(command).replace(/^(?:[A-Za-z_][\w]*=[^\s]+\s+)*/, "");
 }
 // Evidence must be an entire, unmasked command. `npm test || true` and shell
 // pipelines cannot prove that a test genuinely passed, even with exit code 0.
+// Inline environment assignments can also select a different package script,
+// runtime or config than the one independently inspected by this gate.
 function safeCommand(text) {
+  if (/^[A-Za-z_][\w]*=/.test(unwrappedShellCommand(text))) return null;
   const command = shellCommand(text);
   const noTests = /(?:^|\s)(?:-h|--(?:help|version|list-?tests?(?:only|files)?|collect-only|dry-?run|show-?config|test-list))(?:=\S+|\s|$)/i;
   // -V usually means version, while lowercase -v enables Go's verbose test output.
@@ -136,9 +142,14 @@ const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|p
 const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check|audit|security)(?:[:\w-]*)|node\s+(?:\S*\/)?(?:scripts\/)?[-\w./]*(?:check|audit|lint|build)[-\w./]*)${safeArgs}$`, "i");
 const testCheck = text => safeCommand(text) !== null && testPattern.test(safeCommand(text));
 const check = text => testCheck(text) || (safeCommand(text) !== null && checkPattern.test(safeCommand(text)));
-const suspiciousValidation = text => /^(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|\.\/gradlew?)\b/i.test(shellCommand(text))
-  && /\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(shellCommand(text))
-  && !check(text);
+// A validation hidden behind `env`, a shell prefix, a chain or another wrapper
+// still has to be audited. Only plain read-only inspection/printing commands
+// are exempt; their text is not evidence that validation ran.
+const suspiciousValidation = text => {
+  const raw = unwrappedShellCommand(text);
+  if (check(text) || /^(?:rg|grep|echo|printf)(?:\s|$)/i.test(raw)) return false;
+  return /\b(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|gradlew?)\b[^\r\n]*\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(raw);
+};
 const benignSearchMiss = event => event.exitCode === 1
   && /^(?:rg|grep)(?:\s|$)/.test(shellCommand(event.command))
   && safeCommand(event.command) !== null;
@@ -150,6 +161,8 @@ function failedTestSummary(output) {
   const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "");
   const patterns = [
     /(?:^|\n)\s*#\s*fail\s+[1-9]\d*\b/im, // Node TAP
+    /(?:^|\n)\s*ℹ\s+fail\s+[1-9]\d*\b/im, // Node spec reporter
+    /(?:^|\n)\s*[1-9]\d*\s+fail\s*$/im, // Bun test runner
     /\b(?:Test Suites|Test Files|Tests?)\s*:?\s*[1-9]\d*\s+failed\b/im, // Jest/Vitest
     /\b(?:Failures|Errors|Failed)\s*:\s*[1-9]\d*\b/im, // Maven/.NET
     /(?:^|\n)\s*test result:\s*FAILED\b/im, // Cargo
@@ -177,12 +190,31 @@ function readSafePackageManifest(directory) {
   return JSON.parse(fs.readFileSync(filename, "utf8"));
 }
 
+// npmrc can redirect a plain `npm test` into another workspace or replace the
+// script interpreter entirely. Fail closed on these execution-changing config
+// settings instead of guessing which script and shell a verifier event used.
+function hasNpmTestExecutionOverride(project) {
+  for (const filename of new Set([path.join(project, ".npmrc"), path.join(os.homedir(), ".npmrc")])) {
+    let stat;
+    try { stat = fs.lstatSync(filename); } catch (error) {
+      if (error.code === "ENOENT") continue;
+      return true;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return true;
+    let content;
+    try { content = fs.readFileSync(filename, "utf8"); } catch { return true; }
+    if (/^\s*(?:workspace|workspaces|include-workspace-root|script-shell)\s*=/im.test(content)) return true;
+  }
+  return false;
+}
+
 function npmScriptTargets(project, manager, suffix) {
   const options = suffix.trim() ? suffix.trim().split(/\s+/) : [];
   if (manager !== "npm") {
     if (options.length) throw new Error("Unsupported package-manager test options");
     return [project];
   }
+  if (hasNpmTestExecutionOverride(project)) throw new Error("Unverified npmrc test-execution configuration");
   const selectors = [];
   let allWorkspaces = false;
   let includeRoot = false;
@@ -257,7 +289,10 @@ function npmScriptTargets(project, manager, suffix) {
   return [...selected];
 }
 
-function maskedPackageTestScript(project, command) {
+export function maskedPackageTestScript(project, command) {
+  // Unlike `bun run test`, `bun test` invokes Bun's built-in runner and does
+  // not require a test script in package.json.
+  if (/^bun\s+test(?:\s|$)/i.test(shellCommand(command))) return false;
   const match = shellCommand(command).match(/^(npm|pnpm|yarn|bun)\s+(?:run\s+)?(test[\w:-]*)(?=\s|$)(.*)$/i);
   if (!match) return false;
   let targets;
@@ -327,6 +362,8 @@ function executedTestCount(output, command) {
   }
   const expressions = [
     /(?:^|\n)\s*#\s*pass\s+(\d+)\b/gim, // node --test TAP; skipped tests aren't counted
+    /(?:^|\n)\s*ℹ\s+pass\s+(\d+)\b/gim, // Node 24 default spec reporter
+    /(?:^|\n)\s*(\d+)\s+pass\s*$/gim, // Bun test runner
     /\bTests?:\s*(\d+)\s+passed\b/gim, // Jest
     /\bTests?\s+(\d+)\s+passed\b/gim, // Vitest
     /\b(\d+)\s+(?:tests?\s+)?passed\b/gim, // pytest, Cargo, Jest, .NET

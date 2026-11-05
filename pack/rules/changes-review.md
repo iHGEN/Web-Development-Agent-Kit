@@ -53,7 +53,8 @@ npx @ihgen/web-kit review @autofix --no-pr
    and production files are outside scope and stop automatic publication.
 4. Start an independent **post-fix verification session**, run real tests/checks,
    reject non-executing test options (such as `--help`), masked failures (such as
-   `npm test || true`), missing positive test counts, failed validations and
+   `npm test || true`), inline environment overrides and unverified npmrc
+   workspace selection, missing positive test counts, failed validations and
    unexpected command errors. A read-only search yielding no matches (`rg`
    exit 1) is not a failed validation. Reject any modifications to the verified
    source snapshot. Codex's shell environment policy must exclude provider API
