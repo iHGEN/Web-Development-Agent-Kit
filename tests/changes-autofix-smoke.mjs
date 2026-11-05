@@ -280,6 +280,32 @@ try {
   const writeApiScripts = scripts => fs.writeFileSync(apiManifest, JSON.stringify({ name: "@fixture/api", scripts }));
   writeApiScripts(maskedWorkspaceScripts);
   fs.writeFileSync(path.join(webWorkspace, "package.json"), JSON.stringify({ name: "@fixture/web", scripts: safeWorkspaceScripts }));
+  // Codex's command_execution event has no dependable cwd field. A verifier
+  // can execute `npm test` from this nested directory while the gate inspects
+  // the safe root package.json. Use an actual npm run to reproduce the hidden
+  // failure, then assert the mocked PR flow never publishes that evidence.
+  const apiTestDirectory = path.join(apiWorkspace, "test");
+  fs.mkdirSync(apiTestDirectory);
+  fs.writeFileSync(path.join(apiTestDirectory, "unit.test.mjs"),
+    'import test from "node:test"; test("visible unit", () => {});\n');
+  writeApiScripts({
+    test: "npm run unit && npm run integration",
+    unit: "node --test --test-reporter=tap test/unit.test.mjs",
+    integration: "node -e \"process.exit(7)\" || node -e \"process.exit(0)\"",
+  });
+  const nestedBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+    "refs/heads/review-fix"], root);
+  for (const mode of ["nested-cwd-masked-workspace", "nested-cwd-masked-workspace-with-real"]) {
+    const nested = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(nested.status, 0, `${mode}: unqualified nested npm tests must not publish`);
+    assert.match(nested.stderr, /Auto-fix NOT READY/);
+    assert(!fs.existsSync(capture), `${mode} created a PR`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), nestedBefore, `${mode} pushed a branch`);
+    cleanIsolatedWorktrees();
+  }
+  fs.rmSync(apiTestDirectory, { recursive: true });
+  writeApiScripts(maskedWorkspaceScripts);
   for (const mode of ["masked-workspace-script", "masked-workspace-short-selector", "masked-workspace-repeated",
     "masked-workspace-all", "masked-workspace-parent", "masked-workspace-lifecycle",
     "masked-nested-workspace-selector", "unsupported-workspace-selector"]) {

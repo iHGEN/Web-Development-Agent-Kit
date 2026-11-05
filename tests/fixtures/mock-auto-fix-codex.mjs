@@ -50,9 +50,17 @@ if (phase === "fix") {
 } else if (phase === "verify") {
   const mode = process.env.WEB_KIT_REVIEW_TEST_MODE;
   const tap = "TAP version 13\n# tests 2\n# pass 2\n# fail 0\n";
-  const emitCheck = (command, exit_code, output = tap) => emit({ type: "item.completed", item: {
-    type: "command_execution", command, exit_code, aggregated_output: output,
-  } });
+  const emitCheck = (command, exit_code, output = tap) => {
+    // A verified command is explicitly rooted IN THE SAME SHELL INVOCATION;
+    // Codex JSONL does not expose an authoritative command working directory.
+    // Simulate old/ambiguous events only for the nested-workspace negative case.
+    const rooted = /^(?:npm|pnpm|yarn|bun|node|go|mvn|dotnet|cargo|pytest|python|make|ctest|gradle|npx)\b/i.test(command)
+      && !(mode?.startsWith("nested-cwd-masked-workspace") && command === "npm test");
+    emit({ type: "item.completed", item: {
+      type: "command_execution", command: rooted ? `cd "${project}" && ${command}` : command,
+      exit_code, aggregated_output: output,
+    } });
+  };
   if (mode !== "no-tests") {
     const goCommands = {
       "go-success": "go test -count=1 -json ./...",
@@ -66,6 +74,8 @@ if (phase === "fix") {
       "go-masked-failure": "go test -count=1 -json ./...",
     };
     const workspaceCommands = {
+      "nested-cwd-masked-workspace": "npm test",
+      "nested-cwd-masked-workspace-with-real": "npm test",
       "masked-workspace-script": "npm run test --workspace=packages/api",
       "masked-workspace-short-selector": "npm test -w @fixture/api",
       "masked-workspace-repeated": "npm run test --workspace=packages/web --workspace=packages/api",
@@ -133,10 +143,20 @@ if (phase === "fix") {
       "zero-tests": "TAP version 13\n# tests 0\n# pass 0\n",
       "all-skipped": "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n",
     };
-    const output = goOutputs[mode] ?? otherOutputs[mode] ?? tap;
-    emitCheck(command, 0, output);
+    if (mode?.startsWith("nested-cwd-masked-workspace")) {
+      const nested = spawnSync("npm", ["test"], {
+        cwd: path.join(project, "packages", "api"), encoding: "utf8", timeout: 15000,
+        maxBuffer: 1024 * 1024, windowsHide: true,
+      });
+      if (nested.error || nested.status !== 0 || !/#\s*pass\s+1/.test(nested.stdout)
+        || /#\s*fail\s+[1-9]/.test(nested.stdout)) process.exit(12);
+      emitCheck(command, nested.status, `${nested.stdout}\n${nested.stderr}`);
+    } else {
+      const output = goOutputs[mode] ?? otherOutputs[mode] ?? tap;
+      emitCheck(command, 0, output);
+    }
   }
-  if (["masked-plus-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
+  if (["masked-plus-real", "nested-cwd-masked-workspace-with-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
     "masked-workspace-prefixed-shell", "env-unrelated-diagnostic"].includes(mode)) emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
   if (mode === "failed-audit") emitCheck("npm run audit", 1);

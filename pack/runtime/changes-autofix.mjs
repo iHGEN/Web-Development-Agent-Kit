@@ -125,13 +125,26 @@ function unwrappedShellCommand(command) {
 function shellCommand(command) {
   return unwrappedShellCommand(command).replace(/^(?:[A-Za-z_][\w]*=[^\s]+\s+)*/, "");
 }
+// Codex JSONL command_execution events have no trustworthy cwd field. An
+// unqualified `npm test` event might have run in packages/api even though the
+// gate would inspect the root package.json. Demand a literal, fail-fast root
+// `cd` in the SAME executed shell command before accepting validation evidence.
+function commandAtVerifiedRoot(text, project) {
+  const raw = unwrappedShellCommand(text);
+  const match = raw.match(/^cd(?:\s+\/d)?\s+(?:"([^"$`\r\n]+)"|'([^'\r\n]+)')\s*&&\s*(.+)$/s);
+  if (!match) return null;
+  const directory = match[1] ?? match[2];
+  if (!path.isAbsolute(directory) || path.resolve(directory) !== path.resolve(project)) return null;
+  return match[3];
+}
 // Evidence must be an entire, unmasked command. `npm test || true` and shell
 // pipelines cannot prove that a test genuinely passed, even with exit code 0.
 // Inline environment assignments can also select a different package script,
 // runtime or config than the one independently inspected by this gate.
-function safeCommand(text) {
-  if (/^[A-Za-z_][\w]*=/.test(unwrappedShellCommand(text))) return null;
-  const command = shellCommand(text);
+function safeCommand(text, project) {
+  const raw = project ? commandAtVerifiedRoot(text, project) : unwrappedShellCommand(text);
+  if (raw === null || /^[A-Za-z_][\w]*=/.test(raw)) return null;
+  const command = shellCommand(raw);
   const noTests = /(?:^|\s)(?:-h|--(?:help|version|list-?tests?(?:only|files)?|collect-only|dry-?run|show-?config|test-list))(?:=\S+|\s|$)/i;
   // -V usually means version, while lowercase -v enables Go's verbose test output.
   const versionOnly = /(?:^|\s)-V(?:=\S+|\s|$)/;
@@ -140,14 +153,20 @@ function safeCommand(text) {
 const safeArgs = String.raw`(?:\s+[-\w./:@+=]+)*`;
 const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+(?:--test|(?:\S*\/)?tests\/[-\w./]+)|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:\.\/)?gradlew?\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|make\s+test|ctest)${safeArgs}$`, "i");
 const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check|audit|security)(?:[:\w-]*)|node\s+(?:\S*\/)?(?:scripts\/)?[-\w./]*(?:check|audit|lint|build)[-\w./]*)${safeArgs}$`, "i");
-const testCheck = text => safeCommand(text) !== null && testPattern.test(safeCommand(text));
-const check = text => testCheck(text) || (safeCommand(text) !== null && checkPattern.test(safeCommand(text)));
+const testCheck = (text, project) => {
+  const command = safeCommand(text, project);
+  return command !== null && testPattern.test(command);
+};
+const check = (text, project) => {
+  const command = safeCommand(text, project);
+  return command !== null && (testPattern.test(command) || checkPattern.test(command));
+};
 // A validation hidden behind `env`, a shell prefix, a chain or another wrapper
 // still has to be audited. Only plain read-only inspection/printing commands
 // are exempt; their text is not evidence that validation ran.
-const suspiciousValidation = text => {
+const suspiciousValidation = (text, project) => {
   const raw = unwrappedShellCommand(text);
-  if (check(text) || /^(?:rg|grep|echo|printf)(?:\s|$)/i.test(raw)) return false;
+  if (check(text, project) || /^(?:rg|grep|echo|printf)(?:\s|$)/i.test(raw)) return false;
   return /\b(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|gradlew?)\b[^\r\n]*\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(raw);
 };
 const benignSearchMiss = event => event.exitCode === 1
@@ -618,6 +637,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
         "You are an independent verification engineer in a NEW Codex session. Do not edit source, tests, configuration, or Git state.",
         `Verify the current changes for: ${request}`,
         `Changed files: ${JSON.stringify(after.paths)}`,
+        `For EACH test, build, lint, typecheck, audit or other validation, execute a SINGLE shell command starting with cd "${worktree}" && followed by the validation command. Quote the absolute directory exactly as shown. This explicit fail-fast root cd is REQUIRED because Codex command events do not attest cwd; a separate cd command or implicit tool workdir cannot count as proof. To test a workspace, use the package manager's explicit workspace flags from the root. Do not use an environment override or shell wrapper to change validation scope.`,
         "Execute real relevant project tests (and lint/build/security checks where applicable) now, after all fixer edits. For Go use 'go test -count=1 -json ./...' or '-count=1 -v' to prove actual, uncached test-level passes; a package-level 'ok' is not enough. Do not mask failures with shell operators, pipes, fallbacks, or wrappers like '|| true'.",
         "Report only commands actually executed and their outcomes. Do not commit, push, or open a PR.",
       ].join("\n\n");
@@ -628,12 +648,14 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
         throw new Error("Verification changed the source snapshot; checks do not certify the final tree.");
       }
       const failedExecutions = verifier.commands.filter(item => item.exitCode !== 0 && !benignSearchMiss(item));
-      const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command));
-      realChecks = verifier.commands.filter(item => check(item.command));
-      const failedTestOutputs = realChecks.filter(item => testCheck(item.command) && failedTestSummary(item.output));
-      const maskedScripts = realChecks.filter(item => testCheck(item.command) && maskedPackageTestScript(worktree, item.command));
+      const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command, worktree));
+      realChecks = verifier.commands.filter(item => check(item.command, worktree))
+        .map(item => ({ ...item, auditedCommand: safeCommand(item.command, worktree) }));
+      const failedTestOutputs = realChecks.filter(item => testCheck(item.auditedCommand) && failedTestSummary(item.output));
+      const maskedScripts = realChecks.filter(item => testCheck(item.auditedCommand) && maskedPackageTestScript(worktree, item.auditedCommand));
       const checkSummary = verifier.commands.map(item => ({ command: item.command, exit_code: item.exitCode }));
-      passed = realChecks.some(item => testCheck(item.command) && item.exitCode === 0 && executedTestCount(item.output, item.command) > 0)
+      passed = realChecks.some(item => testCheck(item.auditedCommand) && item.exitCode === 0
+        && executedTestCount(item.output, item.auditedCommand) > 0)
         && failedExecutions.length === 0 && suspicious.length === 0
         && failedTestOutputs.length === 0 && maskedScripts.length === 0;
       process.stdout.write(`\n### Independent final-tree verification (pass ${pass})\n${verifier.report}\n`);

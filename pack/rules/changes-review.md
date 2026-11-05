@@ -52,6 +52,9 @@ npx @ihgen/web-kit review @autofix --no-pr
    test files must match the changed module's filename; unrelated existing tests
    and production files are outside scope and stop automatic publication.
 4. Start an independent **post-fix verification session**, run real tests/checks,
+   require each validation command to explicitly enter the isolated Git root
+   in the same fail-fast shell invocation (`cd "<absolute-worktree>" && ...`),
+   because Codex command events do not reliably identify the actual cwd,
    reject non-executing test options (such as `--help`), masked failures (such as
    `npm test || true`), inline environment overrides and unverified npmrc
    workspace selection, missing positive test counts, failed validations and
