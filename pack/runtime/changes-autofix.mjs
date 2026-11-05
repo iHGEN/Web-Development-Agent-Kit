@@ -165,46 +165,142 @@ function failedTestSummary(output) {
   });
 }
 
+// npm's -w/--workspace and --workspaces options change which package.json
+// supplies the test script. Resolve the selected packages without executing
+// project-controlled code; reject selectors/globs that cannot be proved safe.
+function readSafePackageManifest(directory) {
+  const filename = path.join(directory, "package.json");
+  const stat = fs.lstatSync(filename);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+    throw new Error("Unsafe npm package manifest");
+  }
+  return JSON.parse(fs.readFileSync(filename, "utf8"));
+}
+
+function npmScriptTargets(project, manager, suffix) {
+  const options = suffix.trim() ? suffix.trim().split(/\s+/) : [];
+  if (manager !== "npm") {
+    if (options.length) throw new Error("Unsupported package-manager test options");
+    return [project];
+  }
+  const selectors = [];
+  let allWorkspaces = false;
+  let includeRoot = false;
+  for (let i = 0; i < options.length; i += 1) {
+    const option = options[i];
+    if (option === "--workspaces" || option === "--workspaces=true") allWorkspaces = true;
+    else if (option === "--include-workspace-root" || option === "--include-workspace-root=true") includeRoot = true;
+    else if (option === "--workspace" || option === "-w") selectors.push(options[++i]);
+    else if (option.startsWith("--workspace=") || option.startsWith("-w=")) selectors.push(option.slice(option.indexOf("=") + 1));
+    else throw new Error(`Unsupported npm test option: ${option}`);
+  }
+  if (!selectors.length && !allWorkspaces) return [project];
+
+  const rootManifest = readSafePackageManifest(project);
+  const patterns = rootManifest.workspaces;
+  if (!Array.isArray(patterns) || !patterns.length) throw new Error("No declared npm workspaces");
+  const packages = new Map();
+  for (const pattern of patterns) {
+    if (typeof pattern !== "string") throw new Error("Unsupported npm workspace pattern");
+    const segments = pattern.replace(/^\.\//, "").split("/");
+    if (segments.some(segment => !segment || segment === "." || segment === ".."
+      || segment.includes("**") || !/^[\w.*?-]+$/.test(segment))) {
+      throw new Error("Unsupported npm workspace glob");
+    }
+    let directories = [project];
+    for (const segment of segments) {
+      const wildcard = /[?*]/.test(segment);
+      const matches = wildcard ? new RegExp(`^${segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*").replace(/\\\?/g, ".")}$`) : null;
+      const next = [];
+      for (const parent of directories) {
+        const names = wildcard ? fs.readdirSync(parent) : [segment];
+        for (const name of names) {
+          if (matches && !matches.test(name)) continue;
+          const directory = path.join(parent, name);
+          if (!fs.existsSync(directory)) continue;
+          const stat = fs.lstatSync(directory);
+          if (stat.isSymbolicLink()) throw new Error("Symlinked npm workspace path");
+          if (!stat.isDirectory()) continue;
+          if (fs.realpathSync(directory) !== directory) throw new Error("Unsafe npm workspace directory");
+          next.push(directory);
+          if (next.length > 256) throw new Error("Too many npm workspaces to validate");
+        }
+      }
+      directories = next;
+    }
+    for (const directory of directories) {
+      const manifest = path.join(directory, "package.json");
+      if (!fs.existsSync(manifest)) continue;
+      const pkg = readSafePackageManifest(directory);
+      if (typeof pkg.name !== "string" || !pkg.name.trim()) throw new Error("Unnamed npm workspace");
+      packages.set(path.relative(project, directory).split(path.sep).join("/"), { directory, name: pkg.name });
+      if (packages.size > 256) throw new Error("Too many npm workspaces to validate");
+    }
+  }
+  const workspaces = [...packages].map(([relative, entry]) => ({ ...entry, relative }));
+  if (!workspaces.length || new Set(workspaces.map(entry => entry.name)).size !== workspaces.length) {
+    throw new Error("Missing or ambiguous npm workspaces");
+  }
+  const selected = new Set(allWorkspaces ? workspaces.map(entry => entry.directory) : []);
+  for (const selector of selectors) {
+    if (typeof selector !== "string" || !selector || selector.startsWith("-")
+      || selector.startsWith("/") || selector.includes("\\") || selector.split("/").includes("..")) {
+      throw new Error("Unsafe npm workspace selector");
+    }
+    const normalized = selector.replace(/^\.\//, "").replace(/\/$/, "");
+    const matched = workspaces.filter(entry => entry.name === selector || entry.relative === normalized
+      || entry.relative.startsWith(`${normalized}/`));
+    if (!matched.length) throw new Error("Unknown npm workspace selector");
+    for (const entry of matched) selected.add(entry.directory);
+  }
+  if (includeRoot) selected.add(project);
+  return [...selected];
+}
+
 function maskedPackageTestScript(project, command) {
-  const match = shellCommand(command).match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test[\w:-]*)(?:\s|$)/i);
+  const match = shellCommand(command).match(/^(npm|pnpm|yarn|bun)\s+(?:run\s+)?(test[\w:-]*)(?=\s|$)(.*)$/i);
   if (!match) return false;
-  const manifest = path.join(project, "package.json");
-  if (!fs.existsSync(manifest)) return true;
-  let scripts;
-  try { scripts = JSON.parse(fs.readFileSync(manifest, "utf8")).scripts; } catch { return true; }
-  const visiting = new Set();
-  const unsafeBody = script => {
-    if (typeof script !== "string" || !script.trim()) return true;
-    // Only a simple fail-fast && sequence is supported. Pipes, fallbacks,
-    // redirects, substitutions, background jobs and arbitrary shell flow may
-    // conceal failures or their output; none can establish green-suite proof.
-    if (/[;|<>`$\r\n()]/.test(script.replaceAll("&&", ""))
-      || /&/.test(script.replaceAll("&&", ""))) return true;
-    const commands = script.split(/\s*&&\s*/);
-    if (commands.some(part => !part.trim())) return true;
-    return commands.some(part => {
-      const simple = part.trim();
-      const child = simple.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)$/i);
-      if (child) return unsafe(child[1]);
-      // An opaque wrapper or non-test command could swallow a failure and
-      // manufacture pass-looking output. Require recognizable direct checks.
-      return !check(simple);
-    });
-  };
-  const unsafe = name => {
-    if (visiting.has(name)) return true; // Recursive scripts cannot prove a bounded test run.
-    visiting.add(name);
-    try {
-      // npm test (and npm run <name>) automatically executes pre<name> and
-      // post<name>, which can suppress failed checks before/after a green test.
-      // Validate those implicit hooks for every explicitly invoked script.
-      return [`pre${name}`, name, `post${name}`].some(lifecycle => {
-        if (!Object.hasOwn(scripts ?? {}, lifecycle)) return lifecycle === name;
-        return unsafeBody(scripts[lifecycle]);
+  let targets;
+  try { targets = npmScriptTargets(project, match[1].toLowerCase(), match[3]); } catch { return true; }
+  return targets.some(target => {
+    let scripts;
+    try { scripts = readSafePackageManifest(target).scripts; } catch { return true; }
+    const visiting = new Set();
+    const unsafeBody = script => {
+      if (typeof script !== "string" || !script.trim()) return true;
+      // Only a simple fail-fast && sequence is supported. Pipes, fallbacks,
+      // redirects, substitutions, background jobs and arbitrary shell flow may
+      // conceal failures or their output; none can establish green-suite proof.
+      if (/[;|<>`$\r\n()]/.test(script.replaceAll("&&", ""))
+        || /&/.test(script.replaceAll("&&", ""))) return true;
+      const commands = script.split(/\s*&&\s*/);
+      if (commands.some(part => !part.trim())) return true;
+      return commands.some(part => {
+        const simple = part.trim();
+        const child = simple.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)$/i);
+        // A nested package-manager invocation with flags could switch to a
+        // different workspace. Never accept it as an opaque direct test.
+        if (/^(?:npm|pnpm|yarn|bun)\s+/i.test(simple)) return !child || unsafe(child[1]);
+        // An opaque wrapper or non-test command could swallow a failure and
+        // manufacture pass-looking output. Require recognizable direct checks.
+        return !check(simple);
       });
-    } finally { visiting.delete(name); }
-  };
-  return unsafe(match[1]);
+    };
+    const unsafe = name => {
+      if (visiting.has(name)) return true; // Recursive scripts cannot prove a bounded test run.
+      visiting.add(name);
+      try {
+        // npm test (and npm run <name>) automatically executes pre<name> and
+        // post<name>, which can suppress failed checks before/after a green test.
+        // Validate those implicit hooks for every explicitly invoked script.
+        return [`pre${name}`, name, `post${name}`].some(lifecycle => {
+          if (!Object.hasOwn(scripts ?? {}, lifecycle)) return lifecycle === name;
+          return unsafeBody(scripts[lifecycle]);
+        });
+      } finally { visiting.delete(name); }
+    };
+    return unsafe(match[2]);
+  });
 }
 
 // A successful process exit is not evidence that tests ran (e.g. --help).

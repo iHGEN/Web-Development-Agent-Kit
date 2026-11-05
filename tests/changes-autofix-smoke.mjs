@@ -234,6 +234,61 @@ try {
   fs.rmSync(capture);
   fs.writeFileSync(manifest, originalManifest);
   cleanIsolatedWorktrees();
+  // A workspace-scoped npm invocation must inspect the selected package,
+  // not the safe root test script. Include name, directory, short/repeated
+  // selectors, --workspaces, and implicit lifecycle hooks.
+  const workspaceRoot = path.join(project, "packages");
+  const apiWorkspace = path.join(workspaceRoot, "api");
+  const webWorkspace = path.join(workspaceRoot, "web");
+  fs.mkdirSync(apiWorkspace, { recursive: true });
+  fs.mkdirSync(webWorkspace, { recursive: true });
+  fs.writeFileSync(manifest, JSON.stringify({ name: "fixture", private: true,
+    workspaces: ["packages/*"], scripts: { test: "node --test" } }));
+  const apiManifest = path.join(apiWorkspace, "package.json");
+  const safeWorkspaceScripts = { pretest: "node --test", test: "node --test", posttest: "node --test" };
+  const maskedWorkspaceScripts = {
+    test: "npm run unit && npm run integration",
+    unit: "node --test --test-reporter=tap test/unit.test.js",
+    integration: "node --test --test-reporter=tap test/integration.test.js > /dev/null 2>&1 || true",
+  };
+  const writeApiScripts = scripts => fs.writeFileSync(apiManifest, JSON.stringify({ name: "@fixture/api", scripts }));
+  writeApiScripts(maskedWorkspaceScripts);
+  fs.writeFileSync(path.join(webWorkspace, "package.json"), JSON.stringify({ name: "@fixture/web", scripts: safeWorkspaceScripts }));
+  for (const mode of ["masked-workspace-script", "masked-workspace-short-selector", "masked-workspace-repeated",
+    "masked-workspace-all", "masked-workspace-parent", "masked-workspace-lifecycle",
+    "masked-nested-workspace-selector", "unsupported-workspace-selector"]) {
+    if (mode === "masked-workspace-lifecycle") {
+      writeApiScripts({ pretest: "node test/security-check.mjs > /dev/null 2>&1 || true", test: "node --test" });
+    } else if (mode === "masked-nested-workspace-selector") {
+      writeApiScripts({ test: "npm run test --workspace=packages/web" });
+      fs.writeFileSync(path.join(webWorkspace, "package.json"), JSON.stringify({ name: "@fixture/web", scripts: maskedWorkspaceScripts }));
+    } else writeApiScripts(maskedWorkspaceScripts);
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const result = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(result.status, 0, `${mode} must block unsafe or unresolved workspace test scripts`);
+    assert.match(result.stderr, /Auto-fix NOT READY/);
+    assert(!fs.existsSync(capture), `${mode} created a PR with unsafe workspace checks`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch`);
+    if (mode === "masked-nested-workspace-selector") {
+      fs.writeFileSync(path.join(webWorkspace, "package.json"), JSON.stringify({ name: "@fixture/web", scripts: safeWorkspaceScripts }));
+    }
+    cleanIsolatedWorktrees();
+  }
+  // A single explicitly selected safe workspace must pass even if a different
+  // workspace has unsafe scripts; --workspaces must validate them all.
+  for (const mode of ["safe-workspace", "safe-workspace-all"]) {
+    if (mode === "safe-workspace-all") writeApiScripts(safeWorkspaceScripts);
+    const result = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.equal(result.status, 0, `${mode} must accept verifiably safe npm workspace scripts: ${result.stderr}`);
+    assert.match(result.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+    fs.rmSync(capture);
+    cleanIsolatedWorktrees();
+  }
+  fs.writeFileSync(manifest, originalManifest);
+  fs.rmSync(workspaceRoot, { recursive: true });
+  assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Workspace fixtures must leave original edits intact");
   assert.equal(git(["status", "--porcelain=v1"]), statusBefore, "Script masking tests must restore the original project");
 
   const failedAudit = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "failed-audit" });

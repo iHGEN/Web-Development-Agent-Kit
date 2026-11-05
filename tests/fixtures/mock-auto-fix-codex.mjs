@@ -65,7 +65,19 @@ if (phase === "fix") {
       "go-cached": "go test -json ./...",
       "go-masked-failure": "go test -count=1 -json ./...",
     };
-    const command = goCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
+    const workspaceCommands = {
+      "masked-workspace-script": "npm run test --workspace=packages/api",
+      "masked-workspace-short-selector": "npm test -w @fixture/api",
+      "masked-workspace-repeated": "npm run test --workspace=packages/web --workspace=packages/api",
+      "masked-workspace-all": "npm run test --workspaces",
+      "masked-workspace-parent": "npm run test --workspace=packages",
+      "masked-workspace-lifecycle": "npm run test --workspace=packages/api",
+      "masked-nested-workspace-selector": "npm run test --workspace=packages/api",
+      "unsupported-workspace-selector": "npm run test --workspace=packages/missing",
+      "safe-workspace": "npm run test --workspace=packages/web",
+      "safe-workspace-all": "npm run test --workspaces",
+    };
+    const command = goCommands[mode] || workspaceCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
       : mode?.startsWith("dotnet-") ? "dotnet test"
         : mode === "fake-checks" ? "echo npm test"
           : ["masked-test", "masked-plus-real"].includes(mode) ? "npm test || true"
