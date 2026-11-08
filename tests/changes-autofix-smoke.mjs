@@ -16,6 +16,7 @@ const capture = path.join(root, "created-pr.json");
 const reviewPrompt = path.join(root, "review-prompt.txt");
 const mockCodex = path.join(source, "tests", "fixtures", "mock-auto-fix-codex.mjs");
 const mockGh = path.join(source, "tests", "fixtures", "mock-pr-gh.mjs");
+const mockHanging = path.join(source, "tests", "fixtures", "mock-hanging-external.mjs");
 const env = {
   ...process.env,
   WEB_KIT_DISABLE_CONTEXT_SUPERVISOR: "1",
@@ -37,14 +38,18 @@ function ok(command, args, cwd) {
 const git = args => ok("git", args);
 function cleanIsolatedWorktrees() {
   const worktrees = git(["worktree", "list", "--porcelain"]);
+  const temporaryParents = new Set();
   for (const line of worktrees.split("\n")) {
     if (!line.startsWith("worktree ")) continue;
     const directory = line.slice("worktree ".length);
     if (directory === project || directory.startsWith(root + path.sep)) continue;
     if (!path.basename(path.dirname(directory)).startsWith("web-kit-auto-fix-")) continue;
     git(["worktree", "remove", "--force", directory]);
-    fs.rmdirSync(path.dirname(directory));
+    temporaryParents.add(path.dirname(directory));
   }
+  // A timed-out gh invocation intentionally retains its recovery worktree;
+  // remove only temporary test-owned directories after deregistering worktrees.
+  for (const directory of temporaryParents) fs.rmSync(directory, { recursive: true, force: true });
 }
 try {
   // npmrc may select a workspace even for an unqualified `npm test` command.
@@ -70,6 +75,15 @@ try {
   fs.mkdirSync(path.join(project, "src"));
   fs.writeFileSync(path.join(project, "src", "feature.js"), "export const safe = false;\n");
   fs.writeFileSync(path.join(project, "package.json"), '{"name":"fixture","private":true}\n');
+  fs.writeFileSync(path.join(project, ".gitignore"), "runtime.generated\n");
+  fs.mkdirSync(path.join(project, "tests"));
+  fs.writeFileSync(path.join(project, "tests", "ignored-dependency.test.mjs"), [
+    'import test from "node:test";',
+    'import assert from "node:assert/strict";',
+    'import fs from "node:fs";',
+    'test("required generated input exists", () => assert.ok(fs.existsSync("runtime.generated")));',
+    "",
+  ].join("\n"));
   ok("git", ["init", "-q", "-b", "main"]);
   git(["config", "user.name", "Web Kit Smoke Test"]);
   git(["config", "user.email", "web-kit-test@example.invalid"]);
@@ -131,10 +145,15 @@ try {
   assert.equal(diagnostic.status, 0, `Expected rg no-match must not invalidate passing tests: ${diagnostic.stderr}`);
   assert.match(diagnostic.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
   fs.rmSync(capture);
+  const rootedDiagnostic = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "rg-no-match-rooted" });
+  assert.equal(rootedDiagnostic.status, 0, `Rooted read-only rg no-match must also be benign: ${rootedDiagnostic.stderr}`);
+  assert.match(rootedDiagnostic.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
   const unrelatedEnv = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "env-unrelated-diagnostic" });
   assert.equal(unrelatedEnv.status, 0, `A nonvalidation environment diagnostic must not invalidate real tests: ${unrelatedEnv.stderr}`);
   fs.rmSync(capture);
-  for (const mode of ["go-success", "go-verbose-success", "maven-success", "dotnet-success", "noisy-output",
+  for (const mode of ["go-success", "go-verbose-success", "jest-success", "vitest-success", "pytest-success",
+    "cargo-success", "ctest-success", "maven-success", "dotnet-success", "noisy-output",
     "node-spec-success", "bun-direct-success"]) {
     const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
@@ -165,12 +184,17 @@ try {
     "help-only", "help-only-short-version", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests",
     "go-package-only", "go-nonmatching-run", "go-nonmatching-json", "go-skipped", "go-cached",
     "maven-skipped", "dotnet-skipped", "node-spec-skipped", "bun-direct-zero",
-    "bun-run-missing-script",
+    "bun-run-missing-script", "node-tap-skipped-fake-count", "node-real-skipped-fake-count", "node-direct-fake-jest",
+    "jest-skipped-fake-count", "vitest-skipped-fake-count", "pytest-skipped-fake-count", "bun-skipped-fake-count",
   ]) {
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
     const help = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.notEqual(help.status, 0, `${mode} must not count as executed tests`);
     assert.match(help.stderr, /Required executed test\/check evidence is missing/);
     assert(!fs.existsSync(capture), `${mode} opened a PR without executing tests`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch with fake pass output`);
     cleanIsolatedWorktrees();
   }
 
@@ -364,6 +388,52 @@ try {
   assert.notEqual(failedAudit.status, 0, "A failed security audit must invalidate otherwise green test evidence");
   assert.match(failedAudit.stderr, /Required executed test\/check evidence is missing/);
   assert(!fs.existsSync(capture));
+  cleanIsolatedWorktrees();
+
+  for (const prefix of ["echo", "printf", "rg", "grep"]) {
+    const mode = `diagnostic-masked-audit-${prefix}`;
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const hiddenAudit = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(hiddenAudit.status, 0, `${prefix} chain must not hide a failed audit`);
+    assert.match(hiddenAudit.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} created a PR despite a masked audit`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch despite a disguised audit`);
+    cleanIsolatedWorktrees();
+  }
+
+  // The original isolated worktree has a real (but Git-ignored) generated file.
+  // Tests pass there yet fail when re-run from only the candidate Git tree.
+  const beforeIgnored = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+    "refs/heads/review-fix"], root);
+  const ignored = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "ignored-test-dependency" });
+  assert.notEqual(ignored.status, 0, "An ignored file must not certify an unreproducible PR tree");
+  assert.match(ignored.stdout, /Independent final-tree verification/, "Ignored-dependency case did not reach verification");
+  assert(!fs.existsSync(capture), "Ignored test dependency opened a PR");
+  assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+    "refs/heads/review-fix"], root), beforeIgnored, "Ignored test dependency pushed a branch");
+  cleanIsolatedWorktrees();
+
+  const hungGit = run(process.execPath, args, project, {
+    WEB_KIT_REVIEW_GIT_BIN: mockHanging,
+    WEB_KIT_REVIEW_TEST_HANG_EXTERNAL: "git",
+    WEB_KIT_REVIEW_COMMAND_TIMEOUT_SECONDS: "1",
+  });
+  assert.notEqual(hungGit.status, 0, "A stalled git fetch must be terminated");
+  assert.match(hungGit.stderr, /fetch timed out after 1 seconds/);
+  assert(!fs.existsSync(capture), "A stalled git fetch unexpectedly opened a PR");
+  cleanIsolatedWorktrees();
+
+  const hungGh = run(process.execPath, args, project, {
+    WEB_KIT_REVIEW_GH_BIN: mockHanging,
+    WEB_KIT_REVIEW_TEST_HANG_EXTERNAL: "gh",
+    WEB_KIT_REVIEW_COMMAND_TIMEOUT_SECONDS: "1",
+  });
+  assert.notEqual(hungGh.status, 0, "A stalled GitHub CLI invocation must be terminated");
+  assert.match(hungGh.stderr, /pr timed out after 1 seconds/);
+  assert.match(hungGh.stderr, /Isolated worktree retained for recovery:/);
+  assert(!fs.existsSync(capture), "A stalled GitHub CLI invocation unexpectedly opened a PR");
   cleanIsolatedWorktrees();
 
   const staleTest = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "stale-test" });

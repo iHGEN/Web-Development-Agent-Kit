@@ -5,14 +5,29 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+// The Git/Cli subprocesses are synchronous but must have a hard deadline, too.
+// This is separate from the Codex session deadline in changes-review.mjs.
+function externalTimeoutMs() {
+  const raw = process.env.WEB_KIT_REVIEW_COMMAND_TIMEOUT_SECONDS ?? "120";
+  if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 3600) {
+    throw new Error("WEB_KIT_REVIEW_COMMAND_TIMEOUT_SECONDS must be 1–3600 seconds.");
+  }
+  return Number(raw) * 1000;
+}
+
 function command(executable, args, cwd, { input, allowFailure = false } = {}) {
+  const timeout = externalTimeoutMs();
+  const operation = args[0] === "-c" && args[1] === "core.fsmonitor=false" ? args[2] : args[0];
   const result = spawnSync(executable.command, [...executable.prefix, ...args], {
     cwd, input, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, windowsHide: true,
+    timeout, killSignal: "SIGKILL",
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
   });
-  if (result.error) throw new Error(`${args[0]} could not start: ${result.error.message}`);
+  if (result.error?.code === "ETIMEDOUT") throw new Error(`${operation} timed out after ${timeout / 1000} seconds; operation aborted.`);
+  if (result.error) throw new Error(`${operation} could not start: ${result.error.message}`);
+  if (result.signal) throw new Error(`${operation} terminated by ${result.signal}; operation aborted.`);
   if (!allowFailure && result.status !== 0) {
-    throw new Error(`${args[0]} failed (exit ${result.status}): ${(result.stderr || result.stdout || "").trim().slice(0, 1500)}`);
+    throw new Error(`${operation} failed (exit ${result.status}): ${(result.stderr || result.stdout || "").trim().slice(0, 1500)}`);
   }
   return result;
 }
@@ -166,18 +181,21 @@ const check = (text, project) => {
 // are exempt; their text is not evidence that validation ran.
 const suspiciousValidation = (text, project) => {
   const raw = unwrappedShellCommand(text);
-  if (check(text, project) || /^(?:rg|grep|echo|printf)(?:\s|$)/i.test(raw)) return false;
+  if (check(text, project)) return false;
+  // Exempt only the WHOLE diagnostic invocation. In particular, a shell
+  // prefix such as `echo x; npm run audit > /dev/null || true` is not benign.
+  const diagnostic = safeCommand(text, project) ?? safeCommand(text);
+  if (diagnostic && /^(?:rg|grep|echo|printf)(?:\s|$)/i.test(diagnostic)) return false;
   return /\b(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|gradlew?)\b[^\r\n]*\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(raw);
 };
-const benignSearchMiss = event => event.exitCode === 1
-  && /^(?:rg|grep)(?:\s|$)/.test(shellCommand(event.command))
-  && safeCommand(event.command) !== null;
+const benignSearchMiss = (event, project) => event.exitCode === 1
+  && /^(?:rg|grep)(?:\s|$)/.test(safeCommand(event.command, project) ?? safeCommand(event.command) ?? "");
 
 // An npm script can hide a failing child command even when the outer command
 // is just `npm test`. Inspect common failure summaries AND every script in a
 // shell chain. If shell control flow cannot be checked safely, fail closed.
 function failedTestSummary(output) {
-  const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "");
+  const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "").replace(/\r\n?/g, "\n");
   const patterns = [
     /(?:^|\n)\s*#\s*fail\s+[1-9]\d*\b/im, // Node TAP
     /(?:^|\n)\s*ℹ\s+fail\s+[1-9]\d*\b/im, // Node spec reporter
@@ -186,6 +204,7 @@ function failedTestSummary(output) {
     /\b(?:Failures|Errors|Failed)\s*:\s*[1-9]\d*\b/im, // Maven/.NET
     /(?:^|\n)\s*test result:\s*FAILED\b/im, // Cargo
     /(?:^|\n)\s*not ok\s+\d+\b/im, // TAP assertions
+    /(?:^|\n)\s*--- FAIL:\s+\S+/im, // Go verbose
     /\b[1-9]\d*\s+failed\s*[,;|]\s*\d+\s+passed\b/im,
     /\b\d+\s+passed\s*[,;|]\s*[1-9]\d*\s+failed\b/im,
     /(?:^|\n)\s*=+[^\n]*\b[1-9]\d*\s+failed\b/im, // pytest
@@ -361,7 +380,7 @@ export function maskedPackageTestScript(project, command) {
 // Go prints "ok" even for -run patterns matching no tests, and can replay
 // cached results. Require uncached, test-level passes from -json or -v.
 function executedTestCount(output, command) {
-  const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "");
+  const plain = String(output || "").replace(/\x1b\[[\d;]*m/g, "").replace(/\r\n?/g, "\n");
   const executedCommand = shellCommand(command);
   if (/^go\s+test(?:\s|$)/i.test(executedCommand)) {
     if (!/(?:^|\s)-count=1(?:\s|$)/i.test(executedCommand)) return 0;
@@ -377,29 +396,82 @@ function executedTestCount(output, command) {
     if (/(?:^|\s)-v(?:\s|$)/i.test(executedCommand)) {
       passed += [...plain.matchAll(/^\s*--- PASS:\s+\S+/gm)].length;
     }
-    return passed;
+    return failedTestSummary(plain) ? 0 : passed;
   }
-  const expressions = [
-    /(?:^|\n)\s*#\s*pass\s+(\d+)\b/gim, // node --test TAP; skipped tests aren't counted
-    /(?:^|\n)\s*ℹ\s+pass\s+(\d+)\b/gim, // Node 24 default spec reporter
-    /(?:^|\n)\s*(\d+)\s+pass\s*$/gim, // Bun test runner
-    /\bTests?:\s*(\d+)\s+passed\b/gim, // Jest
-    /\bTests?\s+(\d+)\s+passed\b/gim, // Vitest
-    /\b(\d+)\s+(?:tests?\s+)?passed\b/gim, // pytest, Cargo, Jest, .NET
-    /(?:^|\n)[^\n]*\bPassed!\s*-\s*Failed:\s*0,\s*Passed:\s*(\d+)\b/gim, // dotnet test
-  ];
-  let highest = 0;
-  for (const expression of expressions) {
-    for (const match of plain.matchAll(expression)) highest = Math.max(highest, Number(match[1]));
+  // Never infer execution from arbitrary `9 passed` text. Collect recognized,
+  // runner-specific summary records and reject if ANY record is contradictory,
+  // all-skipped, zero-pass or failed. Console output printed by an application
+  // cannot overrule a runner's authoritative zero-pass summary.
+  const expectedRunner = /^node\s+--test(?:\s|$)/i.test(executedCommand) ? "node"
+    : /^bun\s+test(?:\s|$)/i.test(executedCommand) ? "bun"
+      : /^mvn\s+test(?:\s|$)/i.test(executedCommand) ? "maven"
+        : /^dotnet\s+test(?:\s|$)/i.test(executedCommand) ? "dotnet"
+          : /^cargo\s+test(?:\s|$)/i.test(executedCommand) ? "cargo"
+            : /^(?:(?:npx\s+)?vitest\s+run)(?:\s|$)/i.test(executedCommand) ? "vitest"
+              : /^(?:npx\s+)?jest(?:\s|$)/i.test(executedCommand) ? "jest"
+                : /^(?:(?:python3?\s+-m\s+)?pytest)(?:\s|$)/i.test(executedCommand) ? "pytest"
+                  : /^ctest(?:\s|$)/i.test(executedCommand) ? "ctest" : "script";
+  const summaries = [];
+  const add = (runner, passed, failed = 0, skipped = 0, total) => {
+    summaries.push({ runner, passed: Number(passed), failed: Number(failed), skipped: Number(skipped),
+      total: total === undefined ? undefined : Number(total) });
+  };
+  // Node's TAP and spec reporters prefix their trailing counters with # / ℹ.
+  // Ordinary stdout is distinguished from these summary lines by the prefix.
+  const nodeCounters = [...plain.matchAll(/^(?:#\s*|ℹ\s+)(tests|pass|fail|skipped|cancelled)\s+(\d+)\s*$/gm)];
+  if (nodeCounters.length) {
+    const metric = name => nodeCounters.filter(match => match[1] === name).map(match => Number(match[2]));
+    const passes = metric("pass"), totals = metric("tests"), fails = metric("fail");
+    if (!passes.length || !totals.length) add("node", 0);
+    else for (const passed of passes) add("node", passed, Math.max(0, ...fails),
+      Math.max(0, ...metric("skipped"), ...metric("cancelled")), Math.max(0, ...totals));
   }
-  // Maven Surefire counts skipped tests in "Tests run"; they must not
-  // establish positive execution evidence, nor can failed tests do so.
-  for (const match of plain.matchAll(/(?:^|\n)\s*Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)(?:,\s*Skipped:\s*(\d+))?/gim)) {
-    if (Number(match[2]) === 0 && Number(match[3]) === 0) {
-      highest = Math.max(highest, Number(match[1]) - Number(match[4] || 0));
-    }
+  // Bun's built-in test runner writes `N pass`, `N fail`, `N skip` lines.
+  const bunPasses = [...plain.matchAll(/^\s*(\d+)\s+pass\s*$/gm)];
+  if (bunPasses.length) {
+    const bunFails = [...plain.matchAll(/^\s*(\d+)\s+fail\s*$/gm)].map(match => Number(match[1]));
+    for (const match of bunPasses) add("bun", match[1], Math.max(0, ...bunFails));
   }
-  return highest;
+  // Jest and Vitest have different labelled summary formats; inspect their
+  // *test* counts, not an unrelated test-suite/file count or user log line.
+  for (const match of plain.matchAll(/^\s*Tests:\s*([^\r\n]+)$/gm)) {
+    const metrics = [...match[1].matchAll(/(\d+)\s+(passed|failed|skipped|total|todo)/g)];
+    const count = name => metrics.filter(m => m[2] === name).reduce((sum, m) => sum + Number(m[1]), 0);
+    add("jest", count("passed"), count("failed"), count("skipped"), count("total") || undefined);
+  }
+  for (const match of plain.matchAll(/^\s*Tests\s+(?=\d+\s+(?:passed|failed|skipped))([^\r\n]+)$/gm)) {
+    const metrics = [...match[1].matchAll(/(\d+)\s+(passed|failed|skipped)/g)];
+    const count = name => metrics.filter(m => m[2] === name).reduce((sum, m) => sum + Number(m[1]), 0);
+    add("vitest", count("passed"), count("failed"), count("skipped"));
+  }
+  // pytest wraps the final totals in `=== ... ===`; Cargo uses `test result:`.
+  for (const match of plain.matchAll(/^=+\s+([^\r\n]*\b\d+\s+(?:passed|failed|skipped)[^\r\n]*)\s+=+\s*$/gm)) {
+    const count = name => [...match[1].matchAll(new RegExp(`(\\d+)\\s+${name}`, "g"))]
+      .reduce((sum, m) => sum + Number(m[1]), 0);
+    add("pytest", count("passed"), count("failed"), count("skipped"));
+  }
+  for (const match of plain.matchAll(/^\s*test result:\s*(ok|FAILED)\.\s*([^\r\n]+)$/gm)) {
+    const count = name => Number(match[2].match(new RegExp(`(\\d+)\\s+${name}`))?.[1] ?? 0);
+    add("cargo", count("passed"), count("failed") + (match[1] === "FAILED" ? 1 : 0), count("ignored"));
+  }
+  // Maven includes skipped tests in `Tests run`; dotnet reports passed directly.
+  for (const match of plain.matchAll(/^\s*Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)(?:,\s*Skipped:\s*(\d+))?/gm)) {
+    add("maven", Number(match[1]) - Number(match[4] || 0) - Number(match[2]) - Number(match[3]),
+      Number(match[2]) + Number(match[3]), match[4] || 0, match[1]);
+  }
+  for (const match of plain.matchAll(/^\s*Passed!\s*-\s*Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)/gm)) {
+    add("dotnet", match[2], match[1], match[3], match[4]);
+  }
+  // ctest reports a percentage plus the exact number run.
+  for (const match of plain.matchAll(/^\s*(\d+)% tests passed,\s*(\d+) tests failed out of\s*(\d+)/gm)) {
+    add("ctest", Number(match[3]) - Number(match[2]), match[2], 0, match[3]);
+  }
+  const matched = summaries.filter(summary => expectedRunner === "script" || summary.runner === expectedRunner);
+  if (failedTestSummary(plain) || matched.length === 0
+    || summaries.some(summary => !Number.isSafeInteger(summary.passed) || summary.passed <= 0
+      || !Number.isSafeInteger(summary.failed) || summary.failed !== 0
+      || (summary.total !== undefined && summary.passed + summary.skipped > summary.total))) return 0;
+  return Math.max(...matched.map(summary => summary.passed));
 }
 
 // Treat an application's tests as belonging to its package, not every other
@@ -610,7 +682,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
     created = true;
     if (changes.patch) git(gitBin, worktree, ["apply", "--binary", "-"], { input: changes.patch });
     copyUntracked(project, worktree, changes.untracked);
-    let priorFindings = initialReport, finalReview, realChecks = [], passed = false;
+    let priorFindings = initialReport, finalReview, realChecks = [], passed = false, validatedTree;
     for (let pass = 1; pass <= 3; pass += 1) {
       const fixPrompt = [
         "You are a NEW, independent senior fixing engineer. Do not resume the previous reviewer's context.",
@@ -629,30 +701,44 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
       if (after.paths.some(sensitive)) throw new Error("Fixer produced credential-like files; automatic PR publication stopped.");
       const scopeEscapes = after.paths.filter(file => !changes.paths.includes(file) && !directlyRelatedTest(file, changes.paths));
       if (scopeEscapes.length) throw new Error(`Fixer changed files outside the approved current-diff/test scope: ${scopeEscapes.join(", ")}`);
-      // Verify after the fixer exits so a green test from before its final
-      // edit can never certify the published tree. The verifier must preserve
-      // the exact source snapshot it tests.
-      const beforeVerification = readChangeSet(worktree, gitBin, { snapshot: true });
+      // Stage the exact proposed tree INSIDE the disposable fixer worktree;
+      // ignored build artifacts and local fixtures are deliberately excluded.
+      // A fresh second checkout starts with those exact Git objects, never the
+      // fixer's possibly contaminated filesystem or index. No user Git state
+      // is touched, and the SHA must still match immediately before commit.
+      gitText(gitBin, worktree, ["add", "-A"]);
+      gitText(gitBin, worktree, ["diff", "--cached", "--check"]);
+      const candidateTree = gitText(gitBin, worktree, ["write-tree"]);
+      const candidate = path.join(temporary, `candidate-${pass}`);
+      gitText(gitBin, worktree, ["worktree", "add", "--detach", candidate, "HEAD"]);
+      gitText(gitBin, candidate, ["read-tree", "--reset", "-u", candidateTree]);
+      if (gitText(gitBin, candidate, ["write-tree"]) !== candidateTree
+        || git(gitBin, candidate, ["diff", "--exit-code"], { allowFailure: true }).status !== 0) {
+        throw new Error("Clean candidate checkout differs from the proposed Git tree.");
+      }
+      // Verify AFTER fixing and only from the clean candidate. This also
+      // catches tests that secretly require ignored/unpublished local files.
+      const beforeVerification = readChangeSet(candidate, gitBin, { snapshot: true });
       const verificationPrompt = [
         "You are an independent verification engineer in a NEW Codex session. Do not edit source, tests, configuration, or Git state.",
         `Verify the current changes for: ${request}`,
         `Changed files: ${JSON.stringify(after.paths)}`,
-        `For EACH test, build, lint, typecheck, audit or other validation, execute a SINGLE shell command starting with cd "${worktree}" && followed by the validation command. Quote the absolute directory exactly as shown. This explicit fail-fast root cd is REQUIRED because Codex command events do not attest cwd; a separate cd command or implicit tool workdir cannot count as proof. To test a workspace, use the package manager's explicit workspace flags from the root. Do not use an environment override or shell wrapper to change validation scope.`,
+        `This is a fresh checkout of the proposed Git tree; no ignored/generated files were copied from the fixer. Recreate required artifacts with recorded setup commands. For EACH test, build, lint, typecheck, audit or other validation, execute a SINGLE shell command starting with cd "${candidate}" && followed by the validation command. Quote the absolute directory exactly as shown. This explicit fail-fast root cd is REQUIRED because Codex command events do not attest cwd; a separate cd command or implicit tool workdir cannot count as proof. To test a workspace, use the package manager's explicit workspace flags from the root. Do not use an environment override or shell wrapper to change validation scope.`,
         "Execute real relevant project tests (and lint/build/security checks where applicable) now, after all fixer edits. For Go use 'go test -count=1 -json ./...' or '-count=1 -v' to prove actual, uncached test-level passes; a package-level 'ok' is not enough. Do not mask failures with shell operators, pipes, fallbacks, or wrappers like '|| true'.",
         "Report only commands actually executed and their outcomes. Do not commit, push, or open a PR.",
       ].join("\n\n");
-      const verifier = await codexSession(codex, worktree, verificationPrompt, "workspace-write", "verify");
-      const verified = readChangeSet(worktree, gitBin, { snapshot: true });
+      const verifier = await codexSession(codex, candidate, verificationPrompt, "workspace-write", "verify");
+      const verified = readChangeSet(candidate, gitBin, { snapshot: true });
       if (beforeVerification.fingerprint !== verified.fingerprint
         || JSON.stringify(beforeVerification.paths) !== JSON.stringify(verified.paths)) {
         throw new Error("Verification changed the source snapshot; checks do not certify the final tree.");
       }
-      const failedExecutions = verifier.commands.filter(item => item.exitCode !== 0 && !benignSearchMiss(item));
-      const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command, worktree));
-      realChecks = verifier.commands.filter(item => check(item.command, worktree))
-        .map(item => ({ ...item, auditedCommand: safeCommand(item.command, worktree) }));
+      const failedExecutions = verifier.commands.filter(item => item.exitCode !== 0 && !benignSearchMiss(item, candidate));
+      const suspicious = verifier.commands.filter(item => suspiciousValidation(item.command, candidate));
+      realChecks = verifier.commands.filter(item => check(item.command, candidate))
+        .map(item => ({ ...item, auditedCommand: safeCommand(item.command, candidate) }));
       const failedTestOutputs = realChecks.filter(item => testCheck(item.auditedCommand) && failedTestSummary(item.output));
-      const maskedScripts = realChecks.filter(item => testCheck(item.auditedCommand) && maskedPackageTestScript(worktree, item.auditedCommand));
+      const maskedScripts = realChecks.filter(item => testCheck(item.auditedCommand) && maskedPackageTestScript(candidate, item.auditedCommand));
       const checkSummary = verifier.commands.map(item => ({ command: item.command, exit_code: item.exitCode }));
       passed = realChecks.some(item => testCheck(item.auditedCommand) && item.exitCode === 0
         && executedTestCount(item.output, item.auditedCommand) > 0)
@@ -666,9 +752,17 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
         "Review the full working diff in this isolated branch as the exact eventual PR scope, including added tests. Only report issues introduced by these changes, tracing directly impacted callers as context.",
         `Include 'Unresolved findings (JSON): []' ONLY when the final review contains no unresolved P0-P2 findings; otherwise include a JSON array of unresolved findings with severity, file and summary. End with exact lines 'Remaining P0-P2 findings: none' ONLY if genuinely true, and 'PR readiness: READY TO OPEN PR' ONLY if the change is production-ready, all relevant checks have passed, and no known P0/P1/material P2 findings remain. Otherwise end with 'PR readiness: NOT READY' or 'PR readiness: VERIFICATION BLOCKED'. ${publishPr ? "Publication requires these conditions." : "No PR will be opened; this is a local-only fix."}`,
       ].join("\n\n");
-      finalReview = await codexSession(codex, worktree, strictReviewPrompt(request, "Isolated current changes plus verified fixes", after.paths, followup, true), "read-only", "re-review");
+      finalReview = await codexSession(codex, candidate, strictReviewPrompt(request,
+        "Clean candidate Git tree plus verified fixes", after.paths, followup, true), "read-only", "re-review");
       process.stdout.write(`\n### Fresh post-fix review (pass ${pass})\n${finalReview.report}\n`);
-      if (passed && readyReport(finalReview.report)) break;
+      if (gitText(gitBin, candidate, ["write-tree"]) !== candidateTree
+        || git(gitBin, candidate, ["diff", "--exit-code"], { allowFailure: true }).status !== 0
+        || gitText(gitBin, worktree, ["write-tree"]) !== candidateTree
+        || git(gitBin, worktree, ["diff", "--exit-code"], { allowFailure: true }).status !== 0) {
+        throw new Error("Candidate source changed after the verified tree was prepared.");
+      }
+      gitText(gitBin, worktree, ["worktree", "remove", "--force", candidate]);
+      if (passed && readyReport(finalReview.report)) { validatedTree = candidateTree; break; }
       priorFindings = finalReview.report + (passed ? "" : "\nRequired real test/check evidence was missing or failing; rerun relevant checks.");
     }
     if (!passed || !readyReport(finalReview.report)) {
@@ -702,6 +796,7 @@ export async function runAutoFix({ project, git: gitBin, gh, codex, changes, req
     if (!staged.length || staged.some(sensitive)) throw new Error("No safe scoped files were staged for the PR.");
     checkPublishableFiles(worktree, gitBin, staged);
     const reviewedTree = gitText(gitBin, worktree, ["write-tree"]);
+    if (reviewedTree !== validatedTree) throw new Error("Published Git tree does not match the clean verified candidate.");
     gitText(gitBin, worktree, ["commit", "-m", "fix: address current changes review findings"]);
     if (gitText(gitBin, worktree, ["rev-parse", "HEAD^{tree}"]) !== reviewedTree
       || git(gitBin, worktree, ["status", "--porcelain", "-z"]).stdout) {

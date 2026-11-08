@@ -46,6 +46,11 @@ if (phase === "fix") {
   if (process.env.WEB_KIT_REVIEW_TEST_MODE === "provider-key-leak") {
     fs.appendFileSync(target, `// ${process.env.OPENAI_API_KEY}\n`);
   }
+  if (process.env.WEB_KIT_REVIEW_TEST_MODE === "ignored-test-dependency") {
+    // The original isolated worktree sees this file; an exact fresh Git-tree
+    // checkout must not. The verifier below executes a real dependent test.
+    fs.writeFileSync(path.join(project, "runtime.generated"), "uncommitted test dependency\n");
+  }
   emit({ type: "item.completed", item: { type: "agent_message", text: "Fixed the confirmed issue; independent verification follows." } });
 } else if (phase === "verify") {
   const mode = process.env.WEB_KIT_REVIEW_TEST_MODE;
@@ -92,7 +97,14 @@ if (phase === "fix") {
       "masked-workspace-env-absolute": "/usr/bin/env npm_config_workspace=packages/api npm run test",
       "masked-workspace-prefixed-shell": "set -e; npm_config_workspace=packages/api npm run test",
     };
-    const command = goCommands[mode] || workspaceCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
+    const directCommands = {
+      "jest-success": "npx jest",
+      "vitest-success": "npx vitest run",
+      "pytest-success": "pytest",
+      "cargo-success": "cargo test",
+      "ctest-success": "ctest",
+    };
+    const command = goCommands[mode] || workspaceCommands[mode] || directCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
       : mode?.startsWith("dotnet-") ? "dotnet test"
         : mode === "fake-checks" ? "echo npm test"
           : mode === "env-unrelated-diagnostic" ? "env NODE_ENV=test npm --version"
@@ -121,6 +133,11 @@ if (phase === "fix") {
       "go-masked-failure": `${goPassed}\n${JSON.stringify({ Action: "fail", Package: "example.org/app", Test: "TestBroken" })}\n`,
     };
     const otherOutputs = {
+      "jest-success": "Test Suites: 1 passed, 1 total\nTests: 3 passed, 3 total\n",
+      "vitest-success": " Test Files 1 passed (1)\n Tests 3 passed (3)\n",
+      "pytest-success": "================ 4 passed in 0.02s ================\n",
+      "cargo-success": "running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+      "ctest-success": "100% tests passed, 0 tests failed out of 2\n",
       "maven-success": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0\n",
       "maven-skipped": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 8\n",
       "dotnet-success": "Passed! - Failed: 0, Passed: 8, Skipped: 0, Total: 8\n",
@@ -142,8 +159,25 @@ if (phase === "fix") {
       "help-only-npm": "Usage: --help\n",
       "zero-tests": "TAP version 13\n# tests 0\n# pass 0\n",
       "all-skipped": "TAP version 13\n# tests 2\n# pass 0\n# skipped 2\n",
+      "node-tap-skipped-fake-count": "TAP version 13\n# harmless stdout: 9 passed\n# tests 1\n# pass 0\n# fail 0\n# skipped 1\n",
+      "jest-skipped-fake-count": "9 passed\nTest Suites: 1 skipped, 1 total\nTests: 1 skipped, 1 total\n",
+      "vitest-skipped-fake-count": "9 passed\n Test Files 1 skipped (1)\n Tests 1 skipped (1)\n",
+      "pytest-skipped-fake-count": "9 passed\n================ 1 skipped in 0.01s ================\n",
+      "bun-skipped-fake-count": "9 passed\n0 pass\n0 fail\n1 skip\nRan 1 tests across 1 file.\n",
+      "node-direct-fake-jest": "Tests: 9 passed, 9 total\n",
     };
-    if (mode?.startsWith("nested-cwd-masked-workspace")) {
+    if (mode === "node-real-skipped-fake-count") {
+      const real = spawnSync(process.execPath, ["-e",
+        'const test = require("node:test"); console.log("9 passed"); test("skipped", { skip: true }, () => {});'],
+      { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
+      if (real.status !== 0 || real.error || !/pass 0/.test(real.stdout)) process.exit(12);
+      emitCheck("node --test", real.status, `${real.stdout}\n${real.stderr}`);
+    } else if (mode === "ignored-test-dependency") {
+      const actual = spawnSync(process.execPath, ["--test", "tests/ignored-dependency.test.mjs"],
+        { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
+      if (actual.error) process.exit(12);
+      emitCheck("node --test tests/ignored-dependency.test.mjs", actual.status, `${actual.stdout}\n${actual.stderr}`);
+    } else if (mode?.startsWith("nested-cwd-masked-workspace")) {
       const nested = spawnSync("npm", ["test"], {
         cwd: path.join(project, "packages", "api"), encoding: "utf8", timeout: 15000,
         maxBuffer: 1024 * 1024, windowsHide: true,
@@ -160,7 +194,13 @@ if (phase === "fix") {
     "masked-workspace-prefixed-shell", "env-unrelated-diagnostic"].includes(mode)) emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
   if (mode === "failed-audit") emitCheck("npm run audit", 1);
+  if (mode?.startsWith("diagnostic-masked-audit-")) {
+    const prefix = mode.slice("diagnostic-masked-audit-".length);
+    emitCheck(`${prefix} diagnostic; npm run audit > /dev/null 2>&1 || true`, 0, "audit failed but was masked\n");
+    emitCheck("node --test", 0);
+  }
   if (mode === "rg-no-match") emitCheck("rg nonexistent-symbol src/", 1, "");
+  if (mode === "rg-no-match-rooted") emitCheck(`cd "${project}" && rg nonexistent-symbol src/`, 1, "");
   if (mode === "stale-test") {
     const target = path.join(project, "src", "feature.js");
     fs.appendFileSync(target, "// modified AFTER verification started\n");

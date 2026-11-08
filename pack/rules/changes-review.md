@@ -51,18 +51,25 @@ npx @ihgen/web-kit review @autofix --no-pr
    findings in the original changed code and directly related test files. New
    test files must match the changed module's filename; unrelated existing tests
    and production files are outside scope and stop automatic publication.
-4. Start an independent **post-fix verification session**, run real tests/checks,
-   require each validation command to explicitly enter the isolated Git root
-   in the same fail-fast shell invocation (`cd "<absolute-worktree>" && ...`),
+4. Stage the proposed candidate in the **temporary fixer worktree**, record
+   its Git tree SHA, and materialize that tree in a separate **fresh disposable
+   checkout** without the fixer's ignored files. Start an independent post-fix
+   verification session there, reconstruct necessary generated artifacts from
+   tracked sources, and run real tests/checks. Require each validation command
+   to explicitly enter the clean candidate Git root in the same fail-fast shell
+   invocation (`cd "<absolute-candidate-checkout>" && ...`),
    because Codex command events do not reliably identify the actual cwd,
    reject non-executing test options (such as `--help`), masked failures (such as
    `npm test || true`), inline environment overrides and unverified npmrc
-   workspace selection, missing positive test counts, failed validations and
-   unexpected command errors. A read-only search yielding no matches (`rg`
+   workspace selection, zero/all-skipped or contradictory runner summaries,
+   failing commands hidden behind diagnostic prefixes, missing real positive
+   test counts, failed validations and unexpected command errors. A standalone
+   read-only search yielding no matches (`rg`
    exit 1) is not a failed validation. Reject any modifications to the verified
-   source snapshot. Codex's shell environment policy must exclude provider API
-   keys from model-run project commands. Then start a fresh
-   read-only re-review. Automatically repeat the fix/verification/re-review
+   source snapshot. The final staged Git tree must equal the clean verified
+   candidate tree. Codex's shell environment policy must exclude provider API
+   keys from model-run project commands. Then start a fresh read-only re-review
+   on the same clean candidate. Automatically repeat the fix/verification/re-review
    cycle up to three times if findings or required checks remain unresolved.
 5. **Only** with successful executed tests, a clean Git diff and `READY TO OPEN
    PR` with no known P0/P1/material P2 findings, commit the isolated changes,
@@ -83,6 +90,9 @@ worktree for recovery. The auto-fix shortcut requires Git history, an `origin`
 remote, an accessible local Codex CLI and GitHub CLI authentication. It is not
 enabled by an ordinary "review" request; `--auto-fix=false` is the default.
 Dot remains the CI/CD owner; this command does not dispatch GitHub Actions.
+Git and GitHub CLI subprocesses are also bounded (default 120 seconds each;
+set `WEB_KIT_REVIEW_COMMAND_TIMEOUT_SECONDS` to an integer 1–3600). A timeout
+or termination aborts publication and retains the isolated fixer worktree.
 
 Inside an existing Codex CLI conversation, saying **"review these changes"**
 starts the separate read-only reviewer and returns its report in the same chat.
