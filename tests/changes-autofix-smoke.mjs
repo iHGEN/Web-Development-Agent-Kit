@@ -84,6 +84,11 @@ try {
     'test("required generated input exists", () => assert.ok(fs.existsSync("runtime.generated")));',
     "",
   ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "fake.mjs"), [
+    '// This ordinary Node script deliberately registers ZERO test assertions.',
+    'process.stdout.write("TAP version 13\\n# tests 2\\n# pass 2\\n# fail 0\\n# skipped 0\\n");',
+    "",
+  ].join("\n"));
   ok("git", ["init", "-q", "-b", "main"]);
   git(["config", "user.name", "Web Kit Smoke Test"]);
   git(["config", "user.email", "web-kit-test@example.invalid"]);
@@ -152,9 +157,41 @@ try {
   const unrelatedEnv = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "env-unrelated-diagnostic" });
   assert.equal(unrelatedEnv.status, 0, `A nonvalidation environment diagnostic must not invalidate real tests: ${unrelatedEnv.stderr}`);
   fs.rmSync(capture);
+  // Reproduce the independent P1: Node executes a normal script with no test
+  // harness, yet its printed TAP counters currently grant publication.
+  for (const mode of ["fabricated-tap-generic-node", "fabricated-tap-generic-node-with-real",
+    "fabricated-tap-make", "fabricated-tap-gradle", "fabricated-tap-playwright"]) {
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const fakeTap = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(fakeTap.status, 0, `${mode}: an opaque wrapper cannot authenticate TAP output`);
+    assert.match(fakeTap.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} created a PR from fabricated test counts`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch despite fake counts`);
+    cleanIsolatedWorktrees();
+  }
+
+  // npm test can also hide the same generic Node script in scripts.test.
+  const fakeManifest = path.join(project, "package.json");
+  const beforeFakeManifest = fs.readFileSync(fakeManifest, "utf8");
+  fs.writeFileSync(fakeManifest, JSON.stringify({ name: "fixture", private: true, scripts: { test: "node tests/fake.mjs" } }));
+  try {
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const wrapped = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "fabricated-tap-npm" });
+    assert.notEqual(wrapped.status, 0, "npm test with a counterfeit-TAP Node script must fail closed");
+    assert.match(wrapped.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), "npm script with fabricated TAP created a PR");
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, "npm script with fake TAP pushed a branch");
+  } finally {
+    fs.writeFileSync(fakeManifest, beforeFakeManifest);
+    cleanIsolatedWorktrees();
+  }
   for (const mode of ["go-success", "go-verbose-success", "jest-success", "vitest-success", "pytest-success",
     "cargo-success", "ctest-success", "maven-success", "dotnet-success", "noisy-output",
-    "node-spec-success", "bun-direct-success"]) {
+    "node-spec-success", "bun-direct-success", "playwright-success"]) {
     const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
     assert.match(verified.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
@@ -186,6 +223,7 @@ try {
     "maven-skipped", "dotnet-skipped", "node-spec-skipped", "bun-direct-zero",
     "bun-run-missing-script", "node-tap-skipped-fake-count", "node-real-skipped-fake-count", "node-direct-fake-jest",
     "jest-skipped-fake-count", "vitest-skipped-fake-count", "pytest-skipped-fake-count", "bun-skipped-fake-count",
+    "playwright-skipped-fake-count", "playwright-masked-failure",
   ]) {
     const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
       "refs/heads/review-fix"], root);

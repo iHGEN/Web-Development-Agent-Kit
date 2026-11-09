@@ -62,6 +62,8 @@ npx @ihgen/web-kit review @autofix --no-pr
    reject non-executing test options (such as `--help`), masked failures (such as
    `npm test || true`), inline environment overrides and unverified npmrc
    workspace selection, zero/all-skipped or contradictory runner summaries,
+   fabricated runner summaries from arbitrary Node scripts and opaque test
+   wrappers (for example `node tests/fake.mjs` or `make test`),
    failing commands hidden behind diagnostic prefixes, missing real positive
    test counts, failed validations and unexpected command errors. A standalone
    read-only search yielding no matches (`rg`

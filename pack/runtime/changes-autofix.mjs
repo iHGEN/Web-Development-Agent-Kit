@@ -166,7 +166,11 @@ function safeCommand(text, project) {
   return command && !/[;&|<>`$\r\n]/.test(command) && !noTests.test(command) && !versionOnly.test(command) ? command : null;
 }
 const safeArgs = String.raw`(?:\s+[-\w./:@+=]+)*`;
-const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+(?:--test|(?:\S*\/)?tests\/[-\w./]+)|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:\.\/)?gradlew?\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|make\s+test|ctest)${safeArgs}$`, "i");
+// Generic Node scripts, Makefile/Gradle tasks and opaque wrappers can simply
+// print runner-looking TAP counters. Only recognized runner invocations with
+// their own matching pass summaries may authorize publication. Package-manager
+// test scripts are also inspected before their output can count.
+const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+--test|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|ctest)${safeArgs}$`, "i");
 const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check|audit|security)(?:[:\w-]*)|node\s+(?:\S*\/)?(?:scripts\/)?[-\w./]*(?:check|audit|lint|build)[-\w./]*)${safeArgs}$`, "i");
 const testCheck = (text, project) => {
   const command = safeCommand(text, project);
@@ -186,7 +190,7 @@ const suspiciousValidation = (text, project) => {
   // prefix such as `echo x; npm run audit > /dev/null || true` is not benign.
   const diagnostic = safeCommand(text, project) ?? safeCommand(text);
   if (diagnostic && /^(?:rg|grep|echo|printf)(?:\s|$)/i.test(diagnostic)) return false;
-  return /\b(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|gradlew?)\b[^\r\n]*\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(raw);
+  return /\b(?:npm|pnpm|yarn|bun|node|npx|python3?|pytest|go|cargo|dotnet|mvn|make|ctest|gradlew?|playwright)\b[^\r\n]*\b(?:test|tests|audit|lint|build|typecheck|security-check|jest|pytest|vitest|playwright|check)\b/i.test(raw);
 };
 const benignSearchMiss = (event, project) => event.exitCode === 1
   && /^(?:rg|grep)(?:\s|$)/.test(safeCommand(event.command, project) ?? safeCommand(event.command) ?? "");
@@ -409,8 +413,9 @@ function executedTestCount(output, command) {
           : /^cargo\s+test(?:\s|$)/i.test(executedCommand) ? "cargo"
             : /^(?:(?:npx\s+)?vitest\s+run)(?:\s|$)/i.test(executedCommand) ? "vitest"
               : /^(?:npx\s+)?jest(?:\s|$)/i.test(executedCommand) ? "jest"
-                : /^(?:(?:python3?\s+-m\s+)?pytest)(?:\s|$)/i.test(executedCommand) ? "pytest"
-                  : /^ctest(?:\s|$)/i.test(executedCommand) ? "ctest" : "script";
+                : /^(?:npx\s+)?playwright\s+test(?:\s|$)/i.test(executedCommand) ? "playwright"
+                  : /^(?:(?:python3?\s+-m\s+)?pytest)(?:\s|$)/i.test(executedCommand) ? "pytest"
+                    : /^ctest(?:\s|$)/i.test(executedCommand) ? "ctest" : "script";
   const summaries = [];
   const add = (runner, passed, failed = 0, skipped = 0, total) => {
     summaries.push({ runner, passed: Number(passed), failed: Number(failed), skipped: Number(skipped),
@@ -443,6 +448,15 @@ function executedTestCount(output, command) {
     const metrics = [...match[1].matchAll(/(\d+)\s+(passed|failed|skipped)/g)];
     const count = name => metrics.filter(m => m[2] === name).reduce((sum, m) => sum + Number(m[1]), 0);
     add("vitest", count("passed"), count("failed"), count("skipped"));
+  }
+  // Playwright's native human reporter uses `N passed (1.2s)` and `N skipped`/
+  // `N failed` summary rows. TAP-looking text from a test is *not* Playwright
+  // evidence; contradictory native rows must not be overruled by fake passes.
+  const playwrightMetrics = [...plain.matchAll(/^\s*(\d+)\s+(passed|failed|skipped|interrupted)(?:\s+\([\d.]+\s*(?:ms|s|m|h)\))?\s*$/gm)];
+  if (playwrightMetrics.length) {
+    const count = name => playwrightMetrics.filter(match => match[2] === name)
+      .reduce((sum, match) => sum + Number(match[1]), 0);
+    add("playwright", count("passed"), count("failed") + count("interrupted"), count("skipped"));
   }
   // pytest wraps the final totals in `=== ... ===`; Cargo uses `test result:`.
   for (const match of plain.matchAll(/^=+\s+([^\r\n]*\b\d+\s+(?:passed|failed|skipped)[^\r\n]*)\s+=+\s*$/gm)) {

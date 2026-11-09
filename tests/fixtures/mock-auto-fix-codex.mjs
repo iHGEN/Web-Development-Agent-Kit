@@ -59,7 +59,7 @@ if (phase === "fix") {
     // A verified command is explicitly rooted IN THE SAME SHELL INVOCATION;
     // Codex JSONL does not expose an authoritative command working directory.
     // Simulate old/ambiguous events only for the nested-workspace negative case.
-    const rooted = /^(?:npm|pnpm|yarn|bun|node|go|mvn|dotnet|cargo|pytest|python|make|ctest|gradle|npx)\b/i.test(command)
+    const rooted = /^(?:npm|pnpm|yarn|bun|node|go|mvn|dotnet|cargo|pytest|python|make|ctest|gradle|npx|playwright|(?:\.\/)?gradlew?)\b/i.test(command)
       && !(mode?.startsWith("nested-cwd-masked-workspace") && command === "npm test");
     emit({ type: "item.completed", item: {
       type: "command_execution", command: rooted ? `cd "${project}" && ${command}` : command,
@@ -103,6 +103,15 @@ if (phase === "fix") {
       "pytest-success": "pytest",
       "cargo-success": "cargo test",
       "ctest-success": "ctest",
+      "playwright-success": "npx playwright test",
+      "playwright-skipped-fake-count": "playwright test",
+      "playwright-masked-failure": "playwright test",
+      "fabricated-tap-generic-node": "node tests/fake.mjs",
+      "fabricated-tap-generic-node-with-real": "node tests/fake.mjs",
+      "fabricated-tap-npm": "npm test",
+      "fabricated-tap-make": "make test",
+      "fabricated-tap-gradle": "./gradlew test",
+      "fabricated-tap-playwright": "playwright test",
     };
     const command = goCommands[mode] || workspaceCommands[mode] || directCommands[mode] || (mode?.startsWith("maven-") ? "mvn test"
       : mode?.startsWith("dotnet-") ? "dotnet test"
@@ -138,6 +147,9 @@ if (phase === "fix") {
       "pytest-success": "================ 4 passed in 0.02s ================\n",
       "cargo-success": "running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
       "ctest-success": "100% tests passed, 0 tests failed out of 2\n",
+      "playwright-success": "Running 2 tests using 1 worker\n  2 passed (1.2s)\n",
+      "playwright-skipped-fake-count": "TAP version 13\n# tests 9\n# pass 9\n# fail 0\n  1 skipped\n",
+      "playwright-masked-failure": "  2 passed (1.2s)\n  1 failed (1.3s)\n",
       "maven-success": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 0\n",
       "maven-skipped": "Tests run: 8, Failures: 0, Errors: 0, Skipped: 8\n",
       "dotnet-success": "Passed! - Failed: 0, Passed: 8, Skipped: 0, Total: 8\n",
@@ -166,7 +178,14 @@ if (phase === "fix") {
       "bun-skipped-fake-count": "9 passed\n0 pass\n0 fail\n1 skip\nRan 1 tests across 1 file.\n",
       "node-direct-fake-jest": "Tests: 9 passed, 9 total\n",
     };
-    if (mode === "node-real-skipped-fake-count") {
+    if (["fabricated-tap-generic-node", "fabricated-tap-generic-node-with-real", "fabricated-tap-npm"].includes(mode)) {
+      const actual = mode === "fabricated-tap-npm"
+        ? spawnSync("npm", ["test"], { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true })
+        : spawnSync(process.execPath, ["tests/fake.mjs"],
+          { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
+      if (actual.error || actual.status !== 0 || !/# pass 2/.test(actual.stdout)) process.exit(12);
+      emitCheck(command, actual.status, `${actual.stdout}\n${actual.stderr}`);
+    } else if (mode === "node-real-skipped-fake-count") {
       const real = spawnSync(process.execPath, ["-e",
         'const test = require("node:test"); console.log("9 passed"); test("skipped", { skip: true }, () => {});'],
       { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
@@ -190,7 +209,7 @@ if (phase === "fix") {
       emitCheck(command, 0, output);
     }
   }
-  if (["masked-plus-real", "nested-cwd-masked-workspace-with-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
+  if (["fabricated-tap-generic-node-with-real", "masked-plus-real", "nested-cwd-masked-workspace-with-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
     "masked-workspace-prefixed-shell", "env-unrelated-diagnostic"].includes(mode)) emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
   if (mode === "failed-audit") emitCheck("npm run audit", 1);
