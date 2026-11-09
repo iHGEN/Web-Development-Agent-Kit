@@ -109,6 +109,13 @@ if (phase === "fix") {
       "fabricated-tap-generic-node": "node tests/fake.mjs",
       "fabricated-tap-generic-node-with-real": "node tests/fake.mjs",
       "fabricated-tap-npm": "npm test",
+      "fabricated-tap-npm-check": "npm test",
+      "fabricated-tap-npm-audit-alias": "npm test",
+      "fabricated-tap-npm-nested-audit": "npm test",
+      "fabricated-tap-npm-check-with-real": "npm test",
+      "fabricated-tap-npm-reporter": "npm test",
+      "node-custom-reporter-fake-tap": "node --test --test-reporter=./tests/lying-reporter.mjs tests/skipped.test.mjs",
+      "node-custom-reporter-fake-tap-with-real": "node --test --test-reporter=./tests/lying-reporter.mjs tests/skipped.test.mjs",
       "fabricated-tap-make": "make test",
       "fabricated-tap-gradle": "./gradlew test",
       "fabricated-tap-playwright": "playwright test",
@@ -178,10 +185,15 @@ if (phase === "fix") {
       "bun-skipped-fake-count": "9 passed\n0 pass\n0 fail\n1 skip\nRan 1 tests across 1 file.\n",
       "node-direct-fake-jest": "Tests: 9 passed, 9 total\n",
     };
-    if (["fabricated-tap-generic-node", "fabricated-tap-generic-node-with-real", "fabricated-tap-npm"].includes(mode)) {
-      const actual = mode === "fabricated-tap-npm"
+    if (["fabricated-tap-generic-node", "fabricated-tap-generic-node-with-real", "fabricated-tap-npm",
+      "fabricated-tap-npm-check", "fabricated-tap-npm-audit-alias", "fabricated-tap-npm-nested-audit",
+      "fabricated-tap-npm-check-with-real", "fabricated-tap-npm-reporter",
+      "node-custom-reporter-fake-tap", "node-custom-reporter-fake-tap-with-real"].includes(mode)) {
+      const actual = mode === "fabricated-tap-npm" || mode.startsWith("fabricated-tap-npm-")
         ? spawnSync("npm", ["test"], { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true })
-        : spawnSync(process.execPath, ["tests/fake.mjs"],
+        : spawnSync(process.execPath, mode.startsWith("node-custom-reporter")
+          ? ["--test", "--test-reporter=./tests/lying-reporter.mjs", "tests/skipped.test.mjs"]
+          : ["tests/fake.mjs"],
           { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
       if (actual.error || actual.status !== 0 || !/# pass 2/.test(actual.stdout)) process.exit(12);
       emitCheck(command, actual.status, `${actual.stdout}\n${actual.stderr}`);
@@ -209,7 +221,8 @@ if (phase === "fix") {
       emitCheck(command, 0, output);
     }
   }
-  if (["fabricated-tap-generic-node-with-real", "masked-plus-real", "nested-cwd-masked-workspace-with-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
+  if (["fabricated-tap-generic-node-with-real", "fabricated-tap-npm-check-with-real", "node-custom-reporter-fake-tap-with-real",
+    "masked-plus-real", "nested-cwd-masked-workspace-with-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
     "masked-workspace-prefixed-shell", "env-unrelated-diagnostic"].includes(mode)) emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);
   if (mode === "failed-audit") emitCheck("npm run audit", 1);

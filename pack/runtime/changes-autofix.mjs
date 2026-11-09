@@ -172,13 +172,30 @@ const safeArgs = String.raw`(?:\s+[-\w./:@+=]+)*`;
 // test scripts are also inspected before their output can count.
 const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+--test|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|ctest)${safeArgs}$`, "i");
 const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check|audit|security)(?:[:\w-]*)|node\s+(?:\S*\/)?(?:scripts\/)?[-\w./]*(?:check|audit|lint|build)[-\w./]*)${safeArgs}$`, "i");
+// A user-supplied Node test reporter receives the real runner events but can
+// replace the summary with fabricated pass counters. Only the built-in TAP or
+// spec reporter may supply positive evidence for automatic publication.
+// Reporter destinations and unknown reporter-related switches are not audited.
+function trustedTestReporter(command) {
+  if (!/^node\s+--test(?:\s|$)/i.test(command)) return true;
+  const args = command.trim().split(/\s+/).slice(2);
+  let reporters = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index];
+    if (/^--test-reporter-(?:destination|[^=\s]+)(?:=|$)/i.test(flag)) return false;
+    if (flag !== "--test-reporter" && !flag.startsWith("--test-reporter=")) continue;
+    const value = flag === "--test-reporter" ? args[++index] : flag.slice("--test-reporter=".length);
+    if (++reporters > 1 || !["tap", "spec"].includes(value)) return false;
+  }
+  return true;
+}
 const testCheck = (text, project) => {
   const command = safeCommand(text, project);
-  return command !== null && testPattern.test(command);
+  return command !== null && testPattern.test(command) && trustedTestReporter(command);
 };
 const check = (text, project) => {
   const command = safeCommand(text, project);
-  return command !== null && (testPattern.test(command) || checkPattern.test(command));
+  return command !== null && ((testPattern.test(command) && trustedTestReporter(command)) || checkPattern.test(command));
 };
 // A validation hidden behind `env`, a shell prefix, a chain or another wrapper
 // still has to be audited. Only plain read-only inspection/printing commands
@@ -343,6 +360,7 @@ export function maskedPackageTestScript(project, command) {
     let scripts;
     try { scripts = readSafePackageManifest(target).scripts; } catch { return true; }
     const visiting = new Set();
+    let sawDirectTestRunner = false;
     const unsafeBody = script => {
       if (typeof script !== "string" || !script.trim()) return true;
       // Only a simple fail-fast && sequence is supported. Pipes, fallbacks,
@@ -354,11 +372,21 @@ export function maskedPackageTestScript(project, command) {
       if (commands.some(part => !part.trim())) return true;
       return commands.some(part => {
         const simple = part.trim();
+        // Inside an npm script, `bun test` is still Bun's own test runner;
+        // `bun run test` is a package alias and must be recursively inspected.
+        if (/^bun\s+test(?:\s|$)/i.test(simple)) {
+          if (!testCheck(simple)) return true;
+          sawDirectTestRunner = true;
+          return false;
+        }
         const child = simple.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:-]+)$/i);
         // A nested package-manager invocation with flags could switch to a
         // different workspace. Never accept it as an opaque direct test.
         if (/^(?:npm|pnpm|yarn|bun)\s+/i.test(simple)) return !child || unsafe(child[1]);
-        // An opaque wrapper or non-test command could swallow a failure and
+        // Audits/lints/builds may supplement tests, but their stdout (including
+        // forged TAP) can NEVER substitute for a recognized test runner.
+        if (testCheck(simple)) sawDirectTestRunner = true;
+        // An opaque wrapper or non-check command could swallow a failure and
         // manufacture pass-looking output. Require recognizable direct checks.
         return !check(simple);
       });
@@ -376,7 +404,7 @@ export function maskedPackageTestScript(project, command) {
         });
       } finally { visiting.delete(name); }
     };
-    return unsafe(match[2]);
+    return unsafe(match[2]) || !sawDirectTestRunner;
   });
 }
 

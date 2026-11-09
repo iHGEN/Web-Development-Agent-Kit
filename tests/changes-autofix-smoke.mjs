@@ -70,6 +70,42 @@ try {
     "A configured npm script interpreter must not bypass root-script validation");
   assert.equal(maskedPackageTestScript(npmrcProject, "bun test"), false,
     "Bun's direct runner does not depend on npm workspace configuration");
+  fs.rmSync(path.join(npmrcProject, ".npmrc"));
+  for (const scripts of [
+    { test: "node scripts/security-check.mjs" },
+    { test: "npm run audit", audit: "node scripts/security-check.mjs" },
+    { test: "npm run unit", unit: "npm run audit", audit: "node scripts/security-check.mjs" },
+  ]) {
+    fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts }));
+    assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
+      "A check-named script or a nested audit alias must not substitute for a test runner");
+  }
+  fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
+    test: "npm run audit && node --test", audit: "node scripts/security-check.mjs",
+  } }));
+  assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), false,
+    "A supplementary audit plus a verified test runner must remain supported");
+  fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
+    test: "bun test",
+  } }));
+  assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), false,
+    "An npm script may launch Bun's directly verified built-in runner");
+  for (const reporterOption of ["--test-reporter=./tests/lying-reporter.mjs",
+    "--test-reporter ./tests/lying-reporter.mjs", "--test-reporter-destination=./report.log",
+    "--test-reporter=tap --test-reporter=./tests/lying-reporter.mjs"]) {
+    fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
+      test: `node --test ${reporterOption} tests/skipped.test.mjs`,
+    } }));
+    assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
+      `Untrusted or redirected Node reporter configuration must block publication: ${reporterOption}`);
+  }
+  for (const reporterOption of ["--test-reporter=tap", "--test-reporter spec"]) {
+    fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
+      test: `node --test ${reporterOption} tests/real.test.mjs`,
+    } }));
+    assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), false,
+      `A built-in Node test reporter must remain supported: ${reporterOption}`);
+  }
 
   fs.mkdirSync(project);
   fs.mkdirSync(path.join(project, "src"));
@@ -89,6 +125,34 @@ try {
     'process.stdout.write("TAP version 13\\n# tests 2\\n# pass 2\\n# fail 0\\n# skipped 0\\n");',
     "",
   ].join("\n"));
+  fs.mkdirSync(path.join(project, "scripts"));
+  fs.writeFileSync(path.join(project, "scripts", "security-check.mjs"), [
+    "// This audit-looking command prints fake success, but executes no test assertions.",
+    'process.stdout.write("TAP version 13\\n# tests 2\\n# pass 2\\n# fail 0\\n# skipped 0\\n");',
+    "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "skipped.test.mjs"), [
+    'import test from "node:test";',
+    'test("the only real test", { skip: true }, () => {});',
+    "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "lying-reporter.mjs"), [
+    "// Consume the REAL test-runner events but falsely report two passing tests.",
+    "export default async function* (events) {",
+    "  for await (const _event of events) {}",
+    '  yield "TAP version 13\\n# tests 2\\n# pass 2\\n# fail 0\\n# skipped 0\\n";',
+    "}",
+    "",
+  ].join("\n"));
+  const skippedNative = run(process.execPath, ["--test", "--test-reporter=tap", "tests/skipped.test.mjs"]);
+  assert.equal(skippedNative.status, 0, skippedNative.stderr);
+  assert.match(skippedNative.stdout, /# pass 0\b/);
+  assert.match(skippedNative.stdout, /# skipped 1\b/);
+  const forgedNative = run(process.execPath, ["--test", "--test-reporter=./tests/lying-reporter.mjs",
+    "tests/skipped.test.mjs"]);
+  assert.equal(forgedNative.status, 0, forgedNative.stderr);
+  assert.match(forgedNative.stdout, /# pass 2\b/,
+    "A real custom Node reporter can forge passing counts despite all-skipped tests");
   ok("git", ["init", "-q", "-b", "main"]);
   git(["config", "user.name", "Web Kit Smoke Test"]);
   git(["config", "user.email", "web-kit-test@example.invalid"]);
@@ -187,6 +251,43 @@ try {
       "refs/heads/review-fix"], root), branchesBefore, "npm script with fake TAP pushed a branch");
   } finally {
     fs.writeFileSync(fakeManifest, beforeFakeManifest);
+    cleanIsolatedWorktrees();
+  }
+  // Both newer P1 bypasses use real Node/npm processes that return exit 0
+  // without any passing test. The publication gate must reject their evidence,
+  // including when a separate legitimate test command has passed.
+  for (const [mode, scripts] of [
+    ["fabricated-tap-npm-check", { test: "node scripts/security-check.mjs" }],
+    ["fabricated-tap-npm-audit-alias", { test: "npm run audit", audit: "node scripts/security-check.mjs" }],
+    ["fabricated-tap-npm-nested-audit", {
+      test: "npm run unit", unit: "npm run audit", audit: "node scripts/security-check.mjs",
+    }],
+    ["fabricated-tap-npm-check-with-real", { test: "node scripts/security-check.mjs" }],
+    ["fabricated-tap-npm-reporter", {
+      test: "node --test --test-reporter=./tests/lying-reporter.mjs tests/skipped.test.mjs",
+    }],
+  ]) {
+    fs.writeFileSync(fakeManifest, JSON.stringify({ name: "fixture", private: true, scripts }));
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const result = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(result.status, 0, `${mode}: fabricated npm test output must not authorize publication`);
+    assert.match(result.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} created a PR without a positive assertion`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch without genuine tests`);
+    cleanIsolatedWorktrees();
+  }
+  fs.writeFileSync(fakeManifest, beforeFakeManifest);
+  for (const mode of ["node-custom-reporter-fake-tap", "node-custom-reporter-fake-tap-with-real"]) {
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const result = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(result.status, 0, `${mode}: custom reporter cannot certify an all-skipped Node run`);
+    assert.match(result.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} opened a PR on forged Node reporter counts`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch on fake Node pass counts`);
     cleanIsolatedWorktrees();
   }
   for (const mode of ["go-success", "go-verbose-success", "jest-success", "vitest-success", "pytest-success",
