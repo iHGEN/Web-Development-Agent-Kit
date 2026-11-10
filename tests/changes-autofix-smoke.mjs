@@ -92,14 +92,22 @@ try {
     "An npm script may launch Bun's directly verified built-in runner");
   for (const reporterOption of ["--test-reporter=./tests/lying-reporter.mjs",
     "--test-reporter ./tests/lying-reporter.mjs", "--test-reporter-destination=./report.log",
-    "--test-reporter=tap --test-reporter=./tests/lying-reporter.mjs"]) {
+    "--test-reporter=tap --test-reporter=./tests/lying-reporter.mjs",
+    "--test_reporter=./tests/lying-reporter.mjs", "--test_reporter ./tests/lying-reporter.mjs",
+    "--test_reporter_destination=./report.log", "--import=./tests/lying-preload.mjs",
+    "--import ./tests/lying-preload.mjs", "--require=./tests/lying-preload.cjs",
+    "--require ./tests/lying-preload.cjs", "-r ./tests/lying-preload.cjs",
+    "--experimental-loader=./tests/lying-preload.mjs", "--loader ./tests/lying-preload.mjs",
+    "--test-name-pattern=only-positive", "--test-skip-pattern=failing", "--test-shard=1/2",
+    "--test-only"]) {
     fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
       test: `node --test ${reporterOption} tests/skipped.test.mjs`,
     } }));
     assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
       `Untrusted or redirected Node reporter configuration must block publication: ${reporterOption}`);
   }
-  for (const reporterOption of ["--test-reporter=tap", "--test-reporter spec"]) {
+  for (const reporterOption of ["--test-reporter=tap", "--test-reporter spec", "--test_reporter=tap",
+    "--test-concurrency=2", "--test-timeout=1000"]) {
     fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
       test: `node --test ${reporterOption} tests/real.test.mjs`,
     } }));
@@ -137,13 +145,27 @@ try {
     "",
   ].join("\n"));
   fs.writeFileSync(path.join(project, "tests", "lying-reporter.mjs"), [
-    "// Consume the REAL test-runner events but falsely report two passing tests.",
+    "// Consume real events, forge the output and suppress the runner's failed exit code.",
     "export default async function* (events) {",
     "  for await (const _event of events) {}",
+    "  process.exitCode = 0;",
     '  yield "TAP version 13\\n# tests 2\\n# pass 2\\n# fail 0\\n# skipped 0\\n";',
     "}",
     "",
   ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "failing.test.mjs"), [
+    'import test from "node:test";',
+    'test("actual failing test", () => { throw new Error("intentional failure"); });',
+    "",
+  ].join("\n"));
+  for (const file of ["lying-preload.mjs", "lying-preload.cjs"]) {
+    fs.writeFileSync(path.join(project, "tests", file), [
+      "// Spoof passing tests and exit before the test runner can execute any tests.",
+      'process.stdout.write("TAP version 13\\n# tests 2\\n# pass 2\\n# fail 0\\n# skipped 0\\n");',
+      "process.exit(0);",
+      "",
+    ].join("\n"));
+  }
   const skippedNative = run(process.execPath, ["--test", "--test-reporter=tap", "tests/skipped.test.mjs"]);
   assert.equal(skippedNative.status, 0, skippedNative.stderr);
   assert.match(skippedNative.stdout, /# pass 0\b/);
@@ -153,6 +175,19 @@ try {
   assert.equal(forgedNative.status, 0, forgedNative.stderr);
   assert.match(forgedNative.stdout, /# pass 2\b/,
     "A real custom Node reporter can forge passing counts despite all-skipped tests");
+  const failedNative = run(process.execPath, ["--test", "--test-reporter=tap", "tests/failing.test.mjs"]);
+  assert.notEqual(failedNative.status, 0, "Control: the real Node test runner must report test failure");
+  assert.match(failedNative.stdout, /# fail 1\b/);
+  for (const attackOptions of [
+    ["--test_reporter=./tests/lying-reporter.mjs"],
+    ["--import=./tests/lying-preload.mjs"],
+    ["--require=./tests/lying-preload.cjs"],
+  ]) {
+    const forged = run(process.execPath, ["--test", ...attackOptions, "tests/failing.test.mjs"]);
+    assert.equal(forged.status, 0, `Reproduction should conceal actual failure: ${attackOptions}: ${forged.stderr}`);
+    assert.match(forged.stdout, /# pass 2\b/,
+      `Real ${attackOptions} produced fabricated pass counters`);
+  }
   ok("git", ["init", "-q", "-b", "main"]);
   git(["config", "user.name", "Web Kit Smoke Test"]);
   git(["config", "user.email", "web-kit-test@example.invalid"]);
@@ -289,6 +324,27 @@ try {
     assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
       "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch on fake Node pass counts`);
     cleanIsolatedWorktrees();
+  }
+  for (const [mode, scriptBody] of [
+    ["node-underscore-reporter-fail", null],
+    ["node-underscore-reporter-fail-with-real", null],
+    ["node-import-fake-pass", null],
+    ["node-import-fake-pass-with-real", null],
+    ["node-require-fake-pass", null],
+    ["npm-import-fake-pass", "node --test --import=./tests/lying-preload.mjs tests/failing.test.mjs"],
+    ["npm-require-fake-pass", "node --test --require=./tests/lying-preload.cjs tests/failing.test.mjs"],
+  ]) {
+    if (scriptBody) fs.writeFileSync(fakeManifest, JSON.stringify({ name: "fixture", private: true, scripts: { test: scriptBody } }));
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const attack = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(attack.status, 0, `${mode} must block a real failure/no-test with forged pass counts`);
+    assert.match(attack.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} created a PR from an executable preload or custom reporter`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed despite missing passing tests`);
+    cleanIsolatedWorktrees();
+    if (scriptBody) fs.writeFileSync(fakeManifest, beforeFakeManifest);
   }
   for (const mode of ["go-success", "go-verbose-success", "jest-success", "vitest-success", "pytest-success",
     "cargo-success", "ctest-success", "maven-success", "dotnet-success", "noisy-output",

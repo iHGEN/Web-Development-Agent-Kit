@@ -116,6 +116,13 @@ if (phase === "fix") {
       "fabricated-tap-npm-reporter": "npm test",
       "node-custom-reporter-fake-tap": "node --test --test-reporter=./tests/lying-reporter.mjs tests/skipped.test.mjs",
       "node-custom-reporter-fake-tap-with-real": "node --test --test-reporter=./tests/lying-reporter.mjs tests/skipped.test.mjs",
+      "node-underscore-reporter-fail": "node --test --test_reporter=./tests/lying-reporter.mjs tests/failing.test.mjs",
+      "node-underscore-reporter-fail-with-real": "node --test --test_reporter=./tests/lying-reporter.mjs tests/failing.test.mjs",
+      "node-import-fake-pass": "node --test --import=./tests/lying-preload.mjs tests/failing.test.mjs",
+      "node-import-fake-pass-with-real": "node --test --import=./tests/lying-preload.mjs tests/failing.test.mjs",
+      "node-require-fake-pass": "node --test --require=./tests/lying-preload.cjs tests/failing.test.mjs",
+      "npm-import-fake-pass": "npm test",
+      "npm-require-fake-pass": "npm test",
       "fabricated-tap-make": "make test",
       "fabricated-tap-gradle": "./gradlew test",
       "fabricated-tap-playwright": "playwright test",
@@ -185,15 +192,24 @@ if (phase === "fix") {
       "bun-skipped-fake-count": "9 passed\n0 pass\n0 fail\n1 skip\nRan 1 tests across 1 file.\n",
       "node-direct-fake-jest": "Tests: 9 passed, 9 total\n",
     };
+    const realNodeArgs = {
+      "node-underscore-reporter-fail": ["--test", "--test_reporter=./tests/lying-reporter.mjs", "tests/failing.test.mjs"],
+      "node-underscore-reporter-fail-with-real": ["--test", "--test_reporter=./tests/lying-reporter.mjs", "tests/failing.test.mjs"],
+      "node-import-fake-pass": ["--test", "--import=./tests/lying-preload.mjs", "tests/failing.test.mjs"],
+      "node-import-fake-pass-with-real": ["--test", "--import=./tests/lying-preload.mjs", "tests/failing.test.mjs"],
+      "node-require-fake-pass": ["--test", "--require=./tests/lying-preload.cjs", "tests/failing.test.mjs"],
+    };
     if (["fabricated-tap-generic-node", "fabricated-tap-generic-node-with-real", "fabricated-tap-npm",
       "fabricated-tap-npm-check", "fabricated-tap-npm-audit-alias", "fabricated-tap-npm-nested-audit",
       "fabricated-tap-npm-check-with-real", "fabricated-tap-npm-reporter",
-      "node-custom-reporter-fake-tap", "node-custom-reporter-fake-tap-with-real"].includes(mode)) {
+      "node-custom-reporter-fake-tap", "node-custom-reporter-fake-tap-with-real",
+      "npm-import-fake-pass", "npm-require-fake-pass", ...Object.keys(realNodeArgs)].includes(mode)) {
       const actual = mode === "fabricated-tap-npm" || mode.startsWith("fabricated-tap-npm-")
+        || mode === "npm-import-fake-pass" || mode === "npm-require-fake-pass"
         ? spawnSync("npm", ["test"], { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true })
-        : spawnSync(process.execPath, mode.startsWith("node-custom-reporter")
+        : spawnSync(process.execPath, realNodeArgs[mode] ?? (mode.startsWith("node-custom-reporter")
           ? ["--test", "--test-reporter=./tests/lying-reporter.mjs", "tests/skipped.test.mjs"]
-          : ["tests/fake.mjs"],
+          : ["tests/fake.mjs"]),
           { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
       if (actual.error || actual.status !== 0 || !/# pass 2/.test(actual.stdout)) process.exit(12);
       emitCheck(command, actual.status, `${actual.stdout}\n${actual.stderr}`);
@@ -222,6 +238,7 @@ if (phase === "fix") {
     }
   }
   if (["fabricated-tap-generic-node-with-real", "fabricated-tap-npm-check-with-real", "node-custom-reporter-fake-tap-with-real",
+    "node-underscore-reporter-fail-with-real", "node-import-fake-pass-with-real",
     "masked-plus-real", "nested-cwd-masked-workspace-with-real", "masked-workspace-env-with-real", "masked-workspace-env-absolute",
     "masked-workspace-prefixed-shell", "env-unrelated-diagnostic"].includes(mode)) emitCheck("node --test", 0);
   if (mode === "audit-pass") emitCheck("npm run audit", 0);

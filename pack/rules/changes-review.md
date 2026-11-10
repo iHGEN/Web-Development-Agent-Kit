@@ -66,7 +66,9 @@ npx @ihgen/web-kit review @autofix --no-pr
    wrappers (for example `node tests/fake.mjs` or `make test`),
    npm test scripts that only invoke check/audit/lint aliases without a
    directly recognized test runner, and custom Node `--test-reporter` modules
-   that can forge passing counters for skipped tests,
+   that can forge passing counters for skipped tests, including underscore
+   flag aliases, executable Node preloads (`--import`, `--require`/`-r`) and
+   loaders that can exit before tests run,
    failing commands hidden behind diagnostic prefixes, missing real positive
    test counts, failed validations and unexpected command errors. A standalone
    read-only search yielding no matches (`rg`

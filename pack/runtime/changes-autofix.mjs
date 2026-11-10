@@ -172,30 +172,38 @@ const safeArgs = String.raw`(?:\s+[-\w./:@+=]+)*`;
 // test scripts are also inspected before their output can count.
 const testPattern = new RegExp(String.raw`^(?:npm\s+(?:run\s+)?test(?:[:\w-]*)|pnpm\s+(?:run\s+)?test(?:[:\w-]*)|yarn\s+test(?:[:\w-]*)|bun\s+(?:run\s+)?test(?:[:\w-]*)|node\s+--test|(?:python(?:3)?\s+-m\s+)?pytest|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test|(?:npx\s+)?(?:vitest\s+run|jest|playwright\s+test)|ctest)${safeArgs}$`, "i");
 const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|build|typecheck|check|audit|security)(?:[:\w-]*)|node\s+(?:\S*\/)?(?:scripts\/)?[-\w./]*(?:check|audit|lint|build)[-\w./]*)${safeArgs}$`, "i");
-// A user-supplied Node test reporter receives the real runner events but can
-// replace the summary with fabricated pass counters. Only the built-in TAP or
-// spec reporter may supply positive evidence for automatic publication.
-// Reporter destinations and unknown reporter-related switches are not audited.
-function trustedTestReporter(command) {
+// Node accepts underscore spellings for CLI options, and executable preloads
+// (--import, --require/-r, loaders, etc.) can print fake TAP and exit BEFORE
+// the actual tests. Allow only a few non-executing test-runner options, with
+// aliases normalized, and only Node's built-in TAP/spec reporters. This is a
+// publication-evidence allowlist, not a restriction on ordinary development.
+function trustedTestInvocation(command) {
   if (!/^node\s+--test(?:\s|$)/i.test(command)) return true;
   const args = command.trim().split(/\s+/).slice(2);
   let reporters = 0;
   for (let index = 0; index < args.length; index += 1) {
-    const flag = args[index];
-    if (/^--test-reporter-(?:destination|[^=\s]+)(?:=|$)/i.test(flag)) return false;
-    if (flag !== "--test-reporter" && !flag.startsWith("--test-reporter=")) continue;
-    const value = flag === "--test-reporter" ? args[++index] : flag.slice("--test-reporter=".length);
-    if (++reporters > 1 || !["tap", "spec"].includes(value)) return false;
+    const token = args[index];
+    if (!token.startsWith("-")) continue; // Positional test file or directory.
+    const separator = token.indexOf("=");
+    const option = (separator < 0 ? token : token.slice(0, separator)).toLowerCase().replaceAll("_", "-");
+    const inlineValue = separator < 0 ? undefined : token.slice(separator + 1);
+    if (option === "--experimental-test-coverage" && inlineValue === undefined) continue;
+    if (!["--test-reporter", "--test-concurrency", "--test-timeout"].includes(option)) return false;
+    const value = inlineValue ?? args[++index];
+    if (!value || value.startsWith("-")) return false;
+    if (option === "--test-reporter") {
+      if (++reporters > 1 || !["tap", "spec"].includes(value)) return false;
+    } else if (!/^\d+$/.test(value) || Number(value) < 1 || !Number.isSafeInteger(Number(value))) return false;
   }
   return true;
 }
 const testCheck = (text, project) => {
   const command = safeCommand(text, project);
-  return command !== null && testPattern.test(command) && trustedTestReporter(command);
+  return command !== null && testPattern.test(command) && trustedTestInvocation(command);
 };
 const check = (text, project) => {
   const command = safeCommand(text, project);
-  return command !== null && ((testPattern.test(command) && trustedTestReporter(command)) || checkPattern.test(command));
+  return command !== null && ((testPattern.test(command) && trustedTestInvocation(command)) || checkPattern.test(command));
 };
 // A validation hidden behind `env`, a shell prefix, a chain or another wrapper
 // still has to be audited. Only plain read-only inspection/printing commands
