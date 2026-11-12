@@ -175,7 +175,9 @@ const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+
 // Node accepts underscore spellings for CLI options, and executable preloads
 // (--import, --require/-r, loaders, etc.) can print fake TAP and exit BEFORE
 // the actual tests. Allow only a few non-executing test-runner options, with
-// aliases normalized, and only Node's built-in TAP/spec reporters. This is a
+// aliases normalized, and only Node's built-in TAP reporter. The built-in spec
+// reporter forwards arbitrary test stdout verbatim, so a no-test script can
+// print fake spec events. This is a
 // publication-evidence allowlist, not a restriction on ordinary development.
 function trustedTestInvocation(command) {
   if (!/^node\s+--test(?:\s|$)/i.test(command)) return true;
@@ -192,7 +194,7 @@ function trustedTestInvocation(command) {
     const value = inlineValue ?? args[++index];
     if (!value || value.startsWith("-")) return false;
     if (option === "--test-reporter") {
-      if (++reporters > 1 || !["tap", "spec"].includes(value)) return false;
+      if (++reporters > 1 || value !== "tap") return false;
     } else if (!/^\d+$/.test(value) || Number(value) < 1 || !Number.isSafeInteger(Number(value))) return false;
   }
   return true;
@@ -467,6 +469,27 @@ function executedTestCount(output, command) {
     else for (const passed of passes) add("node", passed, Math.max(0, ...fails),
       Math.max(0, ...metric("skipped"), ...metric("cancelled")), Math.max(0, ...totals));
   }
+  // `node --test tests/empty.test.mjs` exits 0 and reports `# pass 1` even
+  // though ZERO node:test cases were registered: the runner counts the FILE
+  // itself as a synthetic passing subtest. For publication, require at least
+  // one genuine, non-file TAP `ok` record. The TAP reporter escapes arbitrary
+  // child stdout as comments; unlike spec, logs cannot forge these records.
+  // Do not let an npm audit/check script print an `ok` line before or after
+  // the actual Node runner and thereby make its empty-file pass look genuine.
+  // The TAP block must be unique, and a registered test must precede its own
+  // authoritative `# tests` total. Child stdout cannot add an unescaped header.
+  const tapHeaders = [...plain.matchAll(/^TAP version 13\s*$/gm)];
+  const tapStart = tapHeaders.length === 1 ? tapHeaders[0].index + tapHeaders[0][0].length : -1;
+  const tapTotals = tapStart < 0 ? -1 : plain.indexOf("\n# tests ", tapStart);
+  const nativeTapBody = tapTotals < 0 ? "" : plain.slice(tapStart, tapTotals);
+  const nodeTestNames = [...nativeTapBody.matchAll(/^[ \t]*ok\s+\d+\s+-\s+([^\r\n]+)$/gm)]
+    .map(match => match[1].trim());
+  const directArgs = /^node\s+--test(?:\s|$)/i.test(executedCommand) ? executedCommand.trim().split(/\s+/).slice(2) : [];
+  // Source paths in supported commands have no spaces; human test titles may
+  // legitimately describe routes such as "GET /health".
+  const genuineNodeTest = nodeTestNames.some(name => (!/[\\/]/.test(name) || /\s/.test(name))
+    && !/\.(?:[cm]?js|[jt]sx?)$/i.test(name)
+    && !directArgs.includes(name));
   // Bun's built-in test runner writes `N pass`, `N fail`, `N skip` lines.
   const bunPasses = [...plain.matchAll(/^\s*(\d+)\s+pass\s*$/gm)];
   if (bunPasses.length) {
@@ -518,6 +541,7 @@ function executedTestCount(output, command) {
   }
   const matched = summaries.filter(summary => expectedRunner === "script" || summary.runner === expectedRunner);
   if (failedTestSummary(plain) || matched.length === 0
+    || (summaries.some(summary => summary.runner === "node") && !genuineNodeTest)
     || summaries.some(summary => !Number.isSafeInteger(summary.passed) || summary.passed <= 0
       || !Number.isSafeInteger(summary.failed) || summary.failed !== 0
       || (summary.total !== undefined && summary.passed + summary.skipped > summary.total))) return 0;

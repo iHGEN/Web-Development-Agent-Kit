@@ -90,7 +90,7 @@ try {
   } }));
   assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), false,
     "An npm script may launch Bun's directly verified built-in runner");
-  for (const reporterOption of ["--test-reporter=./tests/lying-reporter.mjs",
+  for (const reporterOption of ["--test-reporter=./tests/lying-reporter.mjs", "--test-reporter=spec",
     "--test-reporter ./tests/lying-reporter.mjs", "--test-reporter-destination=./report.log",
     "--test-reporter=tap --test-reporter=./tests/lying-reporter.mjs",
     "--test_reporter=./tests/lying-reporter.mjs", "--test_reporter ./tests/lying-reporter.mjs",
@@ -106,7 +106,7 @@ try {
     assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
       `Untrusted or redirected Node reporter configuration must block publication: ${reporterOption}`);
   }
-  for (const reporterOption of ["--test-reporter=tap", "--test-reporter spec", "--test_reporter=tap",
+  for (const reporterOption of ["--test-reporter=tap", "--test_reporter=tap",
     "--test-concurrency=2", "--test-timeout=1000"]) {
     fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
       test: `node --test ${reporterOption} tests/real.test.mjs`,
@@ -158,6 +158,26 @@ try {
     'test("actual failing test", () => { throw new Error("intentional failure"); });',
     "",
   ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "empty.test.mjs"), [
+    "// No node:test calls or assertions. Node still reports this file as one passing test.",
+    "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "genuine.test.mjs"), [
+    'import test from "node:test";',
+    'import assert from "node:assert/strict";',
+    'test("GET /health returns success", () => assert.equal(2 + 2, 4));',
+    "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(project, "tests", "fake-spec.test.mjs"), [
+    "// No registered tests. The spec reporter relays arbitrary stdout verbatim.",
+    'process.stdout.write("✔ counterfeit assertion (0.1ms)\\n");',
+    "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(project, "scripts", "tap-forger-check.mjs"), [
+    "// Supplementary audit-looking script: not a test runner.",
+    'process.stdout.write("ok 1 - fabricated from an audit script\\n");',
+    "",
+  ].join("\n"));
   for (const file of ["lying-preload.mjs", "lying-preload.cjs"]) {
     fs.writeFileSync(path.join(project, "tests", file), [
       "// Spoof passing tests and exit before the test runner can execute any tests.",
@@ -178,6 +198,11 @@ try {
   const failedNative = run(process.execPath, ["--test", "--test-reporter=tap", "tests/failing.test.mjs"]);
   assert.notEqual(failedNative.status, 0, "Control: the real Node test runner must report test failure");
   assert.match(failedNative.stdout, /# fail 1\b/);
+  for (const [file, reporter] of [["empty.test.mjs", "tap"], ["fake-spec.test.mjs", "spec"]]) {
+    const empty = run(process.execPath, ["--test", `--test-reporter=${reporter}`, `tests/${file}`]);
+    assert.equal(empty.status, 0, `Node must reproduce a false positive with ${file}: ${empty.stderr}`);
+    assert.match(empty.stdout, /(?:#|ℹ) pass 1\b/, "Node itself counts an empty file as a passing test");
+  }
   for (const attackOptions of [
     ["--test_reporter=./tests/lying-reporter.mjs"],
     ["--import=./tests/lying-preload.mjs"],
@@ -346,9 +371,33 @@ try {
     cleanIsolatedWorktrees();
     if (scriptBody) fs.writeFileSync(fakeManifest, beforeFakeManifest);
   }
+  for (const mode of ["node-empty-test-file", "node-empty-spec-file", "npm-empty-test-file",
+    "npm-empty-audit-before", "npm-empty-audit-after"]) {
+    const emptyTest = "node --test --test-reporter=tap tests/empty.test.mjs";
+    const spoof = "node scripts/tap-forger-check.mjs";
+    const script = mode === "npm-empty-test-file" ? emptyTest
+      : mode === "npm-empty-audit-before" ? `${spoof} && ${emptyTest}`
+        : mode === "npm-empty-audit-after" ? `${emptyTest} && ${spoof}` : null;
+    if (script) fs.writeFileSync(fakeManifest,
+      JSON.stringify({ name: "fixture", private: true, scripts: { test: script } }));
+    const branchesBefore = ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root);
+    const result = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
+    assert.notEqual(result.status, 0, `${mode} must block publication when zero tests were registered`);
+    assert.match(result.stderr, /Required executed test\/check evidence is missing/);
+    assert(!fs.existsSync(capture), `${mode} created a PR without registered test execution`);
+    assert.equal(ok("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname):%(objectname)",
+      "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed despite no registered tests`);
+    cleanIsolatedWorktrees();
+    if (script) fs.writeFileSync(fakeManifest, beforeFakeManifest);
+  }
+  const genuineNative = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "node-genuine-native-success" });
+  assert.equal(genuineNative.status, 0, `Real registered Node tests must still authorize publication: ${genuineNative.stderr}`);
+  assert.match(genuineNative.stdout, /PR: https:\/\/github\.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
   for (const mode of ["go-success", "go-verbose-success", "jest-success", "vitest-success", "pytest-success",
     "cargo-success", "ctest-success", "maven-success", "dotnet-success", "noisy-output",
-    "node-spec-success", "bun-direct-success", "playwright-success"]) {
+    "bun-direct-success", "playwright-success"]) {
     const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
     assert.match(verified.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
@@ -377,7 +426,7 @@ try {
   for (const mode of [
     "help-only", "help-only-short-version", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests",
     "go-package-only", "go-nonmatching-run", "go-nonmatching-json", "go-skipped", "go-cached",
-    "maven-skipped", "dotnet-skipped", "node-spec-skipped", "bun-direct-zero",
+    "maven-skipped", "dotnet-skipped", "node-spec-skipped", "node-spec-success", "bun-direct-zero",
     "bun-run-missing-script", "node-tap-skipped-fake-count", "node-real-skipped-fake-count", "node-direct-fake-jest",
     "jest-skipped-fake-count", "vitest-skipped-fake-count", "pytest-skipped-fake-count", "bun-skipped-fake-count",
     "playwright-skipped-fake-count", "playwright-masked-failure",

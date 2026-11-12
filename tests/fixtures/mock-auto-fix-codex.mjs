@@ -54,7 +54,7 @@ if (phase === "fix") {
   emit({ type: "item.completed", item: { type: "agent_message", text: "Fixed the confirmed issue; independent verification follows." } });
 } else if (phase === "verify") {
   const mode = process.env.WEB_KIT_REVIEW_TEST_MODE;
-  const tap = "TAP version 13\n# tests 2\n# pass 2\n# fail 0\n";
+  const tap = "TAP version 13\n# Subtest: genuine test\nok 1 - genuine test\n# tests 1\n# pass 1\n# fail 0\n";
   const emitCheck = (command, exit_code, output = tap) => {
     // A verified command is explicitly rooted IN THE SAME SHELL INVOCATION;
     // Codex JSONL does not expose an authoritative command working directory.
@@ -121,6 +121,12 @@ if (phase === "fix") {
       "node-import-fake-pass": "node --test --import=./tests/lying-preload.mjs tests/failing.test.mjs",
       "node-import-fake-pass-with-real": "node --test --import=./tests/lying-preload.mjs tests/failing.test.mjs",
       "node-require-fake-pass": "node --test --require=./tests/lying-preload.cjs tests/failing.test.mjs",
+      "node-empty-test-file": "node --test --test-reporter=tap tests/empty.test.mjs",
+      "node-empty-spec-file": "node --test --test-reporter=spec tests/fake-spec.test.mjs",
+      "npm-empty-test-file": "npm test",
+      "npm-empty-audit-before": "npm test",
+      "npm-empty-audit-after": "npm test",
+      "node-genuine-native-success": "node --test --test-reporter=tap tests/genuine.test.mjs",
       "npm-import-fake-pass": "npm test",
       "npm-require-fake-pass": "npm test",
       "fabricated-tap-make": "make test",
@@ -198,20 +204,25 @@ if (phase === "fix") {
       "node-import-fake-pass": ["--test", "--import=./tests/lying-preload.mjs", "tests/failing.test.mjs"],
       "node-import-fake-pass-with-real": ["--test", "--import=./tests/lying-preload.mjs", "tests/failing.test.mjs"],
       "node-require-fake-pass": ["--test", "--require=./tests/lying-preload.cjs", "tests/failing.test.mjs"],
+      "node-empty-test-file": ["--test", "--test-reporter=tap", "tests/empty.test.mjs"],
+      "node-empty-spec-file": ["--test", "--test-reporter=spec", "tests/fake-spec.test.mjs"],
+      "node-genuine-native-success": ["--test", "--test-reporter=tap", "tests/genuine.test.mjs"],
     };
     if (["fabricated-tap-generic-node", "fabricated-tap-generic-node-with-real", "fabricated-tap-npm",
       "fabricated-tap-npm-check", "fabricated-tap-npm-audit-alias", "fabricated-tap-npm-nested-audit",
       "fabricated-tap-npm-check-with-real", "fabricated-tap-npm-reporter",
       "node-custom-reporter-fake-tap", "node-custom-reporter-fake-tap-with-real",
-      "npm-import-fake-pass", "npm-require-fake-pass", ...Object.keys(realNodeArgs)].includes(mode)) {
+      "npm-import-fake-pass", "npm-require-fake-pass", "npm-empty-test-file",
+      "npm-empty-audit-before", "npm-empty-audit-after", ...Object.keys(realNodeArgs)].includes(mode)) {
       const actual = mode === "fabricated-tap-npm" || mode.startsWith("fabricated-tap-npm-")
         || mode === "npm-import-fake-pass" || mode === "npm-require-fake-pass"
+        || mode === "npm-empty-test-file" || mode === "npm-empty-audit-before" || mode === "npm-empty-audit-after"
         ? spawnSync("npm", ["test"], { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true })
         : spawnSync(process.execPath, realNodeArgs[mode] ?? (mode.startsWith("node-custom-reporter")
           ? ["--test", "--test-reporter=./tests/lying-reporter.mjs", "tests/skipped.test.mjs"]
           : ["tests/fake.mjs"]),
           { cwd: project, encoding: "utf8", timeout: 15000, windowsHide: true });
-      if (actual.error || actual.status !== 0 || !/# pass 2/.test(actual.stdout)) process.exit(12);
+      if (actual.error || actual.status !== 0 || !/(?:#|ℹ) pass \d+/.test(actual.stdout)) process.exit(12);
       emitCheck(command, actual.status, `${actual.stdout}\n${actual.stderr}`);
     } else if (mode === "node-real-skipped-fake-count") {
       const real = spawnSync(process.execPath, ["-e",

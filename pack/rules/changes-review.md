@@ -68,7 +68,8 @@ npx @ihgen/web-kit review @autofix --no-pr
    directly recognized test runner, and custom Node `--test-reporter` modules
    that can forge passing counters for skipped tests, including underscore
    flag aliases, executable Node preloads (`--import`, `--require`/`-r`) and
-   loaders that can exit before tests run,
+   loaders that can exit before tests run, and Node's file-only synthetic
+   passes or built-in spec output without trustworthy TAP test events,
    failing commands hidden behind diagnostic prefixes, missing real positive
    test counts, failed validations and unexpected command errors. A standalone
    read-only search yielding no matches (`rg`
