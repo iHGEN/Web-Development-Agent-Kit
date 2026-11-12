@@ -165,6 +165,19 @@ function runCodeReview(rawArgs) {
 }
 
 const args = process.argv.slice(2);
+if (args[0] === "review" || args[0] === "changes-review") {
+  const reviewArgs = args.slice(1);
+  const projectIndex = reviewArgs.findIndex(arg => arg === "--project" || arg.startsWith("--project="));
+  const project = projectIndex === -1 ? process.cwd()
+    : reviewArgs[projectIndex].includes("=") ? reviewArgs[projectIndex].slice("--project=".length)
+      : reviewArgs[projectIndex + 1];
+  const engine = join(resolve(project || process.cwd()), ".agent-core", "bin", "changes-review.mjs");
+  if (!existsSync(engine)) {
+    console.error("Simple Changes Review is missing. Run Web Kit update before reviewing.");
+    process.exit(1);
+  }
+  process.exit(runNode(engine, reviewArgs, { cwd: resolve(project || process.cwd()) }));
+}
 if (args[0] === "code-review") {
   try {
     process.exit(runCodeReview(args.slice(1)));
@@ -194,6 +207,7 @@ if (args[0] === "progress" || args[0] === "status") {
 
 const status = runNode(legacyCli, args);
 if ((args.includes("--help") || args.includes("-h") || args[0] === "help") && status === 0) {
+  console.log("Strict, scoped changes review:\n  npx @ihgen/web-kit review\n  npx @ihgen/web-kit review @autofix\n  npx @ihgen/web-kit review @autofix --no-pr\n  npx @ihgen/web-kit review --auto-fix=true\n  Fresh read-only security/quality review; optional fresh fix-and-re-review with a gated PR or local-only fixes.\n");
   console.log("PR-readiness review:\n  npx @ihgen/web-kit code-review --task-id <id>\n  Runs the installed reviewer without installing/updating the project.\n");
   console.log("Security review:\n  npx @ihgen/web-kit security-review\n  Inside AI providers: run security-review\n");
   console.log("Work progress:\n  npx @ihgen/web-kit status\n  npx @ihgen/web-kit status --task-id <id>\n  npx @ihgen/web-kit progress show --task-id <id>\n  npx @ihgen/web-kit progress help\n");

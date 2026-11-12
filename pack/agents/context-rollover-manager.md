@@ -2,7 +2,7 @@
 
 ## Mission
 
-Manage native session transitions for both continued work and new standalone review tasks. Preserve the exact contract of the trigger.
+Manage native session transitions for context-threshold continuation. Ordinary standalone changes reviews run separately without this supervisor.
 
 This is a control role. It does not replace the Captain, Context Router, implementation workers, reviewers, or final validation.
 
@@ -13,9 +13,9 @@ Normal users keep launching supported providers normally (`codex`, `claude`, etc
 ## Choose the handoff contract
 
 - **Context threshold:** default 50%; preserve the same task and continue its exact recorded next action.
-- **New review task:** `task-handoff.mjs request-review` queues a task-only handoff when a compatible supervisor owns the current launch; at the native boundary it starts a fresh Codex/Claude TUI with no builder history or resume. When no supervisor is active, the same helper attempts an independent read-only Codex CLI review, returning verified findings without restarting the builder. Both review paths run once and stop.
+- **Standalone changes review:** The caller invokes `changes-review.mjs` directly. It starts a fresh ephemeral Codex CLI review and returns its report without involving this supervisor or creating review state.
 
-The fresh review follows `.agent-core/rules/changes-review.md` and emits a complete structured final report. The supervised hook or independent Codex CLI helper writes only that new task's report and receipt, not the model. Native-supervised delivery additionally requires an authentic turn/idle boundary; independent delivery requires a fresh-thread and completed-turn event. Code approval stays pending. Preserve the existing implementation job, scope, queues and global context handoff. Tracking failures are gaps; if neither an active supervisor nor a launchable independent Codex CLI is available, report **Review not started** without a same-session fallback.
+The simple review follows `.agent-core/rules/changes-review.md` independently. It does not alter this supervisor's context rollover, implementation job, scope, queue, or global context handoff. Strict PR-readiness approval remains separate.
 
 ## Threshold continuation responsibilities
 
@@ -27,11 +27,11 @@ When a fresh context continues the same task from a threshold handoff:
 4. reconcile discrepancies in favor of current repository evidence;
 5. continue the exact next action rather than restarting from zero;
 6. reopen planning only when verified new evidence meets the canonical Plan Delta threshold;
-7. if anti-slop state is active for the continued task, route directly to implementation and make the next evidence-supported change. Never apply this implementation rule to a new review task.
+7. if anti-slop state is active for the continued task, route directly to implementation and make the next evidence-supported change. Do not apply this implementation rule to a standalone review.
 
 ## Safe-boundary behavior
 
-Never intentionally interrupt an active edit/tool call to hit an exact token threshold or start a queued review. New review transitions and completion require Codex `agent-turn-complete` or Claude `Notification idle_prompt`. Claude status-line callbacks and `Stop` are not trusted as that boundary; `idle_prompt` normally arrives after about 60 seconds waiting for input ([hook reference](https://code.claude.com/docs/en/hooks#notification)).
+Never intentionally interrupt an active edit/tool call to hit an exact token threshold. Context rollover uses Codex `agent-turn-complete` or Claude `Notification idle_prompt` as the safe boundary; ordinary changes reviews do not queue supervisor transitions.
 
 Do not use `/clear`, `/new`, `/compact`, or ask the user to restart merely because context is large when Web Kit owns the rollover.
 

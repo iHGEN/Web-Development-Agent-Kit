@@ -40,6 +40,10 @@ Explicit commands:
   npx @ihgen/web-kit update
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan
+  npx @ihgen/web-kit review
+  npx @ihgen/web-kit review --auto-fix=true
+  npx @ihgen/web-kit review @autofix
+  npx @ihgen/web-kit review @autofix --no-pr
   npx @ihgen/web-kit graphify
   npx @ihgen/web-kit session codex --prompt "<task>"
   npx @ihgen/web-kit session claude --prompt "<task>"
