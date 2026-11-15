@@ -20,7 +20,17 @@ if (process.env.WEB_KIT_REVIEW_TEST_MODE === "error") {
 }
 const emit = value => console.log(JSON.stringify(value));
 emit({ type: "thread.started", thread_id: randomUUID() });
-if (process.env.WEB_KIT_REVIEW_TEST_MODE === "descendant-stall") {
+if (process.env.WEB_KIT_REVIEW_TEST_MODE === "descendant-exit") {
+  // The provider exits normally and the descendant keeps no pipe open.
+  // A close-only cleanup strategy misses this live process entirely.
+  const grandchild = spawn(process.execPath, ["-e",
+    'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'],
+  { stdio: "ignore", windowsHide: true });
+  fs.writeFileSync(process.env.WEB_KIT_REVIEW_TEST_DESCENDANT_PID_CAPTURE, String(grandchild.pid));
+  grandchild.unref();
+  emit({ type: "item.completed", item: { type: "agent_message", text: "# Changes review\n\nFindings: no confirmed defects in the mock fixture." } });
+  emit({ type: "turn.completed" });
+} else if (process.env.WEB_KIT_REVIEW_TEST_MODE === "descendant-stall") {
   // Both processes ignore graceful termination, and the descendant inherits
   // stdout. Killing only the direct CLI leaves the review waiting forever.
   const grandchild = spawn(process.execPath, ["-e",

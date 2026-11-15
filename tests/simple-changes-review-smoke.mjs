@@ -23,6 +23,16 @@ const run = (command, args, options = {}) => spawnSync(command, args, {
   cwd: options.cwd ?? project, env: { ...env, ...options.env }, encoding: "utf8",
   windowsHide: true, timeout: 30000, maxBuffer: 4 * 1024 * 1024,
 });
+function runningLinuxProcess(pid) {
+  try {
+    process.kill(pid, 0);
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
+  } catch (error) {
+    if (["ESRCH", "ENOENT"].includes(error.code)) return false;
+    throw error;
+  }
+}
 const git = args => {
   const result = run("git", args);
   assert.equal(result.status, 0, result.stderr);
@@ -94,6 +104,13 @@ try {
     assert.equal(relativeInvocation.project, project, "Runtime must receive the canonical absolute project path");
     unchanged(before);
   }
+  for (const projectArgs of [["--project="], ["--project", ""], ["--project"]]) {
+    const emptyProject = run(process.execPath,
+      [path.join(repo, "bin", "web-kit-entry.js"), "review", ...projectArgs]);
+    assert.equal(emptyProject.status, 2, "An empty --project must be rejected by the launcher");
+    assert.match(emptyProject.stderr, /--project requires a value/);
+    unchanged(before);
+  }
 
   const explicitReviewOnly = run(process.execPath, [command, "--auto-fix=false"]);
   assert.equal(explicitReviewOnly.status, 0, explicitReviewOnly.stderr);
@@ -125,15 +142,24 @@ try {
   assert(fs.existsSync(grandchildPidFile), "Mock must create its hanging descendant");
   if (process.platform === "linux") {
     const descendantPid = Number(fs.readFileSync(grandchildPidFile, "utf8"));
-    let running = false;
-    try {
-      process.kill(descendantPid, 0);
-      const stat = fs.readFileSync(`/proc/${descendantPid}/stat`, "utf8");
-      running = stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
-    } catch (error) {
-      if (error.code !== "ESRCH" && error.code !== "ENOENT") throw error;
-    }
-    assert.equal(running, false, "Timed-out Codex descendant must not remain running");
+    assert.equal(runningLinuxProcess(descendantPid), false, "Timed-out Codex descendant must not remain running");
+  }
+  unchanged(before);
+
+  const orphanPidFile = path.join(root, "descendant-exit.pid");
+  const cleanExit = run(process.execPath, [command], { env: {
+    WEB_KIT_REVIEW_TEST_MODE: "descendant-exit",
+    WEB_KIT_REVIEW_TEST_DESCENDANT_PID_CAPTURE: orphanPidFile,
+  } });
+  assert.equal(cleanExit.status, 0, `A completed provider must return its review: ${cleanExit.stderr}`);
+  assert.match(cleanExit.stdout, /Findings: no confirmed defects/);
+  assert(fs.existsSync(orphanPidFile), "Mock must record its detached-lifetime descendant");
+  if (process.platform === "linux") {
+    const orphanPid = Number(fs.readFileSync(orphanPidFile, "utf8"));
+    const survived = runningLinuxProcess(orphanPid);
+    // Even when the regression is broken, do not leave the test's orphan alive.
+    if (survived) process.kill(orphanPid, "SIGKILL");
+    assert.equal(survived, false, "Provider exit must clean descendants even with no inherited stdout");
   }
   unchanged(before);
 

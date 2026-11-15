@@ -171,6 +171,10 @@ if (args[0] === "review" || args[0] === "changes-review") {
   const requestedProject = projectIndex === -1 ? process.cwd()
     : reviewArgs[projectIndex].includes("=") ? reviewArgs[projectIndex].slice("--project=".length)
       : reviewArgs[projectIndex + 1];
+  if (projectIndex !== -1 && (!requestedProject || requestedProject.startsWith("--"))) {
+    console.error("[Web Kit] --project requires a value.");
+    process.exit(2);
+  }
   // The engine runs with cwd=project. Forward the absolute path so a relative
   // --project cannot accidentally be resolved a second time inside that cwd.
   const project = resolve(requestedProject || process.cwd());

@@ -190,6 +190,13 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
   process.on("SIGTERM", interrupt);
   const exitCode = await new Promise((resolve, reject) => {
     child.on("error", reject);
+    child.on("exit", () => {
+      // A provider can exit while background tools remain alive without
+      // inheriting stdout. In that case `close` fires immediately and clears
+      // every timer, so timeout-based cleanup will never see the descendants.
+      // The provider has exited: no tool process may outlive this session.
+      terminateTree("SIGKILL");
+    });
     child.on("close", code => { closed = true; resolve(code); });
   }).finally(() => {
     clearTimeout(deadlineTimer);
