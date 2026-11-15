@@ -20,7 +20,7 @@ const env = {
   WEB_KIT_REVIEW_TEST_CAPTURE: probe,
 };
 const run = (command, args, options = {}) => spawnSync(command, args, {
-  cwd: project, env: { ...env, ...options.env }, encoding: "utf8",
+  cwd: options.cwd ?? project, env: { ...env, ...options.env }, encoding: "utf8",
   windowsHide: true, timeout: 30000, maxBuffer: 4 * 1024 * 1024,
 });
 const git = args => {
@@ -84,6 +84,17 @@ try {
   assert.match(throughCli.stdout, /Findings: no confirmed defects/);
   unchanged(before);
 
+  for (const projectArgs of [["--project", path.relative(root, project)],
+    [`--project=${path.relative(root, project)}`]]) {
+    const relativeReview = run(process.execPath,
+      [path.join(repo, "bin", "web-kit-entry.js"), "review", ...projectArgs], { cwd: root });
+    assert.equal(relativeReview.status, 0, `Relative --project failed: ${relativeReview.stderr}`);
+    assert.match(relativeReview.stdout, /Findings: no confirmed defects/);
+    const relativeInvocation = JSON.parse(fs.readFileSync(probe, "utf8"));
+    assert.equal(relativeInvocation.project, project, "Runtime must receive the canonical absolute project path");
+    unchanged(before);
+  }
+
   const explicitReviewOnly = run(process.execPath, [command, "--auto-fix=false"]);
   assert.equal(explicitReviewOnly.status, 0, explicitReviewOnly.stderr);
   assert.match(explicitReviewOnly.stdout, /Changes review/);
@@ -102,6 +113,28 @@ try {
   const stalled = run(process.execPath, [command, "--timeout", "1"], { env: { WEB_KIT_REVIEW_TEST_MODE: "stall" } });
   assert.notEqual(stalled.status, 0, "Unresponsive Codex must be terminated by the deadline");
   assert.match(stalled.stderr, /timed out after 1 seconds/);
+  unchanged(before);
+
+  const grandchildPidFile = path.join(root, "descendant.pid");
+  const descendantStall = run(process.execPath, [command, "--timeout", "1"], { env: {
+    WEB_KIT_REVIEW_TEST_MODE: "descendant-stall",
+    WEB_KIT_REVIEW_TEST_DESCENDANT_PID_CAPTURE: grandchildPidFile,
+  } });
+  assert.notEqual(descendantStall.status, 0, "A stalled provider and descendant must fail");
+  assert.match(descendantStall.stderr, /timed out after 1 seconds/);
+  assert(fs.existsSync(grandchildPidFile), "Mock must create its hanging descendant");
+  if (process.platform === "linux") {
+    const descendantPid = Number(fs.readFileSync(grandchildPidFile, "utf8"));
+    let running = false;
+    try {
+      process.kill(descendantPid, 0);
+      const stat = fs.readFileSync(`/proc/${descendantPid}/stat`, "utf8");
+      running = stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
+    } catch (error) {
+      if (error.code !== "ESRCH" && error.code !== "ENOENT") throw error;
+    }
+    assert.equal(running, false, "Timed-out Codex descendant must not remain running");
+  }
   unchanged(before);
 
   const failed = run(process.execPath, [command], { env: { WEB_KIT_REVIEW_TEST_MODE: "error" } });

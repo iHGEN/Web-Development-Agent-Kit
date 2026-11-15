@@ -168,15 +168,22 @@ const args = process.argv.slice(2);
 if (args[0] === "review" || args[0] === "changes-review") {
   const reviewArgs = args.slice(1);
   const projectIndex = reviewArgs.findIndex(arg => arg === "--project" || arg.startsWith("--project="));
-  const project = projectIndex === -1 ? process.cwd()
+  const requestedProject = projectIndex === -1 ? process.cwd()
     : reviewArgs[projectIndex].includes("=") ? reviewArgs[projectIndex].slice("--project=".length)
       : reviewArgs[projectIndex + 1];
-  const engine = join(resolve(project || process.cwd()), ".agent-core", "bin", "changes-review.mjs");
+  // The engine runs with cwd=project. Forward the absolute path so a relative
+  // --project cannot accidentally be resolved a second time inside that cwd.
+  const project = resolve(requestedProject || process.cwd());
+  if (projectIndex !== -1) {
+    if (reviewArgs[projectIndex].includes("=")) reviewArgs[projectIndex] = `--project=${project}`;
+    else if (reviewArgs[projectIndex + 1]) reviewArgs[projectIndex + 1] = project;
+  }
+  const engine = join(project, ".agent-core", "bin", "changes-review.mjs");
   if (!existsSync(engine)) {
     console.error("Simple Changes Review is missing. Run Web Kit update before reviewing.");
     process.exit(1);
   }
-  process.exit(runNode(engine, reviewArgs, { cwd: resolve(project || process.cwd()) }));
+  process.exit(runNode(engine, reviewArgs, { cwd: project }));
 }
 if (args[0] === "code-review") {
   try {

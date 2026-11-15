@@ -180,6 +180,29 @@ const checkPattern = new RegExp(String.raw`^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+
 // print fake spec events. This is a
 // publication-evidence allowlist, not a restriction on ordinary development.
 function trustedTestInvocation(command) {
+  // Bun accepts runtime/module-loading flags on its test command, including
+  // --preload and --reporter. Either can forge/redirect a success summary.
+  // Only non-executing options can certify a test for automatic publication.
+  if (/^bun\s+run\s+test[\w:-]*(?:\s|$)/i.test(command)) {
+    // Arguments after `bun run test` are passed to an arbitrary package script
+    // and cannot be checked against the independently inspected script body.
+    return /^bun\s+run\s+test[\w:-]*$/i.test(command.trim());
+  }
+  if (/^bun\s+test(?:\s|$)/i.test(command)) {
+    const args = command.trim().split(/\s+/).slice(2);
+    for (let index = 0; index < args.length; index += 1) {
+      const token = args[index];
+      if (!token.startsWith("-")) continue; // Bun's ordinary file/path filters.
+      const separator = token.indexOf("=");
+      const option = (separator < 0 ? token : token.slice(0, separator)).toLowerCase();
+      if (["--coverage", "--check", "--smol"].includes(option) && separator < 0) continue;
+      if (option !== "--timeout") return false;
+      const value = separator < 0 ? args[++index] : token.slice(separator + 1);
+      if (!value || !/^\d+$/.test(value) || Number(value) < 1 || !Number.isSafeInteger(Number(value))) return false;
+    }
+    return true;
+  }
+  if (/^bun\s+test[\w:-]+(?:\s|$)/i.test(command)) return /^bun\s+test[\w:-]+$/i.test(command.trim());
   if (!/^node\s+--test(?:\s|$)/i.test(command)) return true;
   const args = command.trim().split(/\s+/).slice(2);
   let reporters = 0;
@@ -358,10 +381,17 @@ function npmScriptTargets(project, manager, suffix) {
   return [...selected];
 }
 
+function unverifiedBunConfig(project) {
+  // Bun can preload arbitrary JavaScript and configure reporters through
+  // bunfig.toml even when the CLI has no unsafe options. Without a trustworthy
+  // TOML/config attestation, that output cannot authorize an automatic PR.
+  return ["bunfig.toml", ".bunfig.toml"].some(name => fs.existsSync(path.join(project, name)));
+}
+
 export function maskedPackageTestScript(project, command) {
   // Unlike `bun run test`, `bun test` invokes Bun's built-in runner and does
   // not require a test script in package.json.
-  if (/^bun\s+test(?:\s|$)/i.test(shellCommand(command))) return false;
+  if (/^bun\s+test(?:\s|$)/i.test(shellCommand(command))) return unverifiedBunConfig(project);
   const match = shellCommand(command).match(/^(npm|pnpm|yarn|bun)\s+(?:run\s+)?(test[\w:-]*)(?=\s|$)(.*)$/i);
   if (!match) return false;
   let targets;
@@ -385,7 +415,7 @@ export function maskedPackageTestScript(project, command) {
         // Inside an npm script, `bun test` is still Bun's own test runner;
         // `bun run test` is a package alias and must be recursively inspected.
         if (/^bun\s+test(?:\s|$)/i.test(simple)) {
-          if (!testCheck(simple)) return true;
+          if (!testCheck(simple) || unverifiedBunConfig(project) || unverifiedBunConfig(target)) return true;
           sawDirectTestRunner = true;
           return false;
         }
@@ -490,11 +520,22 @@ function executedTestCount(output, command) {
   const genuineNodeTest = nodeTestNames.some(name => (!/[\\/]/.test(name) || /\s/.test(name))
     && !/\.(?:[cm]?js|[jt]sx?)$/i.test(name)
     && !directArgs.includes(name));
-  // Bun's built-in test runner writes `N pass`, `N fail`, `N skip` lines.
+  // Bun's built-in runner writes a version banner, per-run counters and a
+  // trailing `Ran N tests across M files` record. A lone `9 pass` from test
+  // stdout is not evidence. Reject duplicates/conflicts (for example, a test
+  // printing fake counters before a real zero-pass summary) fail-closed.
   const bunPasses = [...plain.matchAll(/^\s*(\d+)\s+pass\s*$/gm)];
   if (bunPasses.length) {
-    const bunFails = [...plain.matchAll(/^\s*(\d+)\s+fail\s*$/gm)].map(match => Number(match[1]));
-    for (const match of bunPasses) add("bun", match[1], Math.max(0, ...bunFails));
+    const bunFails = [...plain.matchAll(/^\s*(\d+)\s+fail\s*$/gm)];
+    const bunSkips = [...plain.matchAll(/^\s*(\d+)\s+skip\s*$/gm)];
+    const bunHeaders = [...plain.matchAll(/^bun test v\d+\.\d+\.\d+(?:[-+][^\s]+)?(?:\s+\([^\r\n]*\))?\s*$/gm)];
+    const bunTotals = [...plain.matchAll(/^\s*Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?\.(?:\s+\[[^\]\r\n]+\])?\s*$/gm)];
+    if (bunPasses.length !== 1 || bunFails.length !== 1 || bunSkips.length > 1
+      || bunHeaders.length !== 1 || bunTotals.length !== 1 || Number(bunTotals[0][2]) < 1) {
+      add("bun", 0);
+    } else {
+      add("bun", bunPasses[0][1], bunFails[0][1], bunSkips[0]?.[1] ?? 0, bunTotals[0][1]);
+    }
   }
   // Jest and Vitest have different labelled summary formats; inspect their
   // *test* counts, not an unrelated test-suite/file count or user log line.

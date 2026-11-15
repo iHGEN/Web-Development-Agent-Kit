@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readChangeSet, runAutoFix } from "./changes-autofix.mjs";
 
@@ -111,15 +111,44 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
   const child = spawn(executable.command, [...executable.prefix, ...shellCredentialPolicy,
     "exec", "--json", "--ephemeral", "--sandbox", sandbox, "-C", project, prompt], {
     cwd: project, env: childEnv, stdio: ["ignore", "pipe", "inherit"], windowsHide: true, shell: false,
+    // POSIX: put the provider and its ordinary descendants in a private
+    // process group. Killing only the direct child leaves shell/tool children
+    // alive and can keep this stdout pipe open forever.
+    detached: process.platform !== "win32",
   });
   process.stderr.write(`Starting fresh Codex ${phase} session...\n`);
   let pending = "", lastMessage = "", started = false, completed = false, providerError = "", commands = [];
-  let closed = false, stoppedAfterCompletion = false, timedOut = false, completionTimer, forceTimer;
+  let closed = false, stoppedAfterCompletion = false, timedOut = false, completionTimer, forceTimer, drainTimer;
+  const terminateTree = signal => {
+    if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return;
+    if (process.platform === "win32") {
+      // Node's child.kill() on Windows does not terminate grandchildren.
+      // taskkill /T uses the OS process tree; /F is needed for a bounded stop.
+      const taskkill = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
+      const result = spawnSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true, stdio: "ignore", timeout: 2000,
+      });
+      if (!result.error && result.status === 0) return;
+    } else {
+      try { process.kill(-child.pid, signal); return; } catch { /* Already exited or unavailable. */ }
+    }
+    try { child.kill(signal); } catch { /* Already exited. */ }
+  };
+  const stopTree = (signal, graceMs) => {
+    terminateTree(signal);
+    clearTimeout(forceTimer);
+    forceTimer = setTimeout(() => {
+      if (closed) return;
+      terminateTree("SIGKILL");
+      // A process outside the original group could still inherit stdout.
+      // Do not allow that pipe to make the launcher wait indefinitely.
+      drainTimer = setTimeout(() => { if (!closed) child.stdout.destroy(); }, 500);
+    }, graceMs);
+  };
   const deadlineTimer = setTimeout(() => {
     if (closed) return;
     timedOut = true;
-    child.kill("SIGTERM");
-    forceTimer = setTimeout(() => { if (!closed) child.kill("SIGKILL"); }, 1500);
+    stopTree("SIGTERM", 1500);
   }, timeoutSeconds * 1000);
   const eventLine = line => {
     if (!line.trim()) return;
@@ -138,8 +167,7 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
       if (!closed) completionTimer = setTimeout(() => {
           if (closed) return;
           stoppedAfterCompletion = true;
-          child.kill("SIGTERM");
-          forceTimer = setTimeout(() => { if (!closed) child.kill("SIGKILL"); }, 1000);
+          stopTree("SIGTERM", 1000);
         }, 3000);
     }
     if (event.type === "turn.failed" || event.type === "error") providerError = event.message || event.error?.message || event.type;
@@ -152,12 +180,12 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
       eventLine(pending.slice(0, end));
       pending = pending.slice(end + 1);
     }
-    if (pending.length > 2 * 1024 * 1024) {
+    if (pending.length > 2 * 1024 * 1024 && !providerError) {
       providerError = "Codex emitted an oversized event.";
-      child.kill();
+      stopTree("SIGTERM", 1000);
     }
   });
-  const interrupt = () => child.kill("SIGINT");
+  const interrupt = () => stopTree("SIGINT", 1500);
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
   const exitCode = await new Promise((resolve, reject) => {
@@ -167,6 +195,7 @@ async function codexSession(executable, project, prompt, sandbox, phase, timeout
     clearTimeout(deadlineTimer);
     clearTimeout(completionTimer);
     clearTimeout(forceTimer);
+    clearTimeout(drainTimer);
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
   });

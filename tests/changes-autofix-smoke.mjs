@@ -90,6 +90,21 @@ try {
   } }));
   assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), false,
     "An npm script may launch Bun's directly verified built-in runner");
+  const bunConfig = path.join(npmrcProject, "bunfig.toml");
+  fs.writeFileSync(bunConfig, '[test]\npreload = ["./tests/lying-preload.mjs"]\n');
+  assert.equal(maskedPackageTestScript(npmrcProject, "bun test"), true,
+    "A Bun preload configured outside CLI arguments must not certify publication");
+  assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
+    "An npm script invoking Bun must inspect its Bun configuration");
+  fs.rmSync(bunConfig);
+  for (const option of ["--preload=./tests/lying-preload.mjs", "--reporter=dots", "--inspect",
+    "--test-name-pattern=positive-only", "--watch", "--update-snapshots", "--bunfig=./other.toml"]) {
+    fs.writeFileSync(path.join(npmrcProject, "package.json"), JSON.stringify({ name: "fixture-root", scripts: {
+      test: `bun test ${option}`,
+    } }));
+    assert.equal(maskedPackageTestScript(npmrcProject, "npm test"), true,
+      `Unsafe Bun execution/reporting option must block publication: ${option}`);
+  }
   for (const reporterOption of ["--test-reporter=./tests/lying-reporter.mjs", "--test-reporter=spec",
     "--test-reporter ./tests/lying-reporter.mjs", "--test-reporter-destination=./report.log",
     "--test-reporter=tap --test-reporter=./tests/lying-reporter.mjs",
@@ -397,12 +412,18 @@ try {
   fs.rmSync(capture);
   for (const mode of ["go-success", "go-verbose-success", "jest-success", "vitest-success", "pytest-success",
     "cargo-success", "ctest-success", "maven-success", "dotnet-success", "noisy-output",
-    "bun-direct-success", "playwright-success"]) {
+    "bun-direct-success", "bun-direct-timeout-success", "playwright-success"]) {
     const verified = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: mode });
     assert.equal(verified.status, 0, `${mode} must recognize real test execution evidence: ${verified.stderr}`);
     assert.match(verified.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
     fs.rmSync(capture);
   }
+  fs.writeFileSync(fakeManifest, JSON.stringify({ name: "fixture", private: true, scripts: { test: "bun test" } }));
+  const bunRun = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "bun-run-success" });
+  assert.equal(bunRun.status, 0, `Bun package script should recognize the native runner: ${bunRun.stderr}`);
+  assert.match(bunRun.stdout, /PR: https:\/\/github.com\/fixture\/project\/pull\/123/);
+  fs.rmSync(capture);
+  fs.writeFileSync(fakeManifest, beforeFakeManifest);
   const notReady = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "not-ready" });
   assert.notEqual(notReady.status, 0, "Unresolved high severity finding should stop PR");
   assert.match(notReady.stderr, /Auto-fix NOT READY/);
@@ -427,6 +448,9 @@ try {
     "help-only", "help-only-short-version", "help-only-npm", "zero-tests", "all-skipped", "go-no-tests",
     "go-package-only", "go-nonmatching-run", "go-nonmatching-json", "go-skipped", "go-cached",
     "maven-skipped", "dotnet-skipped", "node-spec-skipped", "node-spec-success", "bun-direct-zero",
+    "bun-direct-synthetic-summary", "bun-direct-forged-header-no-footer", "bun-direct-conflicting-counters",
+    "bun-direct-preload-forged", "bun-direct-reporter-forged", "bun-direct-name-filter-forged",
+    "bun-direct-inspect-forged",
     "bun-run-missing-script", "node-tap-skipped-fake-count", "node-real-skipped-fake-count", "node-direct-fake-jest",
     "jest-skipped-fake-count", "vitest-skipped-fake-count", "pytest-skipped-fake-count", "bun-skipped-fake-count",
     "playwright-skipped-fake-count", "playwright-masked-failure",
@@ -441,6 +465,13 @@ try {
       "refs/heads/review-fix"], root), branchesBefore, `${mode} pushed a branch with fake pass output`);
     cleanIsolatedWorktrees();
   }
+  fs.writeFileSync(fakeManifest, JSON.stringify({ name: "fixture", private: true, scripts: { test: "bun test" } }));
+  const forwardedBun = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "bun-run-unsafe-args" });
+  assert.notEqual(forwardedBun.status, 0, "Bun package-script runtime flags must not certify publication");
+  assert.match(forwardedBun.stderr, /Required executed test\/check evidence is missing/);
+  assert(!fs.existsSync(capture), "Unsafe Bun forwarded arguments opened a PR");
+  fs.writeFileSync(fakeManifest, beforeFakeManifest);
+  cleanIsolatedWorktrees();
 
   const maskedAlongsideReal = run(process.execPath, args, project, { WEB_KIT_REVIEW_TEST_MODE: "masked-plus-real" });
   assert.notEqual(maskedAlongsideReal.status, 0, "A masked test must block PR even when another real test succeeds");
