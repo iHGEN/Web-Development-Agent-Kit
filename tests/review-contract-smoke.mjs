@@ -176,13 +176,14 @@ try {
   fs.copyFileSync(path.join(repo, "pack/rules/project-paths.mjs"), path.join(project, ".agent-core/rules/project-paths.mjs"));
   git("init", "-b", "main"); git("config", "user.name", "Review Contract"); git("config", "user.email", "contract@example.invalid");
   git("add", "."); git("commit", "-m", "baseline"); git("switch", "-c", "feat/review");
+  write("src/existing-user.mjs", "export const userDraft = true;\n");
 
   assert.equal(work("start", "--task-id", task, "--classification", "SMALL").pr_bound, true, "Feature branch must activate PR protection without the optional flag.");
   work("start", "--task-id", "LOCAL", "--classification", "SMALL", "--local-only");
   assert.equal(JSON.parse(fs.readFileSync(path.join(project, ".agent-core/state/jobs/LOCAL.json"))).pr_bound, false);
   fail("start", "--task-id", "CONFLICT", "--classification", "SMALL", "--pr-bound", "--local-only");
   fail("start", "--task-id", task, "--classification", "SMALL", "--force", "--local-only");
-  run(process.execPath, [guard, "start", "--project", project, "--task-id", task, "--base", "main", "--intent", "Enable fixture", "--allow", "src/feature.mjs", "--allow", "notes.md"]);
+  run(process.execPath, [guard, "start", "--project", project, "--task-id", task, "--base", "main", "--intent", "Enable fixture", "--allow", "src/feature.mjs", "--allow", "notes.md", "--allow", "src/existing-user.mjs"]);
   write("src/feature.mjs", "export const enabled = true;\n");
   work("update", "--task-id", task, "--status", "IMPLEMENTING", "--agent", "builder");
   assert(work("report", "--task-id", task).engineering_quality.blockers.some(x => x.includes("No acceptance criteria")));
@@ -267,6 +268,33 @@ try {
     assert.throws(() => loadReviewArtifact(project, linked), /symlink/);
     fs.unlinkSync(path.join(project, linked));
   }
+
+  // Permission changes must expire review evidence even when no source bytes change.
+  const beforeAuthorization = snapshot();
+  const reviewedBeforeAuthorization = job().quality.code_review.report_path;
+  const scopeFile = path.join(project, `.agent-core/state/scope/${task}.json`);
+  const baselineBeforeAuthorization = JSON.parse(fs.readFileSync(scopeFile, "utf8")).preexisting;
+  assert(beforeAuthorization.files.includes("src/existing-user.mjs"), "The initial untracked draft must be in the reviewed file list.");
+  assert.equal(baselineBeforeAuthorization["src/existing-user.mjs"].status, "??");
+  assert.equal(validateReviewArtifact(project, reviewedBeforeAuthorization, job(), beforeAuthorization).verdict, "READY TO OPEN PR");
+  run(process.execPath, [guard, "authorize", "--project", project, "--task-id", task,
+    "--allow", "src/existing-user.mjs", "--reason", "The task explicitly permits editing this existing draft.",
+    "--evidence", "Original task authorization names src/existing-user.mjs."]);
+  const afterAuthorization = snapshot();
+  assert.equal(afterAuthorization.source_digest, beforeAuthorization.source_digest);
+  assert.equal(afterAuthorization.change_digest, beforeAuthorization.change_digest);
+  assert.notEqual(afterAuthorization.scope_digest, beforeAuthorization.scope_digest);
+  assert.deepEqual(JSON.parse(fs.readFileSync(scopeFile, "utf8")).preexisting, baselineBeforeAuthorization,
+    "Recording authorization must preserve the original preexisting baseline.");
+  assert(!sameReviewSnapshot(beforeAuthorization, afterAuthorization));
+  assert.throws(() => validateReviewArtifact(project, reviewedBeforeAuthorization, job(), afterAuthorization), /stale/);
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "BLOCKED");
+  assert.match(fail("quality-review", "--task-id", task, "--report", reviewedBeforeAuthorization).stderr, /stale/i);
+  fail("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
+  const authorizedReview = begin();
+  importReport(artifact(authorizedReview));
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "PASS",
+    "A fresh review must restore readiness without rerunning unchanged check evidence.");
 
   // Content-equivalent Git operations preserve an approval, but fail read-only-run checks.
   const beforeStage = snapshot();

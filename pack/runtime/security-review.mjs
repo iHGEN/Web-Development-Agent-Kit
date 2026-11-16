@@ -17,6 +17,10 @@ const UNTRACKED_EVIDENCE_MAX_TOTAL_BYTES = 512 * 1024;
 const UNTRACKED_EVIDENCE_BINARY_SAMPLE_BYTES = 8 * 1024;
 const REVIEW_STATE_GIT_EXCLUDE = "/.agent-core/security-reviews/";
 
+// Only provider execution/protocol failures become incomplete review records.
+// Filesystem/state failures must still propagate instead of being misreported as reviewer failures.
+class ReviewerFailure extends Error {}
+
 const AREAS = [
   ["authentication", "Authentication", /(auth|login|signin|signup|register|password|credential|identity|mfa|2fa|verify|account)/i, /(password|credential|login|sign.?in|authenticate|mfa|2fa|otp|verification)/i, ["credential handling", "brute force", "account enumeration", "password reset", "MFA bypass", "authentication bypass"]],
   ["authorization", "Authorization & Multi-tenancy", /(permission|role|rbac|acl|policy|tenant|organization|workspace|member|admin|owner)/i, /(authorize|authorization|permission|role|tenant|owner|admin|isAdmin|policy)/i, ["IDOR/BOLA", "BFLA", "tenant isolation", "privilege escalation", "ownership validation", "server-side authorization"]],
@@ -500,14 +504,14 @@ function resolveProviderExecutable(name) {
 function chooseProvider(requested) {
   if (requested !== "auto") {
     const providerExecutable = resolveProviderExecutable(requested);
-    if (!providerExecutable) throw new Error(`Security reviewer provider '${requested}' was not found outside the Web Kit shim directory.`);
+    if (!providerExecutable) throw new ReviewerFailure(`Security reviewer provider '${requested}' was not found outside the Web Kit shim directory.`);
     return { name: requested, executable: providerExecutable };
   }
   for (const name of ["codex", "claude", "gemini"]) {
     const providerExecutable = resolveProviderExecutable(name);
     if (providerExecutable) return { name, executable: providerExecutable };
   }
-  throw new Error("No supported headless AI reviewer found. Install/authenticate Codex, Claude, or Gemini CLI, or use --scan-only.");
+  throw new ReviewerFailure("No supported headless AI reviewer found. Install/authenticate Codex, Claude, or Gemini CLI, or use --scan-only.");
 }
 function resolveNodeScriptFromCmd(file) {
   if (process.platform !== "win32" || !/\.cmd$/i.test(file)) return null;
@@ -530,15 +534,15 @@ function launchSpec(file, args) {
   return { command: file, args, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(file) };
 }
 function parseJsonObject(text) {
-  if (!text) return null;
-  const cleaned = String(text).trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  if (typeof text !== "string" || !text) return null;
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const direct = jsonParse(cleaned, null);
   if (direct && typeof direct === "object") return direct;
   const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}");
   return start >= 0 && end > start ? jsonParse(cleaned.slice(start, end + 1), null) : null;
 }
 function reviewerPrompt(contextRel, ephemeralUntrackedEvidenceFile, previousRel) {
-  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${ephemeralUntrackedEvidenceFile ? `- ${ephemeralUntrackedEvidenceFile} (EPHEMERAL_UNTRACKED_EVIDENCE: redacted bounded untracked-file text outside the worktree; inspect CAPTURED_TEXT entries; this file is deleted after the review)` : ""}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding. Re-emit it with the same stable fingerprint if still present. If absent, the engine marks it RESOLVED.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"summary\": \"short assessment\",\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
+  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${ephemeralUntrackedEvidenceFile ? `- ${ephemeralUntrackedEvidenceFile} (EPHEMERAL_UNTRACKED_EVIDENCE: redacted bounded untracked-file text outside the worktree; inspect CAPTURED_TEXT entries; this file is deleted after the review)` : ""}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding, including previously resolved findings. Return one prior_findings disposition per previous fingerprint with specific source evidence. Use OPEN and re-emit the same fingerprint when present; use RESOLVED only after verifying the fix; use UNVERIFIED when blocked. Omission never resolves a finding.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n10. Report COMPLETE only after reading every changed file (including its diff) and the required surrounding source, assessing every REVIEW_REQUIRED surface, and verifying every prior finding. List each source input in files_reviewed with specific evidence. Use PARTIAL or BLOCKED if sandbox, permissions, tools, or source access prevent completion; empty findings never indicate completion. Explain missing coverage in limitations. Optional scanner unavailability alone need not prevent a completed source review. For a mapped surface found inapplicable, report NOT_APPLICABLE with source-based notes.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"review_status\": \"COMPLETE|PARTIAL|BLOCKED\",\n  \"summary\": \"short assessment\",\n  \"files_reviewed\": [{\"file\":\"relative/path\",\"evidence\":\"specific source/diff inspected\"}],\n  \"prior_findings\": [{\"fingerprint\":\"previous stable fingerprint\",\"status\":\"OPEN|RESOLVED|UNVERIFIED\",\"evidence\":\"specific recheck evidence\"}],\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
 }
 function invokeProvider(provider, project, prompt, timeoutMs) {
   const env = { ...process.env, WEB_KIT_SECURITY_REVIEW_ACTIVE: "1", WEB_KIT_SECURITY_PROJECT_ROOT: project, WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
@@ -548,49 +552,151 @@ function invokeProvider(provider, project, prompt, timeoutMs) {
   else args = ["-p", prompt, "--output-format", "json", "--approval-mode", "plan"];
   const spec = launchSpec(provider.executable, args);
   const r = run(spec.command, spec.args, { cwd: project, env, timeout: timeoutMs, shell: spec.shell });
-  if (r.error || r.status !== 0) throw new Error(`${provider.name} security reviewer failed: ${r.error?.message || String(r.stderr || "").slice(0, 2000) || `exit ${r.status}`}`);
+  if (r.error || r.status !== 0) throw new ReviewerFailure(`${provider.name} security reviewer failed: ${r.error?.message || String(r.stderr || "").slice(0, 2000) || `exit ${r.status}`}`);
+  if (sandboxSetupFailure(r.stderr)) throw new ReviewerFailure(`${provider.name} reviewer sandbox setup failed: ${String(r.stderr).slice(0, 2000)}`);
 
   let text = "";
   if (provider.name === "codex") {
     for (const line of String(r.stdout || "").split(/\r?\n/)) {
       const event = jsonParse(line, null);
       if (!event) continue;
+      if (["error", "turn.failed", "item.failed"].includes(event.type) || event.item?.type === "error") {
+        throw new ReviewerFailure(`${provider.name} reported a reviewer execution failure: ${JSON.stringify(event.error || event.message || event.item || event).slice(0, 2000)}`);
+      }
+      if ((event.item?.status === "failed" || (Number.isInteger(event.item?.exit_code) && event.item.exit_code !== 0))
+        && sandboxSetupFailure(JSON.stringify(event.item))) {
+        const diagnostic = event.item.aggregated_output || event.item.error || event.item.message || "sandbox execution unavailable";
+        throw new ReviewerFailure(`${provider.name} reviewer sandbox failed: ${(typeof diagnostic === "string" ? diagnostic : JSON.stringify(diagnostic)).slice(0, 2000)}`);
+      }
       if (event.type === "item.completed" && event.item && ["agent_message", "assistant_message", "message"].includes(event.item.type) && typeof event.item.text === "string") text = event.item.text;
       if (event.type === "message" && event.role === "assistant" && typeof event.content === "string") text = event.content;
     }
   } else {
     const outer = jsonParse(r.stdout, null);
-    text = provider.name === "claude" ? (outer?.result || outer?.response || String(r.stdout || "")) : (outer?.response || outer?.result || String(r.stdout || ""));
+    if (!reviewObject(outer)) throw new ReviewerFailure(`${provider.name} returned invalid security-review envelope; expected a JSON object.`);
+    for (const key of ["subtype", "result", "response"]) {
+      if (key in outer && typeof outer[key] !== "string") throw new ReviewerFailure(`${provider.name} returned invalid security-review envelope; ${key} must be a string.`);
+    }
+    if (outer.is_error === true || outer.error || (typeof outer.subtype === "string" && /^error(?:_|$)/i.test(outer.subtype))) {
+      throw new ReviewerFailure(`${provider.name} reported a reviewer execution failure: ${JSON.stringify(outer.error || outer.errors || outer.result || outer).slice(0, 2000)}`);
+    }
+    text = provider.name === "claude" ? (outer.result ?? outer.response ?? r.stdout) : (outer.response ?? outer.result ?? r.stdout);
   }
   const parsed = parseJsonObject(text);
-  if (!parsed || !Array.isArray(parsed.findings) || !Array.isArray(parsed.coverage)) throw new Error(`${provider.name} returned invalid security-review JSON; findings[] and coverage[] are required.`);
+  if (!parsed || !Array.isArray(parsed.findings) || !Array.isArray(parsed.coverage)) throw new ReviewerFailure(`${provider.name} returned invalid security-review JSON; findings[] and coverage[] are required.`);
   return parsed;
 }
 
-function severity(value) { const v = String(value || "MEDIUM").toUpperCase(); return SEVERITIES.includes(v) ? v : "MEDIUM"; }
-function confidence(value) { const v = String(value || "MEDIUM").toUpperCase(); return CONFIDENCES.includes(v) ? v : "MEDIUM"; }
+const reviewText = (value) => typeof value === "string" && value.trim().length > 0 && value.length <= 16_000;
+const reviewObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const sourcePath = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096
+  && !path.posix.isAbsolute(value) && !/^[a-zA-Z]:/.test(value) && !/[\\\0]/.test(value)
+  && !value.split("/").some((part) => !part || part === "." || part === "..");
+
+function sandboxSetupFailure(value) {
+  return /\bSetNamedSecurityInfoW\b|\b(?:sandbox (?:setup|initiali[sz]ation)|(?:permission|ACL) setup)\b[^\r\n]{0,120}\b(?:failed|failure|denied|error)\b/i.test(String(value || ""));
+}
+
+function reviewBlockedText(value) {
+  // Defense against contradictory COMPLETE claims. Do not interpret ordinary
+  // vulnerability statements (e.g. "a user cannot access another tenant") as a failed review.
+  return typeof value === "string" && /\b(?:review|inspection)\s+(?:(?:was|is|remains)\s+)?(?:impossible|blocked|incomplete|not (?:performed|completed))\b|\b(?:I|we|reviewer)\s+(?:could not|cannot|can't|couldn't|was unable to|were unable to|am unable to|are unable to)\s+(?:read|access|inspect|review|verify|complete|perform|conduct|open)\b|\b(?:unable|failed) to (?:read|access|inspect|review) (?:any |the |required |source |repository |project |changed )*(?:files?|code|sources?|diff|repository)\b/i.test(value);
+}
+
+function assessReviewCompletion(model, context, previous) {
+  const issues = [];
+  if (model.review_status !== "COMPLETE") issues.push(`Reviewer did not report COMPLETE (reported ${typeof model.review_status === "string" ? model.review_status.slice(0, 80) : "missing or invalid"}).`);
+  if (!reviewText(model.summary)) issues.push("Reviewer supplied no valid summary.");
+  const lists = {};
+  for (const [key, limit] of [["files_reviewed", 5000], ["coverage", 120], ["findings", 1000], ["prior_findings", 1000], ["limitations", 120]]) {
+    const value = model[key];
+    if (!Array.isArray(value) || value.length > limit) issues.push(`Reviewer supplied invalid ${key}.`);
+    lists[key] = Array.isArray(value) ? value.slice(0, limit) : [];
+  }
+  if (lists.limitations.some((item) => !reviewText(item))) issues.push("Review limitations must contain nonempty text.");
+  const reviewed = new Set();
+  if (!lists.files_reviewed.length) issues.push("Reviewer supplied no source input evidence.");
+  for (const input of lists.files_reviewed) {
+    if (!reviewObject(input) || !sourcePath(input.file) || !reviewText(input.evidence) || reviewed.has(input.file)) {
+      issues.push("Invalid, duplicate, or unsupported reviewed source input.");
+      continue;
+    }
+    reviewed.add(input.file);
+  }
+  for (const file of context.changed_files) if (!reviewed.has(file)) issues.push(`Changed file was not reviewed: ${file}`);
+  const coverage = new Map();
+  for (const area of lists.coverage) {
+    if (!reviewObject(area) || !reviewText(area.area) || !reviewText(area.notes) || !["REVIEWED", "NOT_APPLICABLE", "LIMITED"].includes(area.status)) {
+      issues.push("Invalid source-security coverage entry.");
+      continue;
+    }
+    const key = area.area.toLowerCase();
+    if (coverage.has(key)) issues.push(`Duplicate source-security coverage: ${area.area}`);
+    coverage.set(key, area);
+    if (area.status === "LIMITED") issues.push(`Source-security coverage is incomplete: ${area.area}`);
+  }
+  for (const surface of context.attack_surfaces) {
+    if (!coverage.has(surface.name.toLowerCase())) issues.push(`Required source-security surface was not reviewed: ${surface.name}`);
+  }
+  const current = new Set();
+  for (const finding of lists.findings) {
+    if (!reviewObject(finding) || !reviewText(finding.fingerprint) || !reviewText(finding.title) || !sourcePath(finding.file)
+      || !reviewText(finding.evidence) || !SEVERITIES.includes(finding.severity) || !CONFIDENCES.includes(finding.confidence)) {
+      issues.push("Invalid or unsupported security finding.");
+      continue;
+    }
+    const key = fingerprint(finding);
+    if (current.has(key)) issues.push(`Duplicate finding fingerprint: ${key}`);
+    current.add(key);
+  }
+  const old = new Map((previous?.findings || []).map((finding) => [finding.fingerprint, finding]));
+  const dispositions = new Map();
+  for (const disposition of lists.prior_findings) {
+    if (!reviewObject(disposition) || !old.has(disposition.fingerprint) || dispositions.has(disposition.fingerprint)
+      || !["OPEN", "RESOLVED", "UNVERIFIED"].includes(disposition.status) || !reviewText(disposition.evidence)) {
+      issues.push("Invalid, duplicate, or unsupported prior finding disposition.");
+      continue;
+    }
+    dispositions.set(disposition.fingerprint, disposition);
+    if (disposition.status === "UNVERIFIED") issues.push(`Prior finding was not verified: ${disposition.fingerprint}`);
+    else if ((disposition.status === "OPEN") !== current.has(disposition.fingerprint)) issues.push(`Prior finding disposition disagrees with current findings: ${disposition.fingerprint}`);
+    const file = old.get(disposition.fingerprint).file;
+    if (file && !reviewed.has(file)) issues.push(`Prior finding source was not reviewed: ${file}`);
+  }
+  for (const key of old.keys()) if (!dispositions.has(key)) issues.push(`Prior finding was not rechecked: ${key}`);
+  const diagnosticText = [model.summary, ...lists.limitations, ...lists.coverage.map((item) => item?.notes),
+    ...lists.files_reviewed.map((item) => item?.evidence), ...lists.prior_findings.map((item) => item?.evidence)];
+  if (diagnosticText.some(reviewBlockedText) || lists.limitations.some((item) => typeof item === "string" && sandboxSetupFailure(item))) issues.push("Reviewer reported blocked source access or an incomplete review despite its completion claim.");
+  return { complete: issues.length === 0, issues: unique(issues), dispositions };
+}
+
+function severity(value) { const v = typeof value === "string" ? value.toUpperCase() : "MEDIUM"; return SEVERITIES.includes(v) ? v : "MEDIUM"; }
+function confidence(value) { const v = typeof value === "string" ? value.toUpperCase() : "MEDIUM"; return CONFIDENCES.includes(v) ? v : "MEDIUM"; }
 function fingerprint(finding) {
-  const explicit = String(finding.fingerprint || "").trim().toLowerCase();
+  const explicit = typeof finding.fingerprint === "string" ? finding.fingerprint.trim().toLowerCase() : "";
   if (explicit) return explicit.replace(/[^a-z0-9._:/-]+/g, "-").slice(0, 180);
-  return hash([finding.category, finding.file, finding.title].map((x) => String(x || "").toLowerCase()).join("|")).slice(0, 24);
+  return hash([finding.category, finding.file, finding.title].map((x) => typeof x === "string" ? x.toLowerCase() : "").join("|")).slice(0, 24);
 }
 function normalizeFinding(f) {
+  const field = (key, fallback = "") => typeof f[key] === "string" ? f[key].trim() : fallback;
+  const strings = (key) => Array.isArray(f[key]) ? f[key].filter((value) => typeof value === "string") : [];
+  const line = ["number", "string"].includes(typeof f.line) ? Number(f.line) : null;
   return {
     fingerprint: fingerprint(f),
-    title: String(f.title || "Security finding").trim(),
+    title: field("title", "Security finding"),
     severity: severity(f.severity),
     confidence: confidence(f.confidence),
-    category: String(f.category || "General Security").trim(),
-    file: f.file ? posix(f.file) : null,
-    line: Number.isInteger(Number(f.line)) && Number(f.line) > 0 ? Number(f.line) : null,
-    owasp: Array.isArray(f.owasp) ? f.owasp.map(String).slice(0, 20) : [],
-    cwe: Array.isArray(f.cwe) ? f.cwe.map(String).filter((x) => /^CWE-\d+$/i.test(x)).slice(0, 20) : [],
-    advisories: Array.isArray(f.advisories) ? f.advisories.map(String).filter((x) => /^(CVE-|GHSA-|OSV-|GO-|RUSTSEC-|PYSEC-)/i.test(x)).slice(0, 20) : [],
-    evidence: String(f.evidence || "").trim(),
-    attack_scenario: String(f.attack_scenario || "").trim(),
-    impact: String(f.impact || "").trim(),
-    recommendation: String(f.recommendation || "").trim(),
-    validation: String(f.validation || "").trim(),
+    category: field("category", "General Security"),
+    file: field("file") ? posix(f.file) : null,
+    line: Number.isInteger(line) && line > 0 ? line : null,
+    owasp: strings("owasp").slice(0, 20),
+    cwe: strings("cwe").filter((x) => /^CWE-\d+$/i.test(x)).slice(0, 20),
+    advisories: strings("advisories").filter((x) => /^(CVE-|GHSA-|OSV-|GO-|RUSTSEC-|PYSEC-)/i.test(x)).slice(0, 20),
+    evidence: field("evidence"),
+    attack_scenario: field("attack_scenario"),
+    impact: field("impact"),
+    recommendation: field("recommendation"),
+    validation: field("validation"),
   };
 }
 function idAllocator(previous) {
@@ -599,7 +705,7 @@ function idAllocator(previous) {
   return () => `SEC-${String(++max).padStart(3, "0")}`;
 }
 function blocking(f) { return ACTIVE.has(f.status) && f.confidence !== "LOW" && ["CRITICAL", "HIGH", "MEDIUM"].includes(f.severity); }
-function reconcile(raw, previous, number) {
+function reconcile(raw, previous, number, dispositions) {
   const prev = new Map((previous?.findings || []).map((f) => [f.fingerprint, f]));
   const seen = new Set(); const allocate = idAllocator(previous); const result = [];
   for (const current of (raw || []).map(normalizeFinding)) {
@@ -613,8 +719,10 @@ function reconcile(raw, previous, number) {
   }
   for (const old of previous?.findings || []) {
     if (seen.has(old.fingerprint)) continue;
+    const disposition = dispositions.get(old.fingerprint);
+    if (disposition?.status !== "RESOLVED") throw new Error("Cannot resolve a finding without validated recheck evidence.");
     if (old.status === "RESOLVED") result.push({ ...old, blocking: false });
-    else result.push({ ...old, status: "RESOLVED", blocking: false, resolved_review: number });
+    else result.push({ ...old, status: "RESOLVED", blocking: false, resolved_review: number, resolution_evidence: disposition.evidence });
   }
   const order = Object.fromEntries(SEVERITIES.map((name, index) => [name, index]));
   return result.sort((a, b) => (a.blocking !== b.blocking ? (a.blocking ? -1 : 1) : order[a.severity] - order[b.severity] || String(a.id).localeCompare(String(b.id))));
@@ -650,10 +758,10 @@ function counts(findings) {
 }
 function scannerFindingCount(scanners) { return scanners.filter((s) => s.status === "FINDINGS").reduce((sum, s) => sum + (Number(s.finding_count) || 0), 0); }
 function normalizeCoverage(model, surfaces, scanners, scanOnly) {
-  const coverage = scanOnly ? surfaces.map((x) => ({ area: x.name, status: "LIMITED", notes: "AI source review skipped by --scan-only." })) : Array.isArray(model?.coverage) ? model.coverage.map((x) => ({
-    area: String(x.area || "Unknown"),
-    status: ["REVIEWED", "NOT_APPLICABLE", "LIMITED"].includes(String(x.status || "").toUpperCase()) ? String(x.status).toUpperCase() : "LIMITED",
-    notes: String(x.notes || "").trim(),
+  const coverage = scanOnly ? surfaces.map((x) => ({ area: x.name, status: "LIMITED", notes: "AI source review skipped by --scan-only." })) : Array.isArray(model?.coverage) ? model.coverage.filter(reviewObject).map((x) => ({
+    area: typeof x.area === "string" ? x.area : "Unknown",
+    status: typeof x.status === "string" && ["REVIEWED", "NOT_APPLICABLE", "LIMITED"].includes(x.status.toUpperCase()) ? x.status.toUpperCase() : "LIMITED",
+    notes: typeof x.notes === "string" ? x.notes.trim() : "",
   })).slice(0, 120) : [];
   if (!scanOnly) {
     const missingRequired = surfaces.filter((s) => !coverage.some((c) => c.area.toLowerCase() === s.name.toLowerCase()));
@@ -662,7 +770,7 @@ function normalizeCoverage(model, surfaces, scanners, scanOnly) {
   for (const s of scanners.filter((x) => ["SKIPPED", "ERROR"].includes(x.status))) coverage.push({ area: `Scanner: ${s.name}`, status: "LIMITED", notes: s.reason || s.note || s.status });
   return coverage;
 }
-function ratingText(review) { return Number.isFinite(review.rating) ? `${review.rating.toFixed(1)} / 5` : "NOT SCORED (scan-only)"; }
+function ratingText(review) { return Number.isFinite(review.rating) ? `${review.rating.toFixed(1)} / 5` : review.scan_only ? "NOT SCORED (scan-only)" : "NOT SCORED (incomplete review)"; }
 function markdown(review) {
   const lines = [
     "# Web Kit Security PR Review", "",
@@ -672,7 +780,9 @@ function markdown(review) {
     `- **Review:** ${review.review_number} (${review.mode})`,
     `- **Security Rating:** **${ratingText(review)}**`,
     `- **Decision:** **${review.decision}**`,
-    `- **Reviewer Provider:** ${review.provider || "scan-only"}`, "",
+    `- **Review completion:** ${review.review_status}`,
+    `- **Reviewer Provider:** ${review.provider || (review.scan_only ? "scan-only" : "unavailable")}`, "",
+    "## Assessment", "", review.summary, "",
     "## Active findings", "",
   ];
   const active = review.findings.filter((f) => ACTIVE.has(f.status));
@@ -693,21 +803,27 @@ function markdown(review) {
   for (const c of review.coverage) lines.push(`- **${c.area}:** ${c.status}${c.notes ? ` — ${c.notes}` : ""}`);
   lines.push("", "## Scanner status", "");
   for (const s of review.scanners) lines.push(`- **${s.name}:** ${s.status}${Number.isInteger(s.finding_count) ? ` (${s.finding_count} findings)` : ""}${s.reason ? ` — ${s.reason}` : ""}${s.note ? ` — ${String(s.note).slice(0, 300)}` : ""}`);
+  if (review.completion_issues.length) { lines.push("", "## Review completion issues", ""); for (const item of review.completion_issues) lines.push(`- ${item}`); }
+  if (review.unverified_findings.length) { lines.push("", "## Findings reported during an incomplete review", ""); for (const finding of review.unverified_findings) lines.push(`- ${finding.severity} — ${finding.title}${finding.file ? ` (${finding.file})` : ""}`); }
   if (review.limitations.length) { lines.push("", "## Limitations", ""); for (const item of review.limitations) lines.push(`- ${item}`); }
   if (review.scan_only) lines.push("", "> Scan-only mode is intentionally INCONCLUSIVE and is not assigned a /5 security rating. Existing SEC lifecycle state is preserved but not re-verified. Run a full security-review to correlate scanner evidence with source-level security reasoning.");
+  else if (!review.finding_lifecycle_verified) lines.push("", "> The source review did not complete. Previous SEC lifecycle state is preserved without verification; no approval or security rating was granted. Rerun the review after addressing the completion issues.");
   else lines.push("", "> A 5/5 review means no blocking issue was found in the reviewed scope and available evidence. It is not a guarantee that the software is vulnerability-free.");
   return `${lines.join("\n")}\n`;
 }
 function printReview(review, latestMd) {
   console.log("\n╔════════════════════════════════════════╗\n║       WEB KIT SECURITY PR REVIEW      ║\n╚════════════════════════════════════════╝\n");
-  console.log(`Branch:          ${review.branch}\nBase:            ${review.base}\nReview:          #${review.review_number} (${review.mode})\nSecurity Rating: ${ratingText(review)}\nDecision:        ${review.decision}\nProvider:        ${review.provider || "scan-only"}\n`);
+  console.log(`Branch:          ${review.branch}\nBase:            ${review.base}\nReview:          #${review.review_number} (${review.mode})\nSecurity Rating: ${ratingText(review)}\nDecision:        ${review.decision}\nProvider:        ${review.provider || (review.scan_only ? "scan-only" : "unavailable")}\n`);
   const c = review.counts;
   console.log(`Critical: ${c.CRITICAL}  High: ${c.HIGH}  Medium: ${c.MEDIUM}  Low: ${c.LOW}  Info: ${c.INFO}`);
   if (review.scan_only) console.log(`Scanner findings: ${review.scanner_finding_count}\n`); else console.log("");
   const active = review.findings.filter((f) => ACTIVE.has(f.status));
-  if (!active.length) console.log(review.scan_only ? "• No correlated SEC findings (AI correlation not run)." : "✓ No active security findings.");
+  if (!active.length) console.log(!review.finding_lifecycle_verified ? "• No verified findings from this incomplete review." : "✓ No active security findings.");
   for (const f of active) { console.log(`${f.blocking ? "✗" : "•"} ${f.id}  ${f.severity}  ${f.status}  ${f.title}`); if (f.file) console.log(`  ${f.file}${f.line ? `:${f.line}` : ""}`); }
   for (const f of review.findings.filter((f) => f.status === "RESOLVED" && f.resolved_review === review.review_number)) console.log(`✓ ${f.id}  RESOLVED  ${f.title}`);
+  for (const issue of review.completion_issues) console.log(`• Review incomplete: ${issue}`);
+  if (!review.finding_lifecycle_verified && !review.scan_only) for (const limitation of review.limitations) console.log(`• Limitation: ${limitation}`);
+  for (const finding of review.unverified_findings) console.log(`• Unverified ${finding.severity}: ${finding.title}`);
   console.log(`\nFull review: ${latestMd}`);
 }
 
@@ -785,20 +901,29 @@ async function main() {
     const previousRel = previous ? posix(path.relative(project, latestJson)) : null;
 
     let provider = null;
-    let model = { summary: "Scanner-only branch security evidence collection.", limitations: ["AI source/security reasoning was skipped by --scan-only."], coverage: [], findings: [] };
+    let model = { review_status: "SCAN_ONLY", summary: "Scanner-only branch security evidence collection.", limitations: ["AI source/security reasoning was skipped by --scan-only."], files_reviewed: [], prior_findings: [], coverage: [], findings: [] };
     if (!args.scanOnly) {
-      provider = chooseProvider(args.provider);
-      model = withEphemeralUntrackedEvidence(untrackedEvidence, (ephemeralUntrackedEvidenceFile) =>
-        invokeProvider(provider, project, reviewerPrompt(contextRel, ephemeralUntrackedEvidenceFile, previousRel), args.timeoutMs));
+      try {
+        provider = chooseProvider(args.provider);
+        model = withEphemeralUntrackedEvidence(untrackedEvidence, (ephemeralUntrackedEvidenceFile) =>
+          invokeProvider(provider, project, reviewerPrompt(contextRel, ephemeralUntrackedEvidenceFile, previousRel), args.timeoutMs));
+      } catch (error) {
+        if (!(error instanceof ReviewerFailure)) throw error;
+        const diagnostic = redactSensitiveText(error.message);
+        model = { review_status: "ERROR", summary: diagnostic, limitations: [diagnostic], files_reviewed: [], prior_findings: [], coverage: [], findings: [] };
+      }
     } else {
       for (const s of scanners) if (s.status === "FINDINGS") model.limitations.push(`${s.name} reported ${Number(s.finding_count) || "one or more"} finding(s); a full security-review is required to correlate severity, exploitability, and persistent SEC-* findings.`);
     }
 
-    const findings = args.scanOnly ? preserveUnverifiedFindings(previous) : reconcile(model.findings, previous, reviewNumber);
+    const completion = args.scanOnly ? { complete: false, issues: [], dispositions: new Map() } : assessReviewCompletion(model, context, previous);
+    const findings = completion.complete ? reconcile(model.findings, previous, reviewNumber, completion.dispositions) : preserveUnverifiedFindings(previous);
+    const unverifiedFindings = !completion.complete && Array.isArray(model.findings)
+      ? model.findings.slice(0, 1000).filter((finding) => reviewObject(finding) && reviewText(finding.title) && reviewText(finding.evidence)).map(normalizeFinding) : [];
     const scanFindings = scannerFindingCount(scanners);
-    const rating = args.scanOnly ? null : score(findings);
-    const decision = args.scanOnly ? "INCONCLUSIVE" : findings.some((f) => f.blocking) ? "REQUEST_CHANGES" : "APPROVE";
-    const limitations = Array.isArray(model.limitations) ? model.limitations.map(String).slice(0, 120) : [];
+    const rating = completion.complete ? score(findings) : null;
+    const decision = !completion.complete ? "INCONCLUSIVE" : findings.some((f) => f.blocking) ? "REQUEST_CHANGES" : "APPROVE";
+    const limitations = Array.isArray(model.limitations) ? model.limitations.filter(reviewText).slice(0, 120) : [];
     for (const s of scanners) {
       if (s.status === "SKIPPED") limitations.push(`${s.name}: ${s.reason || "scanner unavailable"}`);
       if (s.status === "ERROR") limitations.push(`${s.name}: scanner error; ${s.note || `exit ${s.exit_code}`}`);
@@ -820,20 +945,25 @@ async function main() {
       untracked_raw_evidence_persisted_in_worktree: false,
       review_state_git_excluded: true,
       scan_only: args.scanOnly,
-      finding_lifecycle_verified: !args.scanOnly,
-      provider: provider?.name || null,
+      review_status: completion.complete ? "COMPLETE" : args.scanOnly ? "SCAN_ONLY" : ["PARTIAL", "BLOCKED", "ERROR"].includes(model.review_status) ? model.review_status : "INCOMPLETE",
+      completion_issues: completion.issues,
+      files_reviewed: Array.isArray(model.files_reviewed) ? model.files_reviewed.slice(0, 5000) : [],
+      prior_findings: Array.isArray(model.prior_findings) ? model.prior_findings.slice(0, 1000) : [],
+      finding_lifecycle_verified: completion.complete,
+      provider: provider?.name || (!args.scanOnly && args.provider !== "auto" ? args.provider : null),
       scanners,
       scanner_finding_count: scanFindings,
-      summary: String(model.summary || "").trim(),
+      summary: typeof model.summary === "string" ? model.summary.trim() : "Reviewer supplied an invalid assessment summary.",
       limitations: unique(limitations),
       coverage: normalizeCoverage(model, surfaces, scanners, args.scanOnly),
       findings,
+      unverified_findings: unverifiedFindings,
       counts: counts(findings),
       rating,
       rating_scale: 5,
-      rating_status: args.scanOnly ? "NOT_SCORED_SCAN_ONLY" : "SCORED",
+      rating_status: args.scanOnly ? "NOT_SCORED_SCAN_ONLY" : completion.complete ? "SCORED" : "NOT_SCORED_INCOMPLETE_REVIEW",
       decision,
-      approval_eligible: !args.scanOnly,
+      approval_eligible: completion.complete,
       blocking_findings: findings.filter((f) => f.blocking).map((f) => f.id),
       created_at: nowIso(),
       disclaimer: "This review is evidence-based risk assessment, not a guarantee that every vulnerability has been found.",
@@ -845,6 +975,7 @@ async function main() {
     writeJson(latestJson, review); writeText(latestMd, markdown(review));
 
     if (args.json) console.log(JSON.stringify(review, null, 2)); else printReview(review, posix(path.relative(project, latestMd)));
+    if (!args.scanOnly && !completion.complete) return 4;
     if (args.failOnBlocking && decision !== "APPROVE") return 4;
     return 0;
   } finally {

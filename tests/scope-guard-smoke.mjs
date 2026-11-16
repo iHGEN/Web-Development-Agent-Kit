@@ -175,6 +175,144 @@ try {
   const legacyResult = run("node", [script, "check", "--task-id", legacyId, "--project", project], 2);
   assert.match(legacyResult.error, /lacks the staged baseline/);
 
+  // Existing task authorization can permit edits to selected untracked user
+  // files without erasing their original contents or exempting nearby work.
+  const authorizedProject = path.join(project, "authorized-untracked");
+  fs.mkdirSync(authorizedProject);
+  const authorizedGit = (...values) => {
+    const result = spawnSync("git", values, { cwd: authorizedProject, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const authorizedWrite = (file, content) => {
+    const target = path.join(authorizedProject, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  };
+  const authorizedArgs = ["--project", authorizedProject, "--task-id", "AUTHORIZED"];
+  const authorizedRun = (command, extra = [], expected = 0, taskArgs = authorizedArgs) => {
+    const result = spawnSync(process.execPath, [script, command, ...taskArgs, ...extra], { encoding: "utf8" });
+    assert.equal(result.status, expected, result.stdout + result.stderr);
+    return JSON.parse(result.stdout || result.stderr);
+  };
+  const authorization = file => ["--allow", file, "--reason", "Implement the user's eight-file fix",
+    "--evidence", "Task request explicitly authorizes edits to these existing files"];
+  authorizedGit("init", "-b", "main");
+  authorizedGit("config", "user.name", "Authorized scope regression");
+  authorizedGit("config", "user.email", "authorized-scope@example.invalid");
+  authorizedWrite("tracked.js", "// baseline\n");
+  authorizedGit("add", "."); authorizedGit("commit", "-m", "baseline");
+  authorizedGit("switch", "-c", "feat/authorized-content");
+  authorizedWrite("tracked.js", "// original staged user content\n");
+  authorizedGit("add", "tracked.js");
+  authorizedWrite("tracked.js", "// original unstaged user content\n");
+  const protectedIndex = authorizedGit("rev-parse", ":tracked.js");
+  const eight = ["src/one.js", "isolated/two.js", "src/three.js", "src/four.js", "src/five.js", "src/six.js", "src/space name.js", "src/ملف.js"];
+  for (const file of eight) authorizedWrite(file, `// original ${file}\n`);
+  authorizedWrite("ninth-private.txt", "Private user work\n");
+  authorizedWrite("src/allowed-without-authorization.js", "// separate user work\n");
+  authorizedRun("start", ["--base", "main", "--intent", "Fix eight existing files",
+    ...[...eight, "src/allowed-without-authorization.js", "tracked.js"].flatMap(file => ["--allow", file])]);
+  const authorizationManifestPath = path.join(authorizedProject, ".agent-core/state/scope/AUTHORIZED.json");
+  const originalAuthorizationManifest = JSON.parse(fs.readFileSync(authorizationManifestPath, "utf8"));
+  for (const file of eight) authorizedWrite(file, `// authorized fix ${file}\n`);
+  assert.equal(authorizedRun("check", [], 1).preexisting_changed.length, 8);
+  authorizedRun("authorize", ["--allow", eight[0], "--reason", "No evidence"], 2);
+  authorizedRun("authorize", ["--allow", eight[0], "--reason", " ", "--evidence", "Request"], 2);
+  for (const file of ["../escape.js", "C:/escape.js", "src/**", eight[0] + "-sibling", "ninth-private.txt", "tracked.js"]) {
+    authorizedRun("authorize", authorization(file), 2);
+  }
+  for (const file of eight) {
+    const approved = authorizedRun("authorize", authorization(file));
+    assert.equal(approved.verdict, "AUTHORIZED");
+    assert.equal(approved.permission, "content-edit");
+    assert.equal(approved.staging, "content-equivalent-only");
+  }
+  authorizedRun("authorize", authorization(eight[0]), 2);
+  const approvedManifest = JSON.parse(fs.readFileSync(authorizationManifestPath, "utf8"));
+  assert.deepEqual(approvedManifest.preexisting, originalAuthorizationManifest.preexisting, "Authorization must never rebaseline existing content");
+  assert.deepEqual(approvedManifest.allowed_paths, originalAuthorizationManifest.allowed_paths);
+  assert.equal(approvedManifest.extensions.filter(entry => entry.kind === "preexisting-untracked-content").length, 8);
+  const authorizedClean = authorizedRun("check");
+  assert.deepEqual(authorizedClean.authorized_preexisting_changes, [...eight].sort());
+  assert.deepEqual(authorizedClean.protected_preexisting_changes, []);
+  assert.equal(authorizedGit("rev-parse", ":tracked.js"), protectedIndex);
+
+  const ninthStatus = authorizedGit("status", "--porcelain=v1", "--", "ninth-private.txt");
+  authorizedWrite("ninth-private.txt", "Accidental overwrite\n");
+  assert.equal(authorizedGit("status", "--porcelain=v1", "--", "ninth-private.txt"), ninthStatus);
+  const unauthorizedNinth = authorizedRun("check", [], 1);
+  assert.deepEqual(unauthorizedNinth.unexpected_paths, ["ninth-private.txt"]);
+  assert.deepEqual(unauthorizedNinth.protected_preexisting_changes, ["ninth-private.txt"]);
+  authorizedWrite("ninth-private.txt", "Private user work\n");
+  authorizedWrite("src/allowed-without-authorization.js", "// allowlist alone is not authorization\n");
+  assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, ["src/allowed-without-authorization.js"]);
+  authorizedWrite("src/allowed-without-authorization.js", "// separate user work\n");
+
+  // Ordinary editor replacement is allowed; file identity is not tied to inode.
+  const firstPath = path.join(authorizedProject, eight[0]);
+  const replacement = path.join(project, "editor-replacement.tmp");
+  fs.writeFileSync(replacement, "// atomic replacement\n");
+  fs.renameSync(replacement, firstPath);
+  assert.equal(authorizedRun("check").verdict, "PASS");
+  const linkedCopy = path.join(project, "unauthorized-hardlink.tmp");
+  fs.linkSync(firstPath, linkedCopy);
+  assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, [eight[0]]);
+  fs.unlinkSync(linkedCopy);
+  fs.unlinkSync(firstPath);
+  assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, [eight[0]]);
+  fs.writeFileSync(firstPath, "// atomic replacement\n");
+  if (process.platform !== "win32") {
+    fs.chmodSync(firstPath, 0o755);
+    assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, [eight[0]]);
+    fs.chmodSync(firstPath, 0o644);
+    fs.unlinkSync(firstPath);
+    fs.symlinkSync("../ninth-private.txt", firstPath);
+    assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, [eight[0]]);
+    fs.unlinkSync(firstPath); fs.writeFileSync(firstPath, "// atomic replacement\n");
+  }
+  const originalDirectory = path.join(authorizedProject, "isolated");
+  const movedDirectory = path.join(project, "outside-authorized-parent");
+  fs.renameSync(originalDirectory, movedDirectory);
+  fs.symlinkSync(movedDirectory, originalDirectory, process.platform === "win32" ? "junction" : "dir");
+  assert(authorizedRun("check", [], 1).protected_preexisting_changes.includes(eight[1]), "A symlink ancestor cannot extend edit authority");
+  fs.unlinkSync(originalDirectory); fs.renameSync(movedDirectory, originalDirectory);
+
+  // Equivalent staging/commits preserve readiness, including Git's CRLF
+  // normalization, but a hidden staged version cannot be certified.
+  authorizedGit("config", "core.autocrlf", "true");
+  authorizedWrite(eight[0], "// normalized content\r\n");
+  const beforeAdd = authorizedRun("check").change_digest;
+  authorizedGit("add", "--", ...eight);
+  assert.equal(authorizedRun("check").change_digest, beforeAdd);
+  authorizedWrite(eight[0], "// differing worktree\r\n");
+  assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, [eight[0]]);
+  authorizedWrite(eight[0], "// normalized content\r\n");
+  authorizedGit("commit", "--only", "-m", "authorized fixes", "--", ...eight);
+  assert.equal(authorizedRun("check").change_digest, beforeAdd);
+  assert.equal(authorizedGit("rev-parse", ":tracked.js"), protectedIndex);
+  authorizedWrite(eight[0], "// authorized follow-up edit\r\n");
+  assert.equal(authorizedRun("check").verdict, "PASS");
+  authorizedGit("rm", "--cached", "--", eight[1]);
+  assert(authorizedRun("check", [], 1).protected_preexisting_changes.includes(eight[1]));
+  authorizedGit("restore", "--staged", "--", eight[1]);
+  authorizedGit("config", "core.autocrlf", "false");
+  authorizedWrite("tracked.js", "// replaced staged user content\n");
+  authorizedGit("add", "tracked.js");
+  authorizedWrite("tracked.js", "// original unstaged user content\n");
+  assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, ["tracked.js"]);
+
+  const legacyAuthorization = structuredClone(originalAuthorizationManifest);
+  legacyAuthorization.task_id = "AUTHORIZATION.LEGACY";
+  delete legacyAuthorization.preexisting[eight[0]].untracked_shape;
+  const legacyAuthorizationPath = path.join(authorizedProject, ".agent-core/state/scope/AUTHORIZATION.LEGACY.json");
+  const legacyAuthorizationBytes = JSON.stringify(legacyAuthorization);
+  fs.writeFileSync(legacyAuthorizationPath, legacyAuthorizationBytes);
+  const missingTypeEvidence = authorizedRun("authorize", authorization(eight[0]), 2,
+    ["--project", authorizedProject, "--task-id", "AUTHORIZATION.LEGACY"]);
+  assert.match(missingTypeEvidence.error, /lacks required baseline type evidence/);
+  assert.equal(fs.readFileSync(legacyAuthorizationPath, "utf8"), legacyAuthorizationBytes);
+
   // A tracked bookkeeping file remains PR content after its deletion is committed.
   // HEAD/index alone cannot decide whether a state path is generated.
   const deletedProject = path.join(project, "committed-state-deletion");

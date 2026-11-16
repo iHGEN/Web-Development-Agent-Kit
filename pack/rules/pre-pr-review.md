@@ -50,7 +50,7 @@ The guard captures pre-existing staged, unstaged and untracked changes without m
 
 For a kit installed in a nested application, keep `--project` consistent across task, scope and review commands. All allowed/source paths are relative to the Git repository root, such as `apps/web/src/feature.js` and `packages/shared/contract.js`. Task state and check execution stay in the selected application; the scope fence and review diff span the entire repository. Canonical directory resolution handles filesystem aliases without requiring the user to move task state to the Git root.
 
-- Never amend, stage, discard or overwrite pre-existing user changes merely to finish a task. If work overlaps an already-dirty file, stop and request direction.
+- Never amend, stage, discard or overwrite pre-existing user changes merely to finish a task. Reuse explicit task authorization when it already covers the overlapping edit; ask for direction only when authorization is missing. For an allowed file that was initially untracked, record that permission with `authorize` as described below. Tracked dirty work retains its existing protection.
 - Do not edit unrelated files for aesthetic cleanup, naming consistency, warnings discovered elsewhere, dependency upgrades, broad formatting, or opportunistic refactors.
 - An unchanged file may be read to understand a real dependency. Reading it does not authorize changing it.
 - If new evidence proves another **necessary** file is required, extend the fence *before* editing it, recording the acceptance criterion and source evidence:
@@ -63,6 +63,19 @@ node .agent-core/rules/scope-guard.mjs extend \
 ```
 
 The Captain must verify the extension against the original request. Material changes to architecture, public contracts, schema, security, dependencies, destructive behavior or product scope still require the normal validated Plan Delta. Scope extensions are **not** permission to introduce unrelated work; the reviewer audits every extension.
+
+For explicitly authorized content edits to existing untracked files, use the original task's permission as evidence:
+
+```bash
+node .agent-core/rules/scope-guard.mjs authorize \
+  --task-id TASK-042 --allow src/feature.js \
+  --reason "The requested fix changes this existing untracked file" \
+  --evidence "Original task explicitly authorizes editing src/feature.js"
+```
+
+Run `authorize` once per exact authorized path, which must already be in the scope. This records a distinct extension; it never replaces the startup snapshot or changes the allowlist. Existing task permission is sufficient: do not ask for the same authorization again. Record it before editing when possible; recording prior permission afterward must still use the original baseline and cannot authorize unrelated drift.
+
+Authorization covers regular-file contents and equivalent staging/commits when the index and worktree agree. It rejects deletion, symlink/hardlink escapes, executable-mode changes and divergent staged content. Other dirty files and their original staged blobs remain protected. A legacy snapshot without the required baseline type evidence cannot safely receive this authorization; report that gap without reinitializing the guard after edits. Authorization changes the scope digest and requires a fresh independent review.
 
 After each coherent implementation/fix chunk and before any handoff, commit, push or PR creation:
 
