@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 export const ROLE_START = "<!-- WEB-AGENT-KIT:AI-ROLES:START -->";
 export const ROLE_END = "<!-- WEB-AGENT-KIT:AI-ROLES:END -->";
@@ -22,6 +23,246 @@ const LOCAL_TARGETS = {
   "github-copilot": [".agent-core/instructions/copilot-instructions.md", "GitHub Copilot"],
   cursor: [".agent-core/instructions/ihgen-web-kit.mdc", "Cursor"],
 };
+const LOCAL_ADAPTER_MARKER = "<!-- WEB-AGENT-KIT:LOCAL-ADAPTER -->";
+const LOCAL_ADAPTER_FILES = {
+  "github-copilot": ".github/instructions/ihgen-web-kit-local.instructions.md",
+  cursor: ".cursor/rules/ihgen-web-kit-local.mdc",
+};
+const GEMINI_SETTINGS = ".gemini/settings.json";
+const GEMINI_CONTEXT = LOCAL_TARGETS.gemini[0];
+const GEMINI_ADAPTER_STATE = ".agent-core/instructions/.gemini-adapter-state.json";
+const ADAPTER_IGNORE_COMMENT = "# iHGEN Web Kit private adapter";
+
+function gitResult(project, args) {
+  return spawnSync("git", args, { cwd: project, encoding: "utf8", windowsHide: true });
+}
+
+function gitRoot(project) {
+  const result = gitResult(project, ["rev-parse", "--show-toplevel"]);
+  return !result.error && result.status === 0 ? path.resolve(result.stdout.trim()) : null;
+}
+
+function isTracked(project, relative) {
+  const root = gitRoot(project);
+  if (!root) return false;
+  const relativeToRoot = path.relative(root, path.join(project, relative));
+  const result = gitResult(project, ["ls-files", "--error-unmatch", "--", relativeToRoot]);
+  return result.status === 0;
+}
+
+function hasUnsafeAdapterPath(project, relative) {
+  let current = project;
+  for (const part of relative.split("/")) {
+    current = path.join(current, part);
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) return true;
+  }
+  return false;
+}
+
+function isAdapterProtected(project, relative) {
+  const root = gitRoot(project);
+  if (root) return gitResult(project, ["check-ignore", "-q", "--", relative]).status === 0;
+  const ignore = path.join(project, path.dirname(relative), ".gitignore");
+  return fs.existsSync(ignore) && fs.readFileSync(ignore, "utf8").split(/\r?\n/).includes(`/${path.basename(relative)}`);
+}
+
+function adapterIgnoreContent(relative) {
+  return `${ADAPTER_IGNORE_COMMENT}\n/.gitignore\n/${path.basename(relative)}\n`;
+}
+
+function gitExcludeInfo(project, relative) {
+  const root = gitRoot(project);
+  if (!root) return null;
+  const gitPath = gitResult(project, ["rev-parse", "--git-path", "info/exclude"]);
+  if (gitPath.error || gitPath.status !== 0) return null;
+  const target = gitPath.stdout.trim();
+  if (!target) return null;
+  const repoRelative = path.relative(root, path.join(project, relative)).split(path.sep).join("/");
+  if (repoRelative.startsWith("../") || repoRelative === ".." || /[\r\n]/.test(repoRelative)) return null;
+  return {
+    file: path.isAbsolute(target) ? target : path.resolve(project, target),
+    pattern: `/${repoRelative.replace(/[\\*?\[\]]/g, "\\$&")}`,
+  };
+}
+
+function protectAdapter(project, relative) {
+  const file = path.join(project, relative);
+  const ignoreFile = path.join(path.dirname(file), ".gitignore");
+  // This only creates new, narrowly scoped local ignore files; existing team
+  // .gitignore files are never rewritten, even when they are untracked.
+  if (!fs.existsSync(ignoreFile)) {
+    fs.mkdirSync(path.dirname(ignoreFile), { recursive: true });
+    fs.writeFileSync(ignoreFile, adapterIgnoreContent(relative), "utf8");
+  }
+  const root = gitRoot(project);
+  if (!root) return isAdapterProtected(project, relative);
+  const info = gitExcludeInfo(project, relative);
+  if (!info) return false;
+  fs.mkdirSync(path.dirname(info.file), { recursive: true });
+  const existing = fs.existsSync(info.file) ? fs.readFileSync(info.file, "utf8") : "";
+  if (!existing.split(/\r?\n/).includes(info.pattern)) {
+    fs.appendFileSync(info.file, `${existing && !existing.endsWith("\n") ? "\n" : ""}${ADAPTER_IGNORE_COMMENT}\n${info.pattern}\n`, "utf8");
+  }
+  return isAdapterProtected(project, relative);
+}
+
+function unprotectAdapter(project, relative) {
+  const info = gitExcludeInfo(project, relative);
+  if (info && fs.existsSync(info.file)) {
+    const text = fs.readFileSync(info.file, "utf8");
+    const pair = `${ADAPTER_IGNORE_COMMENT}\n${info.pattern}\n`;
+    if (text.includes(pair)) fs.writeFileSync(info.file, text.replace(pair, ""), "utf8");
+  }
+  const ignore = path.join(project, path.dirname(relative), ".gitignore");
+  if (fs.existsSync(ignore) && fs.readFileSync(ignore, "utf8") === adapterIgnoreContent(relative)) fs.unlinkSync(ignore);
+}
+
+function hasOneCompleteRolesBlock(value) {
+  return value.split(ROLE_START).length === 2 && value.split(ROLE_END).length === 2
+    && value.indexOf(ROLE_START) < value.indexOf(ROLE_END);
+}
+
+function writeLocalAdapter(project, relative, content) {
+  const file = path.join(project, relative);
+  if (hasUnsafeAdapterPath(project, relative)) return "blocked: symbolic link in adapter path";
+  if (isTracked(project, relative)) return "blocked: tracked team file";
+  if (fs.existsSync(file)) {
+    if (!fs.lstatSync(file).isFile()) return "blocked: adapter is not a regular file";
+    const existing = fs.readFileSync(file, "utf8");
+    if (!existing.includes(LOCAL_ADAPTER_MARKER)) return "blocked: existing non-Web-Kit file";
+    if (!hasOneCompleteRolesBlock(existing)) return "blocked: malformed Web Kit adapter";
+    content = replaceMarkedSection(existing, ROLE_START, ROLE_END,
+      content.slice(content.indexOf(ROLE_START), content.indexOf(ROLE_END) + ROLE_END.length));
+  }
+  if (!protectAdapter(project, relative)) return "blocked: cannot ensure private Git exclusion";
+  fs.writeFileSync(file, content, "utf8");
+  return "active";
+}
+
+function geminiContextNames(value) {
+  if (value === undefined) return ["GEMINI.md"];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return [...value];
+  return null;
+}
+
+function installGeminiAdapter(project) {
+  if (hasUnsafeAdapterPath(project, GEMINI_SETTINGS)) return "blocked: symbolic link in Gemini settings path";
+  if (isTracked(project, GEMINI_SETTINGS)) return "blocked: existing tracked Gemini settings";
+  const file = path.join(project, GEMINI_SETTINGS);
+  let settings = {};
+  const existed = fs.existsSync(file);
+  if (existed) {
+    if (!isAdapterProtected(project, GEMINI_SETTINGS)) {
+      return "blocked: existing unprotected Gemini settings (add a local ignore first)";
+    }
+    if (!fs.statSync(file).isFile()) return "blocked: Gemini settings are not a regular file";
+    try { settings = JSON.parse(fs.readFileSync(file, "utf8")); }
+    catch { return "blocked: Gemini settings are not valid JSON"; }
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return "blocked: invalid Gemini settings shape";
+    if (settings.context !== undefined && (!settings.context || typeof settings.context !== "object" || Array.isArray(settings.context))) {
+      return "blocked: invalid Gemini context settings";
+    }
+  }
+  const prior = settings.context?.fileName;
+  const names = geminiContextNames(prior);
+  if (!names) return "blocked: unsupported Gemini context.fileName value";
+  if (!protectAdapter(project, GEMINI_SETTINGS)) return "blocked: cannot ensure private Git exclusion";
+  const stateFile = path.join(project, GEMINI_ADAPTER_STATE);
+  if (!fs.existsSync(stateFile)) {
+    writeJson(stateFile, { created: !existed, had_file_name: prior !== undefined, original_file_name: prior ?? null });
+  }
+  settings.context = { ...(settings.context || {}), fileName: [...new Set([...names, GEMINI_CONTEXT])] };
+  writeJson(file, settings);
+  return "active";
+}
+
+function removeLocalAdapter(project, relative, generated) {
+  const file = path.join(project, relative);
+  if (!fs.existsSync(file)) return "absent";
+  if (hasUnsafeAdapterPath(project, relative)) return "preserved: symbolic link in adapter path";
+  if (isTracked(project, relative)) return "preserved: tracked file";
+  const contents = fs.readFileSync(file, "utf8");
+  if (!contents.includes(LOCAL_ADAPTER_MARKER)) return "preserved: not Web-Kit-owned";
+  if (!hasOneCompleteRolesBlock(contents)) return "preserved: malformed Web Kit adapter";
+  if (contents === generated) { fs.unlinkSync(file); unprotectAdapter(project, relative); return "removed"; }
+  // The user extended this adapter. Remove only Web Kit's roles and marker;
+  // keep their notes and native frontmatter rather than deleting their edits.
+  const withoutRoles = replaceMarkedSection(contents, ROLE_START, ROLE_END, "")
+    .replace(`# ${LOCAL_ADAPTER_MARKER}`, "").replace(LOCAL_ADAPTER_MARKER, "");
+  fs.writeFileSync(file, withoutRoles, "utf8");
+  return "removed Web Kit roles; preserved user edits";
+}
+
+function removeGeminiAdapter(project) {
+  const stateFile = path.join(project, GEMINI_ADAPTER_STATE);
+  if (!fs.existsSync(stateFile)) return "absent";
+  const relative = GEMINI_SETTINGS;
+  if (hasUnsafeAdapterPath(project, relative)) return "preserved: symbolic link in Gemini settings path";
+  if (isTracked(project, relative)) return "preserved: tracked Gemini settings";
+  const file = path.join(project, relative);
+  if (!fs.existsSync(file)) { fs.unlinkSync(stateFile); unprotectAdapter(project, relative); return "absent"; }
+  let settings;
+  try { settings = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { return "preserved: Gemini settings were edited to invalid JSON"; }
+  const names = geminiContextNames(settings.context?.fileName);
+  if (!names || !names.includes(GEMINI_CONTEXT)) return "preserved: Gemini context was changed";
+  const state = readJson(stateFile);
+  const remaining = names.filter((name) => name !== GEMINI_CONTEXT);
+  const original = geminiContextNames(state.had_file_name ? state.original_file_name : undefined);
+  if (JSON.stringify(remaining) === JSON.stringify(original)) {
+    if (state.had_file_name) settings.context.fileName = state.original_file_name;
+    else delete settings.context.fileName;
+  } else settings.context.fileName = remaining;
+  if (!Object.keys(settings.context).length) delete settings.context;
+  if (state.created && !Object.keys(settings).length) fs.unlinkSync(file);
+  else writeJson(file, settings);
+  fs.unlinkSync(stateFile);
+  if (!fs.existsSync(file)) unprotectAdapter(project, relative);
+  return "removed";
+}
+
+function generatedAdapter(project, key) {
+  const local = path.join(project, LOCAL_TARGETS[key][0]);
+  if (!fs.existsSync(local)) return null;
+  const content = fs.readFileSync(local, "utf8");
+  return key === "cursor" ? content.replace(/^---\n/, `---\n# ${LOCAL_ADAPTER_MARKER}\n`)
+    : `---\napplyTo: "**/*"\n---\n\n${LOCAL_ADAPTER_MARKER}\n${content}`;
+}
+
+function synchronizeLocalAdapters(project, scope) {
+  if (scope === "shared") return {
+    "github-copilot": removeLocalAdapter(project, LOCAL_ADAPTER_FILES["github-copilot"], generatedAdapter(project, "github-copilot")),
+    cursor: removeLocalAdapter(project, LOCAL_ADAPTER_FILES.cursor, generatedAdapter(project, "cursor")),
+    gemini: removeGeminiAdapter(project),
+  };
+  return {
+    "github-copilot": writeLocalAdapter(project, LOCAL_ADAPTER_FILES["github-copilot"], generatedAdapter(project, "github-copilot")),
+    cursor: writeLocalAdapter(project, LOCAL_ADAPTER_FILES.cursor, generatedAdapter(project, "cursor")),
+    gemini: installGeminiAdapter(project),
+  };
+}
+
+export function localAdapterStatus(project) {
+  const config = readJson(path.join(project, ".agent-kit.json"));
+  if (config.ai_compatibility?.instruction_scope !== "local") return {};
+  const result = {};
+  for (const [key, relative] of Object.entries(LOCAL_ADAPTER_FILES)) {
+    const file = path.join(project, relative);
+    const ready = !hasUnsafeAdapterPath(project, relative) && fs.existsSync(file)
+      && fs.lstatSync(file).isFile() && fs.readFileSync(file, "utf8").includes(LOCAL_ADAPTER_MARKER)
+      && hasOneCompleteRolesBlock(fs.readFileSync(file, "utf8"));
+    result[key] = ready && !isTracked(project, relative) && isAdapterProtected(project, relative) ? "active" : "missing or unprotected";
+  }
+  const geminiFile = path.join(project, GEMINI_SETTINGS);
+  const geminiState = path.join(project, GEMINI_ADAPTER_STATE);
+  const geminiCfg = readJson(geminiFile);
+  const geminiNames = geminiContextNames(geminiCfg.context?.fileName);
+  result.gemini = !hasUnsafeAdapterPath(project, GEMINI_SETTINGS) && fs.existsSync(geminiState)
+    && !isTracked(project, GEMINI_SETTINGS)
+    && geminiNames?.includes(GEMINI_CONTEXT) && isAdapterProtected(project, GEMINI_SETTINGS) ? "active" : "missing or unprotected";
+  return result;
+}
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); }
@@ -244,6 +485,8 @@ export function applyAiCompatibility(project, profile = null, options = {}) {
       actions[`removed-shared-${key}`] = removeMarkedRoles(path.join(project, relative));
     }
   }
+  const adapters = synchronizeLocalAdapters(project, scope);
+  for (const [key, action] of Object.entries(adapters)) actions[`local-adapter-${key}`] = action;
 
   const compatibility = {
     instruction_scope: scope,
@@ -285,8 +528,9 @@ export function applyAiCompatibility(project, profile = null, options = {}) {
     temporary_graphify_role: ".agent-core/state/graphify-bootstrap-role.md",
     native_agents_md: ["codex", "kimi", "agents-md-compatible"],
     managed_roles: Object.fromEntries(Object.entries(targets).map(([key, [relative]]) => [key, relative])),
+    local_adapters: scope === "local" ? adapters : {},
     file_policy: scope === "local"
-      ? "Web Kit instructions live under .agent-core/instructions and are locally Git-ignored. Only Web Kit-marked blocks are removed from shared project files when switching to local mode. Web Kit-controlled sessions load the local instructions explicitly."
+      ? "Web Kit instructions live under .agent-core/instructions and are locally Git-ignored. Copilot and Cursor receive ignored native rule adapters; Gemini receives a private project context setting where safely possible. Only Web Kit-marked blocks are removed from shared project files when switching to local mode. Web Kit-controlled Codex/Claude sessions load the local instructions explicitly."
       : "Existing project instruction files are preserved; Web Kit changes only its marked roles block. Missing files are created once with a project summary plus the roles block.",
     runtime: "node+npm",
     actions,

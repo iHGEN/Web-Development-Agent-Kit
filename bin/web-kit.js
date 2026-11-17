@@ -82,6 +82,8 @@ choose a different supported mode when your environment requires it.
 AI instruction scopes:
   - default/shared: Web Kit adds or refreshes only its marked roles block in project files;
   - local: Web Kit-managed sessions load Git-ignored .agent-core/instructions files;
+    private Gemini, Copilot, and Cursor native adapters enable normal local clients;
+    tracked team settings are preserved and unsafe adapter conflicts are reported;
   - switching to local removes only Web Kit-marked blocks from shared files;
   - the chosen scope persists across later updates.
 

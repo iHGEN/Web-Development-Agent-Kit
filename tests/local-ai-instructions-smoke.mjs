@@ -12,6 +12,7 @@ const mockProvider = path.join(repo, "tests", "fixtures", "mock-session-provider
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-local-instructions-"));
 const sharedPaths = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursor/rules/ihgen-web-kit.mdc"];
 const localPaths = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "copilot-instructions.md", "ihgen-web-kit.mdc"];
+const adapterPaths = [".github/instructions/ihgen-web-kit-local.instructions.md", ".cursor/rules/ihgen-web-kit-local.mdc", ".gemini/settings.json"];
 const startMarker = "<!-- WEB-AGENT-KIT:AI-ROLES:START -->";
 
 function run(command, args, project, extraEnv = {}) {
@@ -38,6 +39,23 @@ function expectLocal(project) {
     const ignored = spawnSync("git", ["check-ignore", "-q", relative], { cwd: project });
     assert.equal(ignored.status, 0, `${relative} must not be included by normal git add`);
   }
+  for (const [name, status] of Object.entries(config.ai_compatibility.local_adapters)) {
+    assert.equal(status, "active", `${name} adapter is not active: ${status}`);
+  }
+  for (const relative of adapterPaths) {
+    assert(fs.existsSync(path.join(project, relative)), `${relative} missing`);
+    const ignored = spawnSync("git", ["check-ignore", "-q", relative], { cwd: project });
+    assert.equal(ignored.status, 0, `${relative} must be private to this checkout`);
+    const nestedIgnore = `${path.posix.dirname(relative)}/.gitignore`;
+    assert.equal(spawnSync("git", ["check-ignore", "-q", nestedIgnore], { cwd: project }).status, 0,
+      `${nestedIgnore} must also be private to this checkout`);
+  }
+  assert.match(read(project, adapterPaths[0]), /^---\napplyTo: "\*\*\/\*"\n---/);
+  assert.match(read(project, adapterPaths[0]), /iHGEN Web Development Agent Kit/);
+  assert.match(read(project, adapterPaths[1]), /^---\n.*alwaysApply: true/ms);
+  assert.match(read(project, adapterPaths[1]), /iHGEN Web Development Agent Kit/);
+  const geminiSettings = JSON.parse(read(project, adapterPaths[2]));
+  assert(geminiSettings.context.fileName.includes(".agent-core/instructions/GEMINI.md"));
   assert.match(kit(project, "doctor").stdout, /Status: HEALTHY/);
 }
 
@@ -68,6 +86,14 @@ try {
   kit(fresh, "update");
   expectLocal(fresh);
 
+  // Local adapters must also be ignored when the install predates git init.
+  const beforeGit = path.join(temp, "before-git-init");
+  fs.mkdirSync(beforeGit);
+  write(beforeGit, "package.json", '{"name":"before-git-init"}\n');
+  kit(beforeGit, "install", "--local-instructions");
+  run("git", ["init", "-q"], beforeGit);
+  expectLocal(beforeGit);
+
   const migrated = path.join(temp, "migrated");
   fs.mkdirSync(migrated);
   run("git", ["init", "-q"], migrated);
@@ -94,6 +120,48 @@ try {
   }
   kit(migrated, "update");
   for (const name of sharedPaths) assert.equal(read(migrated, name), afterMigration.get(name), `${name}: later update edited team instructions`);
+  expectLocal(migrated);
+
+  // Existing, tracked Gemini settings and local adapter-name collisions must
+  // remain untouched, never hidden or overwritten on the user's behalf.
+  const collisions = path.join(temp, "collisions");
+  fs.mkdirSync(collisions);
+  run("git", ["init", "-q"], collisions);
+  write(collisions, "package.json", '{"name":"collision-project"}\n');
+  write(collisions, adapterPaths[2], '{"context":{"fileName":"TEAM.md"},"ui":{"theme":"custom"}}\n');
+  write(collisions, adapterPaths[0], "# Teammate's Copilot rules\n");
+  run("git", ["add", adapterPaths[2], adapterPaths[0]], collisions);
+  kit(collisions, "install", "--local-instructions");
+  assert.equal(read(collisions, adapterPaths[2]), '{"context":{"fileName":"TEAM.md"},"ui":{"theme":"custom"}}\n');
+  assert.equal(read(collisions, adapterPaths[0]), "# Teammate's Copilot rules\n");
+  const blockedAdapters = JSON.parse(read(collisions, ".agent-kit.json")).ai_compatibility.local_adapters;
+  assert.match(blockedAdapters.gemini, /blocked: existing tracked/);
+  assert.match(blockedAdapters["github-copilot"], /blocked: tracked team/);
+  const blockedDoctor = spawnSync(process.execPath, [installer, "doctor", collisions], { cwd: collisions, encoding: "utf8" });
+  assert.notEqual(blockedDoctor.status, 0, "doctor must disclose adapters that could not safely activate");
+  assert.match(blockedDoctor.stdout, /Inactive local AI adapters: github-copilot, gemini/);
+
+  // Existing private Gemini settings keep unrelated keys, preserve an existing
+  // scalar fileName, and can be restored without leaving Web Kit context behind.
+  const personal = path.join(temp, "private-settings");
+  fs.mkdirSync(personal);
+  run("git", ["init", "-q"], personal);
+  write(personal, "package.json", '{"name":"personal-settings"}\n');
+  write(personal, ".gemini/.gitignore", "/.gitignore\n/settings.json\n");
+  const originalGeminiSettings = { context: { fileName: "CUSTOM.md" }, ui: { theme: "my-theme" } };
+  write(personal, adapterPaths[2], `${JSON.stringify(originalGeminiSettings)}\n`);
+  kit(personal, "install", "--local-instructions");
+  expectLocal(personal);
+  assert.deepEqual(JSON.parse(read(personal, adapterPaths[2])).context.fileName,
+    ["CUSTOM.md", ".agent-core/instructions/GEMINI.md"]);
+  write(personal, adapterPaths[0], `${read(personal, adapterPaths[0])}\n# My personal Copilot note\n`);
+  kit(personal, "update");
+  assert(read(personal, adapterPaths[0]).includes("My personal Copilot note"), "update discarded personal adapter edits");
+  kit(personal, "update", "--shared-instructions");
+  assert.deepEqual(JSON.parse(read(personal, adapterPaths[2])), originalGeminiSettings);
+  assert(!fs.existsSync(path.join(personal, adapterPaths[1])), "generated Cursor adapter survived shared opt-in");
+  assert(read(personal, adapterPaths[0]).includes("My personal Copilot note"), "shared opt-in discarded personal adapter edits");
+  assert(!read(personal, adapterPaths[0]).includes(startMarker), "shared opt-in retained Copilot Web Kit roles");
 
   // The real provider binaries are never called; inspect the exact prompt
   // handed to the existing mock Codex/Claude adapters (including rollover).
@@ -154,8 +222,13 @@ try {
 
   kit(migrated, "update", "--shared-instructions");
   for (const name of sharedPaths) assert(read(migrated, name).includes(startMarker), `${name}: shared mode not restored`);
+  for (const relative of adapterPaths) {
+    assert(!fs.existsSync(path.join(migrated, relative)), `${relative}: local adapter was not removed on shared opt-in`);
+    assert.notEqual(spawnSync("git", ["check-ignore", "-q", relative], { cwd: migrated }).status, 0,
+      `${relative}: Git exclusion survived shared opt-in`);
+  }
   assert.equal(JSON.parse(read(migrated, ".agent-kit.json")).ai_compatibility.instruction_scope, "shared");
-  console.log("Local Web Kit AI instructions: PASS (fresh, migration, Git ignore, persistence, managed + native Codex/Claude, rollover, shared opt-in).");
+  console.log("Local Web Kit AI instructions: PASS (all five clients, private adapters, migration, Git ignore, conflicts, managed + native Codex/Claude, rollover, shared opt-in).");
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

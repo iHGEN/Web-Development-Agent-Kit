@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyProjectProfile, readJson, writeJson } from "./project-profile.mjs";
-import { applyAiCompatibility, assertLocalMigrationSafe, findUnmanagedGraphifyConflicts, ROLE_START, ROLE_END } from "./ai-compat.mjs";
+import { applyAiCompatibility, assertLocalMigrationSafe, findUnmanagedGraphifyConflicts, localAdapterStatus, ROLE_START, ROLE_END } from "./ai-compat.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -282,8 +282,11 @@ function install(project, options = {}) {
   console.log(`Agents: ${fs.existsSync(path.join(core, "agents")) ? fs.readdirSync(path.join(core, "agents")).filter((name) => name.endsWith(".md")).length : 0}`);
   console.log(`Skills: ${skills.join(", ")}`);
   console.log(instructionScope === "local"
-    ? "AI instructions: local to .agent-core/instructions (Git-ignored); shared project instructions left free of Web Kit roles"
+    ? "AI instructions: local to .agent-core/instructions; private Gemini, Copilot and Cursor adapters (shared files preserved)"
     : "AI instructions: existing shared files preserved; missing files created once with project summary; managed roles synchronized");
+  if (instructionScope === "local") {
+    for (const [name, status] of Object.entries(compatibility.local_adapters)) console.log(`  ${name} adapter: ${status}`);
+  }
   console.log(`Canonical workflow: ${compatibility.canonical_workflow}`);
   console.log("Automatic context rollover: .agent-core/bin/session-controller.mjs (default threshold 50%)");
   console.log(`Security review state: ${securityReviewStateExcluded ? "protected by local .git/info/exclude" : "Git local exclude will be enforced when security-review runs"}`);
@@ -328,6 +331,8 @@ function doctor(project) {
   const staleSharedRoles = instructionScope === "local" ? [
     "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursor/rules/ihgen-web-kit.mdc",
   ].filter((relative) => hasRolesBlock(path.join(project, relative))) : [];
+  const adapterStatus = localAdapterStatus(project);
+  const missingAdapters = Object.entries(adapterStatus).filter(([, status]) => status !== "active");
   const warnings = [];
   const cfgGraphify = cfg.capabilities?.graphify || {};
   const profileGraphify = profile.capabilities?.graphify || {};
@@ -358,12 +363,16 @@ function doctor(project) {
   console.log(`Routing policy: ${fs.existsSync(path.join(project, ".agent-core", "routing", "context-policy.json")) ? "OK" : "MISSING"}`);
   console.log(`AI managed roles (${instructionScope}): ${rolesOk ? "OK" : "MISSING"}`);
   if (instructionScope === "local") console.log(`Local AI Git protection: ${localIgnoreReady ? "OK" : "MISSING"}`);
+  if (instructionScope === "local") {
+    for (const [name, status] of Object.entries(adapterStatus)) console.log(`Local AI adapter ${name}: ${status}`);
+  }
   console.log(`Session Controller: ${fs.existsSync(sessionController) ? "OK" : "MISSING"}`);
   console.log(`Context rollover rule: ${fs.existsSync(rolloverRule) ? "OK" : "MISSING"}`);
   console.log(`Graphify graph: ${actualGraphReady ? "READY" : "NOT READY"}`);
   if (missing.length) console.log(`Missing skills: ${missing.join(", ")}`);
   if (stale.length) console.log(`Installed but no longer detected: ${stale.join(", ")}`);
   if (staleSharedRoles.length) console.log(`Shared files still containing Web Kit roles: ${staleSharedRoles.join(", ")}`);
+  if (missingAdapters.length) console.log(`Inactive local AI adapters: ${missingAdapters.map(([name]) => name).join(", ")}`);
   if (warnings.length) {
     console.log("Warnings:");
     for (const warning of warnings) console.log(`  - ${warning}`);
@@ -371,7 +380,7 @@ function doctor(project) {
   }
 
   const healthy = !missing.length && agentFiles.length > 0 && Object.keys(cfg).length && rolesOk
-    && localIgnoreReady && !staleSharedRoles.length
+    && localIgnoreReady && !staleSharedRoles.length && !missingAdapters.length
     && fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json"))
     && fs.existsSync(sessionController) && fs.existsSync(rolloverRule);
   console.log(healthy ? (warnings.length ? "Status: HEALTHY WITH WARNINGS" : "Status: HEALTHY") : "Status: NEEDS ATTENTION");

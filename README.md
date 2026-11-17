@@ -503,10 +503,17 @@ npx @ihgen/web-kit session codex --prompt "Implement my feature"
 Local mode keeps `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot, and Cursor
 equivalents in the Git-ignored `.agent-core/instructions/` directory. Web
 Kit-controlled Codex/Claude sessions and supervised interactive launches load
-these explicitly. It removes only
-Web Kit-marked roles from previously shared project files; team-owned text
-is preserved. Unwrapped AI sessions do not automatically load the
-local copies. The choice persists on later updates.
+these explicitly. For normal local clients, it also creates Git-ignored
+adapters: Gemini's project `.gemini/settings.json` points to the private
+`GEMINI.md`, Copilot discovers `.github/instructions/ihgen-web-kit-local.instructions.md`
+for matching files, and Cursor discovers `.cursor/rules/ihgen-web-kit-local.mdc`.
+All adapters remain private to your checkout, with Git-local exclusions.
+Existing tracked team settings/rules are never rewritten: if a safe adapter
+cannot be installed, `doctor` identifies it so you can choose how to resolve
+the conflict. It removes only Web Kit-marked roles from previously shared
+project files; team-owned text is preserved. The choice persists on updates.
+Local files do not become instructions for cloud agents that only see the
+committed repository.
 
 **Shared mode** continues to manage these project-level targets:
 

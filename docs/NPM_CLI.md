@@ -137,8 +137,10 @@ To keep Web Kit guidance local to your own checkout rather than inject it into
 team-level files, choose `install --local-instructions` or
 `update --local-instructions`. Local files live under Git-ignored
 `.agent-core/instructions/`, and Web Kit-controlled Codex/Claude sessions and
-supervised interactive launches load
-them explicitly. Your choice survives later updates. Use
+supervised interactive launches load them explicitly. Private, Git-ignored
+adapters also activate local Gemini CLI, Copilot IDE/CLI, and Cursor where
+native provider settings allow it. `doctor` reports conflicts with tracked
+project settings without overwriting them. Your choice survives later updates. Use
 `update --shared-instructions` only if you want shared project integration.
 
 In the default shared mode, these files are preserved:

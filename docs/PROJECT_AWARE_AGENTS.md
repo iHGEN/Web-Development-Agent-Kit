@@ -66,6 +66,24 @@ from any older shared project instructions. Project-written text and any old
 generated project summaries remain untouched. It refuses malformed or duplicate
 markers rather than risk corrupting the file.
 
+For automatic local discovery by other clients, Web Kit also installs **private
+provider adapters** outside the shared instruction files:
+
+| Client | Local adapter | Activation |
+| --- | --- | --- |
+| Gemini CLI | `.gemini/settings.json` | Adds `.agent-core/instructions/GEMINI.md` to `context.fileName` while preserving other local settings |
+| GitHub Copilot (IDE/CLI) | `.github/instructions/ihgen-web-kit-local.instructions.md` | `applyTo: "**/*"` when working with matching files |
+| Cursor | `.cursor/rules/ihgen-web-kit-local.mdc` | `alwaysApply: true` in the local editor |
+
+Generated adapters are narrowly ignored in Git, including via the checkout's
+local `.git/info/exclude` when available. They remain uncommitted even when
+other team settings are tracked. Existing **tracked** `.gemini/settings.json`
+or colliding Copilot/Cursor rule files are never changed. Existing untracked
+Gemini settings are merged only if they are already Git-ignored. If an adapter
+is blocked, installation reports it and `doctor` returns `NEEDS ATTENTION`;
+the remaining clients continue working. Gemini's `/memory show` and Copilot's
+`/instructions` can confirm which rules the client loaded.
+
 Web Kit's controlled `session codex` and `session claude` commands inject the
 corresponding local instructions into each provider session, including after a
 context rollover. Normal interactive `codex` / `claude` launches through Web
@@ -75,15 +93,18 @@ prompt. Existing custom Codex `developer_instructions` or Claude
 `--append-system-prompt-file` arguments take precedence and are never silently
 replaced; in that situation, use an explicit Web Kit `session` command.
 
-Unwrapped providers and other AI clients do **not** auto-load the files from
-this hidden directory. Other clients can load their local file explicitly,
-but this mode does not imply automatic integration with their unmodified CLIs.
+Unwrapped Codex/Claude sessions do **not** automatically load the hidden Web Kit
+files unless their project-level instructions already reference them. Use the
+Web Kit session command or transparent supervisor for those providers.
+Gemini, Copilot, and Cursor use the private native adapters above. Their
+desktop/CLI installations must support the indicated native instruction
+feature; remote cloud agents cannot read Git-ignored local files.
 
 Your selection persists in `.agent-kit.json`, so subsequent plain `update`
 commands keep the same scope. To deliberately return to shared mode, run
 `npx @ihgen/web-kit update --shared-instructions`. That restores Web Kit role
-blocks in the project's shared instruction files; it does not delete the local
-copies.
+blocks in the project's shared instruction files and removes Web Kit-owned
+native adapters where safe. It does not delete the private canonical copies.
 
 ## Non-destructive instruction-file behavior (shared mode)
 
