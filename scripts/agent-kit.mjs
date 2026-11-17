@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyProjectProfile, readJson, writeJson } from "./project-profile.mjs";
-import { applyAiCompatibility, assertLocalMigrationSafe, findUnmanagedGraphifyConflicts, localAdapterStatus, ROLE_START, ROLE_END } from "./ai-compat.mjs";
+import { applyAiCompatibility, assertLocalMigrationSafe, findUnmanagedGraphifyConflicts, hasLocalInstructionScope, localInstructionCompatibility, localInstructionPrivacy, localAdapterStatus, protectLocalInstructions, ROLE_START, ROLE_END } from "./ai-compat.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -248,8 +248,12 @@ function install(project, options = {}) {
   project = path.resolve(project);
   fs.mkdirSync(project, { recursive: true });
   const previous = readJson(path.join(project, ".agent-kit.json"));
-  const instructionScope = options.instructionScope || previous.ai_compatibility?.instruction_scope || "shared";
-  if (instructionScope === "local") assertLocalMigrationSafe(project);
+  const instructionScope = options.instructionScope || (hasLocalInstructionScope(project) ? "local" : "shared");
+  if (instructionScope === "local") {
+    assertLocalMigrationSafe(project);
+    // Validate privacy before writing any shared install metadata or files.
+    protectLocalInstructions(project);
+  }
   const { skills, evidence } = detect(project);
   const securityReviewStateExcluded = ensureSecurityReviewStateExcluded(project);
   const core = path.join(project, ".agent-core");
@@ -317,8 +321,10 @@ function doctor(project) {
   const stale = installed.filter((skill) => !expected.includes(skill));
   const agentDir = path.join(project, ".agent-core", "agents");
   const agentFiles = fs.existsSync(agentDir) ? fs.readdirSync(agentDir).filter((name) => name.endsWith(".md")) : [];
-  const instructionScope = cfg.ai_compatibility?.instruction_scope || "shared";
-  const instructionPaths = Object.fromEntries(Object.entries(cfg.ai_compatibility?.managed_roles || {
+  const local = hasLocalInstructionScope(project);
+  const instructionScope = local ? "local" : "shared";
+  const compatibility = local ? localInstructionCompatibility(project) : cfg.ai_compatibility?.instruction_scope === "shared" ? cfg.ai_compatibility : null;
+  const instructionPaths = Object.fromEntries(Object.entries(compatibility?.managed_roles || {
     agents: "AGENTS.md",
     claude: "CLAUDE.md",
     gemini: "GEMINI.md",
@@ -326,8 +332,7 @@ function doctor(project) {
     cursor: ".cursor/rules/ihgen-web-kit.mdc",
   }).map(([key, relative]) => [key, path.join(project, relative)]));
   const rolesOk = Object.values(instructionPaths).every(hasRolesBlock);
-  const localIgnore = path.join(project, ".agent-core", "instructions", ".gitignore");
-  const localIgnoreReady = instructionScope !== "local" || (fs.existsSync(localIgnore) && fs.readFileSync(localIgnore, "utf8").split(/\r?\n/).includes("*"));
+  const localIgnoreReady = instructionScope !== "local" || localInstructionPrivacy(project);
   const staleSharedRoles = instructionScope === "local" ? [
     "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursor/rules/ihgen-web-kit.mdc",
   ].filter((relative) => hasRolesBlock(path.join(project, relative))) : [];
@@ -349,7 +354,9 @@ function doctor(project) {
 
   for (const [label, file] of Object.entries(instructionPaths)) {
     if (label === "cursor") continue;
-    for (const issue of findUnmanagedGraphifyConflicts(file)) warnings.push(`${label}: ${issue}; canonical Graph Refresh Gate should control Graphify refresh/use`);
+    for (const issue of findUnmanagedGraphifyConflicts(file)) {
+      warnings.push(`${path.relative(project, file).split(path.sep).join("/")}: ${issue}; canonical Graph Refresh Gate should control Graphify refresh/use`);
+    }
   }
 
   console.log(`Web Agent Kit Doctor — ${project}`);
@@ -361,7 +368,7 @@ function doctor(project) {
   console.log(`Project index: ${fs.existsSync(path.join(project, ".agent-core", "index", "project-index.json")) ? "OK" : "MISSING"}`);
   console.log(`Project profile: ${fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json")) ? "OK" : "MISSING"}`);
   console.log(`Routing policy: ${fs.existsSync(path.join(project, ".agent-core", "routing", "context-policy.json")) ? "OK" : "MISSING"}`);
-  console.log(`AI managed roles (${instructionScope}): ${rolesOk ? "OK" : "MISSING"}`);
+  console.log(`AI managed roles (${local ? "local" : compatibility ? "shared" : "unconfigured"}): ${rolesOk ? "OK" : compatibility ? "MISSING" : "OPTIONAL"}`);
   if (instructionScope === "local") console.log(`Local AI Git protection: ${localIgnoreReady ? "OK" : "MISSING"}`);
   if (instructionScope === "local") {
     for (const [name, status] of Object.entries(adapterStatus)) console.log(`Local AI adapter ${name}: ${status}`);
@@ -379,7 +386,8 @@ function doctor(project) {
     console.log("Metadata repair: run `node .agent-core/rules/graphify-refresh.mjs --project . --task-id metadata-sync` once.");
   }
 
-  const healthy = !missing.length && agentFiles.length > 0 && Object.keys(cfg).length && rolesOk
+  const rolesHealthy = local ? !!compatibility && rolesOk : rolesOk || !compatibility;
+  const healthy = !missing.length && agentFiles.length > 0 && Object.keys(cfg).length && rolesHealthy
     && localIgnoreReady && !staleSharedRoles.length && !missingAdapters.length
     && fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json"))
     && fs.existsSync(sessionController) && fs.existsSync(rolloverRule);

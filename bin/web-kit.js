@@ -85,7 +85,8 @@ AI instruction scopes:
     private Gemini, Copilot, and Cursor native adapters enable normal local clients;
     tracked team settings are preserved and unsafe adapter conflicts are reported;
   - switching to local removes only Web Kit-marked blocks from shared files;
-  - the chosen scope persists across later updates.
+  - the chosen scope persists via an ignored checkout-local preference across updates;
+    teammates cloning the repo do not inherit your local opt-in.
 
 Automatic context rollover:
   - Web Kit owns Codex/Claude through their structured headless modes;

@@ -60,8 +60,13 @@ Local mode generates separate instructions under:
 .agent-core/instructions/ihgen-web-kit.mdc
 ```
 
-These files are protected by a nested `.gitignore`, including when installation
-happens before `git init`. Local mode removes **only Web Kit-marked role blocks**
+These files, together with `.agent-core/instructions/.local-scope.json`, are
+protected by a nested `.gitignore`, including when installation happens before
+`git init`. The scope selection and local adapter metadata live in that ignored
+checkout-only file, **not** in committed `.agent-kit.json` or the generated
+project profile. A teammate cloning the repository therefore does not inherit
+your local opt-in; a normal update in their clone uses shared mode unless they
+explicitly choose local mode too. Local mode removes **only Web Kit-marked role blocks**
 from any older shared project instructions. Project-written text and any old
 generated project summaries remain untouched. It refuses malformed or duplicate
 markers rather than risk corrupting the file.
@@ -91,7 +96,9 @@ Kit's transparent supervisor also use them. Codex receives additive developer
 instructions, and Claude appends the local instruction file to its normal
 prompt. Existing custom Codex `developer_instructions` or Claude
 `--append-system-prompt-file` arguments take precedence and are never silently
-replaced; in that situation, use an explicit Web Kit `session` command.
+replaced. This includes `developer_instructions` declared in an explicitly
+selected Codex `--profile`/`-p` configuration. In that situation, use an
+explicit Web Kit `session` command.
 
 Unwrapped Codex/Claude sessions do **not** automatically load the hidden Web Kit
 files unless their project-level instructions already reference them. Use the
@@ -100,8 +107,11 @@ Gemini, Copilot, and Cursor use the private native adapters above. Their
 desktop/CLI installations must support the indicated native instruction
 feature; remote cloud agents cannot read Git-ignored local files.
 
-Your selection persists in `.agent-kit.json`, so subsequent plain `update`
-commands keep the same scope. To deliberately return to shared mode, run
+Your selection persists locally in the ignored `.local-scope.json` file, so
+subsequent plain `update` commands **in your checkout** keep the same scope.
+Web Kit verifies effective Git ignoring and refuses a local install if the
+private files are tracked or can be accidentally committed (even with a
+negated `.gitignore` rule). To deliberately return to shared mode, run
 `npx @ihgen/web-kit update --shared-instructions`. That restores Web Kit role
 blocks in the project's shared instruction files and removes Web Kit-owned
 native adapters where safe. It does not delete the private canonical copies.

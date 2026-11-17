@@ -172,8 +172,8 @@ function readCodexConfigNotify() {
 }
 
 function localInstructionFile(project, provider) {
-  const config = readJson(path.join(project, ".agent-kit.json"), {});
-  if (config.ai_compatibility?.instruction_scope !== "local") return null;
+  const local = readJson(path.join(project, ".agent-core", "instructions", ".local-scope.json"), {});
+  if (local.schema_version !== 1 || local.instruction_scope !== "local") return null;
   const file = path.join(project, ".agent-core", "instructions", provider === "claude" ? "CLAUDE.md" : "AGENTS.md");
   if (!fs.existsSync(file)) throw new Error(`Web Kit local instructions missing: ${file}. Run Web Kit update before starting ${provider}.`);
   return file;
@@ -188,6 +188,20 @@ function codexHasCustomDeveloperInstructions(args, project) {
   for (const file of [path.join(configHome, "config.toml"), path.join(project, ".codex", "config.toml")]) {
     if (!fs.existsSync(file)) continue;
     if (/^\s*developer_instructions\s*=/m.test(fs.readFileSync(file, "utf8"))) return true;
+  }
+  // Codex 0.134+ loads selected profiles from separate config layers.
+  // CLI -c values would override a profile's developer_instructions, so do
+  // not inject when an explicitly selected profile already owns that field.
+  let profile = null;
+  for (let i = 0; i < args.length; i += 1) {
+    if ((args[i] === "-p" || args[i] === "--profile") && args[i + 1]) profile = args[++i];
+    else if (args[i].startsWith("--profile=")) profile = args[i].slice("--profile=".length);
+  }
+  if (profile !== null) {
+    if (!/^[A-Za-z0-9_-]+$/.test(profile)) return true;
+    const profileFile = path.join(configHome, `${profile}.config.toml`);
+    if (!fs.existsSync(profileFile)) return true; // fail closed on an unknown profile
+    if (/^\s*developer_instructions\s*=/m.test(fs.readFileSync(profileFile, "utf8"))) return true;
   }
   return false;
 }

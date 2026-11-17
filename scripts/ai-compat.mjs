@@ -32,6 +32,7 @@ const GEMINI_SETTINGS = ".gemini/settings.json";
 const GEMINI_CONTEXT = LOCAL_TARGETS.gemini[0];
 const GEMINI_ADAPTER_STATE = ".agent-core/instructions/.gemini-adapter-state.json";
 const ADAPTER_IGNORE_COMMENT = "# iHGEN Web Kit private adapter";
+export const LOCAL_SCOPE_FILE = ".agent-core/instructions/.local-scope.json";
 
 function gitResult(project, args) {
   return spawnSync("git", args, { cwd: project, encoding: "utf8", windowsHide: true });
@@ -46,7 +47,9 @@ function isTracked(project, relative) {
   const root = gitRoot(project);
   if (!root) return false;
   const relativeToRoot = path.relative(root, path.join(project, relative));
-  const result = gitResult(project, ["ls-files", "--error-unmatch", "--", relativeToRoot]);
+  const result = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativeToRoot], {
+    cwd: root, encoding: "utf8", windowsHide: true,
+  });
   return result.status === 0;
 }
 
@@ -244,8 +247,7 @@ function synchronizeLocalAdapters(project, scope) {
 }
 
 export function localAdapterStatus(project) {
-  const config = readJson(path.join(project, ".agent-kit.json"));
-  if (config.ai_compatibility?.instruction_scope !== "local") return {};
+  if (!hasLocalInstructionScope(project)) return {};
   const result = {};
   for (const [key, relative] of Object.entries(LOCAL_ADAPTER_FILES)) {
     const file = path.join(project, relative);
@@ -299,7 +301,7 @@ function removeMarkedRoles(file) {
   ]) {
     const starts = current.split(startMarker).length - 1;
     const ends = current.split(endMarker).length - 1;
-    if (starts !== ends || starts > 1) {
+    if (starts !== ends || starts > 1 || (starts === 1 && current.indexOf(startMarker) > current.indexOf(endMarker))) {
       throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
     }
     if (starts === 1) {
@@ -316,15 +318,47 @@ function removeMarkedRoles(file) {
   return updated === current ? "unchanged" : "removed-web-kit-roles";
 }
 
-function protectLocalInstructions(project) {
+const localPrivatePaths = [...Object.values(LOCAL_TARGETS).map(([relative]) => relative), LOCAL_SCOPE_FILE];
+
+export function hasLocalInstructionScope(project) {
+  const overlay = readJson(path.join(project, LOCAL_SCOPE_FILE));
+  return overlay.schema_version === 1 && overlay.instruction_scope === "local";
+}
+
+export function localInstructionCompatibility(project) {
+  if (!hasLocalInstructionScope(project)) return null;
+  return readJson(path.join(project, LOCAL_SCOPE_FILE)).ai_compatibility || null;
+}
+
+export function localInstructionPrivacy(project) {
+  const ignore = path.join(project, ".agent-core", "instructions", ".gitignore");
+  const root = gitRoot(project);
+  if (!root) {
+    // Without a Git repository, the only auditable future-ignore policy is
+    // the exact self-ignoring policy Web Kit creates for this private folder.
+    return fs.existsSync(ignore) && fs.readFileSync(ignore, "utf8") === "*\n";
+  }
+  return localPrivatePaths.every((relative) => !isTracked(project, relative)
+    && gitResult(project, ["check-ignore", "-q", "--", relative]).status === 0);
+}
+
+export function protectLocalInstructions(project) {
   const localRoot = path.join(project, ".agent-core", "instructions");
+  if ([".agent-core/instructions", ...localPrivatePaths].some((relative) => hasUnsafeAdapterPath(project, relative))) {
+    throw new Error("Cannot use symlinked Web Kit private instruction paths.");
+  }
   fs.mkdirSync(localRoot, { recursive: true });
   const ignore = path.join(localRoot, ".gitignore");
   // A nested ignore also protects installs that happen before `git init`.
   if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n", "utf8");
   else {
     const text = fs.readFileSync(ignore, "utf8");
-    if (!text.split(/\r?\n/).includes("*")) fs.appendFileSync(ignore, `${text.endsWith("\n") ? "" : "\n"}*\n`, "utf8");
+    if (!text.split(/\r?\n/).includes("*") && !isTracked(project, ".agent-core/instructions/.gitignore")) {
+      fs.appendFileSync(ignore, `${text.endsWith("\n") ? "" : "\n"}*\n`, "utf8");
+    }
+  }
+  if (!localInstructionPrivacy(project)) {
+    throw new Error("Cannot ensure private Web Kit instructions are untracked and effectively Git-ignored. Check .agent-core/instructions/.gitignore and tracked files before installing local mode.");
   }
 }
 
@@ -336,7 +370,18 @@ export function assertLocalMigrationSafe(project) {
     for (const [start, end] of [[ROLE_START, ROLE_END], [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END]]) {
       const starts = current.split(start).length - 1;
       const ends = current.split(end).length - 1;
-      if (starts !== ends || starts > 1) throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
+      if (starts !== ends || starts > 1 || (starts === 1 && current.indexOf(start) > current.indexOf(end))) {
+        throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
+      }
+    }
+    // Both marker formats may coexist during migrations, but their ranges
+    // must not overlap or nest; otherwise removal would corrupt team content.
+    const ranges = [[ROLE_START, ROLE_END], [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END]]
+      .filter(([start]) => current.includes(start))
+      .map(([start, end]) => [current.indexOf(start), current.indexOf(end) + end.length])
+      .sort((a, b) => a[0] - b[0]);
+    if (ranges.length > 1 && ranges[0][1] > ranges[1][0]) {
+      throw new Error(`Cannot safely migrate overlapping Web Kit instruction markers: ${file}`);
     }
   }
 }
@@ -536,17 +581,29 @@ export function applyAiCompatibility(project, profile = null, options = {}) {
     actions,
   };
 
+  const overlayFile = path.join(project, LOCAL_SCOPE_FILE);
+  if (scope === "local") {
+    writeJson(overlayFile, { schema_version: 1, instruction_scope: "local", ai_compatibility: compatibility });
+  } else if (fs.existsSync(overlayFile)) {
+    if (isTracked(project, LOCAL_SCOPE_FILE) || hasUnsafeAdapterPath(project, LOCAL_SCOPE_FILE)) {
+      throw new Error("Cannot remove tracked or symlinked local Web Kit scope. Untrack or inspect it before switching to shared mode.");
+    }
+    fs.unlinkSync(overlayFile);
+  }
+
   const cfgPath = path.join(project, ".agent-kit.json");
   const cfg = readJson(cfgPath);
   if (Object.keys(cfg).length) {
-    cfg.ai_compatibility = compatibility;
+    if (scope === "shared") cfg.ai_compatibility = compatibility;
+    else delete cfg.ai_compatibility;
     writeJson(cfgPath, cfg);
   }
 
   const profilePath = path.join(project, ".agent-core", "index", "project-profile.json");
   const currentProfile = readJson(profilePath);
   if (Object.keys(currentProfile).length) {
-    currentProfile.ai_compatibility = compatibility;
+    if (scope === "shared") currentProfile.ai_compatibility = compatibility;
+    else delete currentProfile.ai_compatibility;
     writeJson(profilePath, currentProfile);
   }
 

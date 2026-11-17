@@ -508,10 +508,16 @@ adapters: Gemini's project `.gemini/settings.json` points to the private
 `GEMINI.md`, Copilot discovers `.github/instructions/ihgen-web-kit-local.instructions.md`
 for matching files, and Cursor discovers `.cursor/rules/ihgen-web-kit-local.mdc`.
 All adapters remain private to your checkout, with Git-local exclusions.
+The local scope preference and adapter state live in the Git-ignored
+`.agent-core/instructions/.local-scope.json`, never in committed project
+metadata. A fresh clone does not inherit your preference. Web Kit verifies
+effective Git protection for the private instruction files and refuses local
+mode when they are tracked or accidentally unignored.
 Existing tracked team settings/rules are never rewritten: if a safe adapter
 cannot be installed, `doctor` identifies it so you can choose how to resolve
 the conflict. It removes only Web Kit-marked roles from previously shared
-project files; team-owned text is preserved. The choice persists on updates.
+project files; team-owned text is preserved. The choice persists on updates
+in the same checkout.
 Local files do not become instructions for cloud agents that only see the
 committed repository.
 

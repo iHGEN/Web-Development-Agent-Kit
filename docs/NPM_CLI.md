@@ -140,7 +140,11 @@ team-level files, choose `install --local-instructions` or
 supervised interactive launches load them explicitly. Private, Git-ignored
 adapters also activate local Gemini CLI, Copilot IDE/CLI, and Cursor where
 native provider settings allow it. `doctor` reports conflicts with tracked
-project settings without overwriting them. Your choice survives later updates. Use
+project settings without overwriting them. Your choice is stored only in the
+Git-ignored `.agent-core/instructions/.local-scope.json`, not shared project
+metadata, and survives later updates in your checkout. Fresh clones default to
+shared mode. Git-effective ignore checks block local setup when private files
+are tracked or unignored. Use
 `update --shared-instructions` only if you want shared project integration.
 
 In the default shared mode, these files are preserved:

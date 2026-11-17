@@ -438,8 +438,8 @@ function progressProtocol(taskId) {
   return `Before your final response in every controller cycle, atomically write \`.agent-core/state/session-progress.json\` as JSON with this shape:\n\n{\n  "schema_version": 1,\n  "task_id": "${taskId}",\n  "status": "continue | done | blocked",\n  "phase": "current Web-Kit phase",\n  "role": "current routed role",\n  "summary": "compact evidence-backed summary of what this cycle completed",\n  "completed_steps": [],\n  "current_step": "current/just-completed step",\n  "pending_steps": [],\n  "files_changed": [],\n  "validation_completed": [],\n  "validation_pending": [],\n  "decisions": [],\n  "constraints": [],\n  "next_action": "exact next safe action, required when status=continue",\n  "updated_at": "ISO-8601 timestamp"\n}\n\nThis file MUST be freshly rewritten during the current controller cycle; stale progress from a prior cycle is rejected. Use status=done only when the original user request has passed the required Web-Kit final validation. Use status=blocked only when progress genuinely requires user input/permission. Otherwise use status=continue.`;
 }
 function sessionInstructions(project, provider) {
-  const scope = readJson(path.join(project, ".agent-kit.json"), {})?.ai_compatibility?.instruction_scope;
-  if (scope !== "local") return "";
+  const local = readJson(path.join(project, ".agent-core/instructions/.local-scope.json"), {});
+  if (local.schema_version !== 1 || local.instruction_scope !== "local") return "";
   const relative = `.agent-core/instructions/${provider === "claude" ? "CLAUDE.md" : "AGENTS.md"}`;
   const file = path.join(project, relative);
   if (!fs.existsSync(file)) throw new Error(`Missing local Web Kit instructions: ${relative}. Run Web Kit update first.`);
