@@ -56,7 +56,7 @@ node .agent-core/bin/work-progress.mjs start \
 
 New jobs on detected Git feature branches default to PR-bound. Use `--local-only` or `--review-only` only when the user explicitly gives that scope; merely omitting `--pr-bound` is not an opt-out. Outside a detected feature branch, supply `--pr-bound` when a PR is intended. Use `--high-risk` when formal governance is required regardless of size.
 
-7. Before the first **code write** on a Git feature branch, define exact permitted paths and explicit non-goals; capture existing dirty/untracked work using `scope-guard.mjs start` as specified in `pre-pr-review.md`. The scope fence is not a formal plan, including for SMALL tasks. A PR-bound job cannot reach `DONE` without this snapshot and a current independent review.
+7. Before the first **code write** on a Git feature branch, define exact permitted paths and explicit non-goals; capture existing dirty/untracked work using `scope-guard.mjs start` as specified in `pre-pr-review.md`. When the task already explicitly authorizes edits to an allowed, initially untracked file, record that permission with `scope-guard.mjs authorize` and its original evidence; do not repeat the permission request or replace the baseline. The scope fence is not a formal plan, including for SMALL tasks. A PR-bound job cannot reach `DONE` without this snapshot and a current independent review.
 8. For every PR-bound task, register a short testable checklist with `requirement-add` and declare its relevant executable checks with `check-require`. SMALL still has no formal spec or Plan Validator. Requirements define the expected behavior independently of the implementation; declared checks must exercise that behavior and its affected boundaries.
 
 Managed state:
@@ -309,7 +309,7 @@ implemented code -> tests -> security-review -> findings?
   no  -> continue final validation
 ```
 
-The Security Reviewer does not fix its own findings. `--scan-only` remains `INCONCLUSIVE` and cannot grant approval.
+The Security Reviewer does not fix its own findings. Continue to final validation only after a validated, completed review; an empty findings list alone is insufficient. Failed, partial or blocked source reviews persist `INCONCLUSIVE`, return no score and preserve prior finding states. Resolution requires explicit recheck evidence. `--scan-only` remains `INCONCLUSIVE` and cannot grant approval. Optional scanner limitations remain distinct from source-review completion.
 
 Release-level work requires a full approving Security Review before version/tag/publish actions.
 

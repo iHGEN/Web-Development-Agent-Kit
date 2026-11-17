@@ -23,8 +23,8 @@ function parseArgs(argv) {
   return { command, options };
 }
 
-function git(project, args) {
-  const result = spawnSync("git", args, { cwd: project, encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
+function git(project, args, input) {
+  const result = spawnSync("git", args, { cwd: project, input, encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
     throw new Error(`git ${args.slice(0, 3).join(" ")} failed: ${result.error?.message || result.stderr?.toString("utf8").trim()}`);
   }
@@ -48,11 +48,11 @@ function fileDigest(file) {
   } finally { fs.closeSync(fd); }
   return hash.digest("hex");
 }
-function trackedStateFiles(project, comparisonBase = null, statePrefix = ".agent-core/state/") {
+function trackedStateFiles(project, comparisonBase = null, statePrefix = ".agent-core/state/", head = "HEAD") {
   // Generated state is exempt only while untracked. A tracked state file is real
   // repository content and must not be hidden from the scope fence.
   return new Set([
-    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", statePrefix]),
+    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", head, "--", statePrefix]),
     ...(comparisonBase ? gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", comparisonBase, "--", statePrefix]) : []),
     ...gitPaths(project, ["ls-files", "--cached", "-z", "--", statePrefix]),
   ]);
@@ -62,7 +62,8 @@ function isGeneratedState(file, tracked = new Set(), statePrefix = ".agent-core/
 }
 
 function validPath(file) {
-  if (typeof file !== "string" || !file || file.startsWith("/") || file.includes("\\") || /[*?\[\]]/.test(file)) {
+  if (typeof file !== "string" || !file || file.startsWith("/") || /^[a-zA-Z]:/.test(file)
+    || file.includes("\\") || file.includes("\0") || /[*?\[\]]/.test(file)) {
     throw new Error(`Scope requires an exact relative file path, not a glob: ${file}`);
   }
   const parts = file.split("/");
@@ -140,42 +141,137 @@ function workingFingerprint(project, file, indexEntries) {
   throw new Error(`Cannot safely fingerprint changed non-file path: ${file}`);
 }
 
+function untrackedShape(project, file) {
+  let directory = project;
+  let safeParents = true;
+  for (const part of file.split("/").slice(0, -1)) {
+    directory = path.join(directory, part);
+    const info = fs.lstatSync(directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) safeParents = false;
+  }
+  const info = fs.lstatSync(path.join(project, file));
+  return {
+    type: info.isSymbolicLink() ? "symlink" : info.isFile() ? "file" : "other",
+    mode: info.mode & 0o111 ? "100755" : "100644",
+    links: info.nlink,
+    safe_parents: safeParents,
+  };
+}
+
+function hasContentEditBaseline(before) {
+  const shape = before?.untracked_shape;
+  return before?.status === "??" && shape?.type === "file" && shape.links === 1
+    && shape.safe_parents === true && ["100644", "100755"].includes(shape.mode)
+    && before.index_entry === null && before.head_present === false;
+}
+
+function headEntry(project, file) {
+  const entries = gitPaths(project, ["--literal-pathspecs", "ls-tree", "-z", "HEAD", "--", file]);
+  if (!entries.length) return null;
+  const entry = /^(\d{6}) \w+ ([a-f0-9]{40,64})\t/.exec(entries[0]);
+  if (!entry || entries.length !== 1) throw new Error(`Cannot safely read HEAD entry for ${file}`);
+  return `${entry[1]} ${entry[2]} 0`;
+}
+
+function contentEditAllowed(project, file, before, status, indexEntries) {
+  if (!hasContentEditBaseline(before)) return false;
+  try {
+    const shape = untrackedShape(project, file);
+    if (shape.type !== "file" || shape.links !== 1 || !shape.safe_parents
+      || shape.mode !== before.untracked_shape.mode) return false;
+    const index = indexEntries.get(file);
+    const committed = headEntry(project, file);
+    if (!index) return status === "??" && committed === null;
+    if (index.slice(0, 6) !== shape.mode) return false;
+    if (index === committed) return true;
+    // A new or changed staged version must equal the effective worktree.
+    // Use Git's normalization so CRLF/check-out filters do not look like drift.
+    const normalized = gitText(project, ["hash-object", `--path=${file}`, "--", file]);
+    return index.split(" ")[1] === normalized;
+  } catch { return false; }
+}
+
 function snapshotExisting(project, statePrefix) {
   const entries = statusEntries(project, statePrefix);
   const indexEntries = indexSnapshot(project);
+  const headPaths = new Set(gitPaths(project, ["ls-tree", "-r", "-t", "--name-only", "-z", "HEAD"]));
   return Object.fromEntries([...entries].map(([file, status]) => {
     const snapshot = { status, fingerprint: fingerprint(project, file, status) };
     // A tracked dirty file can have distinct staged and working-tree versions.
     // `git diff HEAD` alone cannot detect staged-only drift when `MM` stays MM.
-    if (status !== "??") snapshot.index_entry = indexEntries.get(file) ?? null;
+    snapshot.index_entry = indexEntries.get(file) ?? null;
+    if (status === "??") {
+      snapshot.untracked_shape = untrackedShape(project, file);
+      snapshot.head_present = headPaths.has(file);
+    }
     return [file, snapshot];
   }));
 }
 
-function changePaths(project, base, statePrefix) {
-  const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
-  const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, "HEAD"]);
-  const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]);
+function changePaths(project, base, statePrefix, head = "HEAD") {
+  const mergeBase = gitText(project, ["merge-base", base, head]);
+  const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, head]);
+  const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", head]);
   const unstaged = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]);
   // A committed deletion is still a real PR change even after the path vanished
   // from HEAD and the index. Preserve paths tracked at the comparison baseline.
-  const tracked = trackedStateFiles(project, mergeBase, statePrefix);
+  const tracked = trackedStateFiles(project, mergeBase, statePrefix, head);
   const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
     .filter(file => !isGeneratedState(file, tracked, statePrefix));
   return [...new Set([...committed, ...staged, ...unstaged, ...untracked])]
     .filter(file => !isGeneratedState(file, tracked, statePrefix)).sort();
 }
 
-function changeDigest(project, base, statePrefix) {
-  const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
+function normalizedWorkingEntry(project, file, indexEntries) {
+  const fullPath = path.join(project, file);
+  const index = indexEntries.get(file);
+  let info;
+  try { info = fs.lstatSync(fullPath); }
+  catch (error) {
+    if (error.code === "ENOENT") return index?.startsWith("160000 ") ? index : null;
+    throw error;
+  }
+  if (info.isSymbolicLink()) {
+    const object = git(project, ["hash-object", "--stdin"], fs.readlinkSync(fullPath, { encoding: "buffer" })).toString("utf8").trim();
+    return `120000 ${object} 0`;
+  }
+  if (info.isFile()) {
+    const mode = process.platform === "win32" && index
+      ? index.slice(0, 6) : info.mode & 0o111 ? "100755" : "100644";
+    return `${mode} ${gitText(project, ["hash-object", `--path=${file}`, "--", file])} 0`;
+  }
+  if (info.isDirectory() && index?.startsWith("160000 ")) {
+    if (!sameDirectory(gitText(fullPath, ["rev-parse", "--show-toplevel"]), fullPath)) {
+      throw new Error(`Submodule is not checked out: ${file}`);
+    }
+    return `160000 ${gitText(fullPath, ["rev-parse", "--verify", "HEAD"])} 0`;
+  }
+  throw new Error(`Cannot safely fingerprint changed non-file path: ${file}`);
+}
+
+function publicationState(project, paths, head, indexEntries) {
+  const entries = new Map();
+  for (const record of gitPaths(project, ["ls-tree", "-r", "-z", head])) {
+    const split = record.indexOf("\t");
+    const metadata = /^(100644|100755|120000|160000) (?:blob|commit) ([a-f0-9]{40,64})$/.exec(record.slice(0, split));
+    if (split < 0 || !metadata) throw new Error("Cannot safely parse publication tree entries");
+    entries.set(record.slice(split + 1), `${metadata[1]} ${metadata[2]} 0`);
+  }
+  return paths.map(file => ({
+    file,
+    head_entry: entries.get(file) ?? null,
+    working_entry: normalizedWorkingEntry(project, file, indexEntries),
+  }));
+}
+
+function changeDigest(project, base, paths, head, indexEntries, workingEntries) {
+  const mergeBase = gitText(project, ["merge-base", base, head]);
   const hash = crypto.createHash("sha256");
   hash.update("web-kit-pr-diff-v2\0");
   hash.update(mergeBase);
   // A content-equivalent `git add` or `git commit` must NOT invalidate a prior
   // review. Hash the effective working tree once, irrespective of whether a
   // changed file is committed, staged, or untracked.
-  const paths = changePaths(project, base, statePrefix);
-  const indexEntries = indexSnapshot(project);
   for (const file of paths) {
     hash.update(file);
     hash.update("\0");
@@ -185,7 +281,7 @@ function changeDigest(project, base, statePrefix) {
   // Keep staged-only code visible when the index and working tree disagree.
   // Do not include the index when it matches the worktree: that would cause a
   // redundant review for a normal add/commit with no content change.
-  const staged = new Set(gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]));
+  const staged = new Set(gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", head]));
   const unstaged = new Set(gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]));
   const divergent = [...staged].filter(file => unstaged.has(file)).sort();
   if (divergent.length) {
@@ -196,6 +292,27 @@ function changeDigest(project, base, statePrefix) {
       hash.update(indexEntries.get(file) || "deleted-in-index");
       hash.update("\0");
     }
+  }
+  // A push publishes HEAD, even when an authorized edit restored different
+  // reviewed content only in the worktree. Bind those committed variants too.
+  // Include only PR changes that differ from Git-normalized working content:
+  // equivalent add/commit (including CRLF) must preserve the review identity.
+  const relevant = new Set(paths);
+  const committed = gitPaths(project, ["diff", "--raw", "--no-abbrev", "--no-ext-diff", "--no-renames",
+    "--ignore-submodules=none", "-z", mergeBase, head]);
+  for (let i = 0; i < committed.length; i += 2) {
+    const metadata = /^:\d{6} (\d{6}) [a-f0-9]{40,64} ([a-f0-9]{40,64}) [A-Z]$/.exec(committed[i]);
+    const file = committed[i + 1];
+    if (!metadata || !file) throw new Error("Cannot safely parse committed Git changes");
+    if (!relevant.has(file)) continue;
+    const entry = metadata[1] === "000000" ? null : `${metadata[1]} ${metadata[2]} 0`;
+    if (!workingEntries.has(file)) throw new Error(`Missing publication evidence for ${file}`);
+    if (entry === workingEntries.get(file)) continue;
+    hash.update("committed-version\0");
+    hash.update(file);
+    hash.update("\0");
+    hash.update(entry || "deleted-in-head");
+    hash.update("\0");
   }
   return hash.digest("hex");
 }
@@ -247,10 +364,22 @@ function writeManifest(file, value) {
 
 function check(project, manifest, statePrefix) {
   if (currentBranch(project) !== manifest.branch) throw new Error(`Task is locked to branch ${manifest.branch}`);
-  const changed = changePaths(project, manifest.base, statePrefix);
+  const head = gitText(project, ["rev-parse", "--verify", "HEAD"]);
+  const changed = changePaths(project, manifest.base, statePrefix, head);
   const status = statusEntries(project, statePrefix);
   const indexEntries = indexSnapshot(project);
   const preexistingChanged = [];
+  const authorizedChanges = [];
+  const allowed = new Set(manifest.allowed_paths);
+  const authorized = new Set((manifest.extensions || [])
+    .filter(entry => entry.kind === "preexisting-untracked-content")
+    .map(entry => {
+      if (!allowed.has(entry.path) || !hasContentEditBaseline(manifest.preexisting[entry.path])
+        || !entry.reason?.trim() || !entry.evidence?.trim()) {
+        throw new Error("Invalid pre-existing content-edit authorization in scope manifest");
+      }
+      return entry.path;
+    }));
   for (const [file, before] of Object.entries(manifest.preexisting)) {
     if (before.status !== "??" && !Object.hasOwn(before, "index_entry")) {
       // Older locks did not record staged data. Do not silently certify that
@@ -259,26 +388,38 @@ function check(project, manifest, statePrefix) {
     }
     const current = status.get(file);
     const indexChanged = before.status !== "??" && (indexEntries.get(file) ?? null) !== before.index_entry;
-    if (current !== before.status || indexChanged || (current && fingerprint(project, file, current) !== before.fingerprint)) {
+    const contentAuthorized = authorized.has(file) && contentEditAllowed(project, file, before, current, indexEntries);
+    if (current !== before.status || indexChanged || (current && fingerprint(project, file, current) !== before.fingerprint)
+      || (authorized.has(file) && !contentAuthorized)) {
       preexistingChanged.push(file);
+      if (contentAuthorized) authorizedChanges.push(file);
     }
   }
-  const taskChanges = changed.filter(file => !(file in manifest.preexisting) || preexistingChanged.includes(file));
-  const allowed = new Set(manifest.allowed_paths);
+  const taskChanges = [...new Set([...changed, ...preexistingChanged])]
+    .filter(file => !(file in manifest.preexisting) || preexistingChanged.includes(file)).sort();
   const unexpected = taskChanges.filter(file => !allowed.has(file));
+  const protectedChanges = preexistingChanged.filter(file => !authorizedChanges.includes(file));
   const errors = [];
-  if (preexistingChanged.length) errors.push("Pre-existing user changes were altered: stop and ask for direction.");
+  if (protectedChanges.length) errors.push("Protected pre-existing user changes were altered; content-edit authorization does not permit divergent staged content, deletion, mode/type changes or linked-file writes.");
   if (unexpected.length) errors.push("Task changed files outside its declared scope: stop and justify/approve before proceeding.");
   if (!taskChanges.length) errors.push("No task changes found for a pre-PR review.");
+  const publication = publicationState(project, changed, head, indexEntries);
+  const workingEntries = new Map(publication.map(entry => [entry.file, entry.working_entry]));
+  const change = changeDigest(project, manifest.base, changed, head, indexEntries, workingEntries);
+  if (gitText(project, ["rev-parse", "--verify", "HEAD"]) !== head) throw new Error("HEAD changed while collecting scope publication evidence");
   return {
     verdict: errors.length ? "FAIL" : "PASS",
     task_id: manifest.task_id,
     branch: manifest.branch,
     base: manifest.base,
-    change_digest: changeDigest(project, manifest.base, statePrefix),
+    change_digest: change,
+    publication_head: head,
+    publication_state: publication,
     intended_changes: taskChanges.filter(file => allowed.has(file)),
     unexpected_paths: unexpected,
     preexisting_changed: preexistingChanged,
+    authorized_preexisting_changes: authorizedChanges,
+    protected_preexisting_changes: protectedChanges,
     untouched_preexisting_count: Object.keys(manifest.preexisting).length - preexistingChanged.length,
     scope_extensions: manifest.extensions || [],
     errors,
@@ -287,8 +428,8 @@ function check(project, manifest, statePrefix) {
 
 function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
-  if (!(["start", "extend", "check"].includes(command))) {
-    throw new Error("Usage: scope-guard.mjs start --task-id ID --base main --intent TEXT --allow path [--allow path] | extend --task-id ID --allow path --reason TEXT --evidence REF | check --task-id ID");
+  if (!(["start", "extend", "authorize", "check"].includes(command))) {
+    throw new Error("Usage: scope-guard.mjs start --task-id ID --base main --intent TEXT --allow path [--allow path] | extend/authorize --task-id ID --allow path --reason TEXT --evidence REF | check --task-id ID");
   }
   const context = repositoryContext(options.project || ".");
   const { projectRoot: project, repositoryRoot: root, projectPrefix, statePrefix } = context;
@@ -313,9 +454,9 @@ function main() {
     return;
   }
 
-  if (command === "extend") {
+  if (command === "extend" || command === "authorize") {
     if (options.allow.length !== 1 || !options.reason?.trim() || !options.evidence?.trim()) {
-      throw new Error("extend requires exactly one --allow path, --reason and --evidence");
+      throw new Error(`${command} requires exactly one --allow path, --reason and --evidence`);
     }
     const lock = `${file}.lock`;
     try { fs.mkdirSync(lock); } catch { throw new Error("Scope update already in progress or a stale lock needs investigation"); }
@@ -324,15 +465,33 @@ function main() {
       const latest = readManifest(file, context);
       const extra = validPath(options.allow[0]);
       if (currentBranch(root) !== latest.branch) throw new Error("Branch changed since scope was locked");
-      if (latest.allowed_paths.includes(extra)) throw new Error("Path is already allowed");
-      if (extra in latest.preexisting || changePaths(root, latest.base, statePrefix).includes(extra)) {
-        throw new Error("Cannot retroactively approve an already dirty/changed path");
+      latest.extensions ||= [];
+      if (command === "authorize") {
+        if (!latest.allowed_paths.includes(extra)) throw new Error("Content-edit authorization requires an already allowed exact path");
+        const before = latest.preexisting[extra];
+        if (before?.status !== "??") throw new Error("Content-edit authorization is limited to initially untracked files");
+        if (!before.untracked_shape) throw new Error("Existing scope lacks required baseline type evidence; cannot authorize this path safely. Preserve the original scope and review its existing evidence.");
+        if (!hasContentEditBaseline(before)) throw new Error("Content-edit authorization requires a baseline regular file absent from HEAD/index and without symlink or hardlink aliases");
+        if (!contentEditAllowed(root, extra, before, statusEntries(root, statePrefix).get(extra), indexSnapshot(root))) {
+          throw new Error("Content-edit authorization cannot permit divergent staged content, deletion, mode/type changes or linked-file writes");
+        }
+        if (latest.extensions.some(entry => entry.kind === "preexisting-untracked-content" && entry.path === extra)) {
+          throw new Error("Pre-existing content edits are already authorized for this path");
+        }
+      } else {
+        if (latest.allowed_paths.includes(extra)) throw new Error("Path is already allowed");
+        if (extra in latest.preexisting || changePaths(root, latest.base, statePrefix).includes(extra)) {
+          throw new Error("Cannot retroactively approve an already dirty/changed path");
+        }
+        latest.allowed_paths.push(extra);
       }
-      latest.allowed_paths.push(extra);
-      latest.extensions.push({ path: extra, reason: options.reason, evidence: options.evidence, recorded_at: new Date().toISOString() });
+      latest.extensions.push({ path: extra, ...(command === "authorize" ? { kind: "preexisting-untracked-content" } : {}),
+        reason: options.reason, evidence: options.evidence, recorded_at: new Date().toISOString() });
       fs.writeFileSync(temporary, `${JSON.stringify(latest, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
       fs.renameSync(temporary, file);
-      process.stdout.write(`${JSON.stringify({ verdict: "EXTENDED", path: extra, reason: options.reason, evidence: options.evidence }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ verdict: command === "authorize" ? "AUTHORIZED" : "EXTENDED", path: extra,
+        ...(command === "authorize" ? { permission: "content-edit", staging: "content-equivalent-only" } : {}),
+        reason: options.reason, evidence: options.evidence }, null, 2)}\n`);
     } finally {
       if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
       fs.rmdirSync(lock);

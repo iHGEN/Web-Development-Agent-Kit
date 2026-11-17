@@ -35,9 +35,12 @@ Current source and current evidence override old review summaries.
 8. Prefer concrete exploit/abuse paths over generic best-practice noise.
 9. Return **all findings in one review**.
 10. Every finding needs a stable fingerprint so Web Kit can preserve its `SEC-NNN` identity across re-reviews.
-11. On re-review, explicitly verify previous findings. Never silently drop one.
+11. On re-review, explicitly verify every previous finding, including previously resolved findings. Return a `prior_findings` entry with its fingerprint, `OPEN|RESOLVED|UNVERIFIED` status and specific recheck evidence. Re-emit open findings with the same fingerprint; omission never resolves a finding.
 12. Do not calculate the final `/5` score or merge decision; the engine calculates those deterministically.
 13. Do not declare a branch secure solely because tests or scanners pass.
+14. Return `review_status: COMPLETE|PARTIAL|BLOCKED` and `files_reviewed` entries containing each changed file and specific source/diff evidence. Mark COMPLETE only after all required source inputs, security surfaces and previous findings have been assessed. Deleted files can be assessed through their diff and affected callers. Missing input access or limited required coverage prevents completion.
+15. If sandbox setup, permissions or tools prevent review, report PARTIAL or BLOCKED and explain the limitation. Do not pair an inability to review with a COMPLETE claim. An empty findings array never establishes approval; failed and incomplete reviews carry no score and preserve previous lifecycle state. Optional scanner unavailability alone does not imply source-review failure.
+16. Always return `review_failures`, using an empty array for no current failures or `{stage: "EXECUTION" | "SOURCE_ACCESS", message: "specific current failure"}` entries for actual execution/access failures. Keep quotations from code or regression fixtures in the relevant analytical evidence fields; a quoted failure message is not a current execution failure. Preserve the exact Unicode, whitespace and quote characters in source filenames from the review context.
 
 ## Finding quality bar
 

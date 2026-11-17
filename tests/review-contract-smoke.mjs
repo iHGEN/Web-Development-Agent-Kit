@@ -176,13 +176,14 @@ try {
   fs.copyFileSync(path.join(repo, "pack/rules/project-paths.mjs"), path.join(project, ".agent-core/rules/project-paths.mjs"));
   git("init", "-b", "main"); git("config", "user.name", "Review Contract"); git("config", "user.email", "contract@example.invalid");
   git("add", "."); git("commit", "-m", "baseline"); git("switch", "-c", "feat/review");
+  write("src/existing-user.mjs", "export const userDraft = true;\n");
 
   assert.equal(work("start", "--task-id", task, "--classification", "SMALL").pr_bound, true, "Feature branch must activate PR protection without the optional flag.");
   work("start", "--task-id", "LOCAL", "--classification", "SMALL", "--local-only");
   assert.equal(JSON.parse(fs.readFileSync(path.join(project, ".agent-core/state/jobs/LOCAL.json"))).pr_bound, false);
   fail("start", "--task-id", "CONFLICT", "--classification", "SMALL", "--pr-bound", "--local-only");
   fail("start", "--task-id", task, "--classification", "SMALL", "--force", "--local-only");
-  run(process.execPath, [guard, "start", "--project", project, "--task-id", task, "--base", "main", "--intent", "Enable fixture", "--allow", "src/feature.mjs", "--allow", "notes.md"]);
+  run(process.execPath, [guard, "start", "--project", project, "--task-id", task, "--base", "main", "--intent", "Enable fixture", "--allow", "src/feature.mjs", "--allow", "notes.md", "--allow", "src/existing-user.mjs"]);
   write("src/feature.mjs", "export const enabled = true;\n");
   work("update", "--task-id", task, "--status", "IMPLEMENTING", "--agent", "builder");
   assert(work("report", "--task-id", task).engineering_quality.blockers.some(x => x.includes("No acceptance criteria")));
@@ -203,6 +204,17 @@ try {
 
   const snap = snapshot();
   const clean = report(snap);
+  const legacySnapshot = { ...snap };
+  delete legacySnapshot.publication_state;
+  assert(!sameReviewSnapshot(legacySnapshot, snap), "Older snapshots cannot omit publication evidence.");
+  assert(!sameReviewSnapshot(snap, { ...snap, publication_state: [] }), "Publication evidence must cover every reviewed path.");
+  assert.throws(() => artifact({ id: randomUUID(), snap: legacySnapshot }), /publication evidence/);
+  const legacyPath = artifact({ id: randomUUID(), snap });
+  const legacyArtifact = loadReviewArtifact(project, legacyPath);
+  delete legacyArtifact.snapshot.publication_state;
+  fs.writeFileSync(path.join(project, legacyPath), JSON.stringify(legacyArtifact));
+  assert.throws(() => validateReviewArtifact(project, legacyPath, job(), snap), /stale/,
+    "Previously stored reports without publication evidence require a fresh review.");
   assert.equal(validateReviewReport(clean, snap, job()).verdict, "READY TO OPEN PR");
   for (const field of ["files_reviewed", "requirements", "scenarios", "boundaries"]) {
     assert.equal(validateReviewReport({ ...clean, [field]: [] }, snap, job()).verdict, "VERIFICATION BLOCKED", `${field} omission must not approve.`);
@@ -268,6 +280,33 @@ try {
     fs.unlinkSync(path.join(project, linked));
   }
 
+  // Permission changes must expire review evidence even when no source bytes change.
+  const beforeAuthorization = snapshot();
+  const reviewedBeforeAuthorization = job().quality.code_review.report_path;
+  const scopeFile = path.join(project, `.agent-core/state/scope/${task}.json`);
+  const baselineBeforeAuthorization = JSON.parse(fs.readFileSync(scopeFile, "utf8")).preexisting;
+  assert(beforeAuthorization.files.includes("src/existing-user.mjs"), "The initial untracked draft must be in the reviewed file list.");
+  assert.equal(baselineBeforeAuthorization["src/existing-user.mjs"].status, "??");
+  assert.equal(validateReviewArtifact(project, reviewedBeforeAuthorization, job(), beforeAuthorization).verdict, "READY TO OPEN PR");
+  run(process.execPath, [guard, "authorize", "--project", project, "--task-id", task,
+    "--allow", "src/existing-user.mjs", "--reason", "The task explicitly permits editing this existing draft.",
+    "--evidence", "Original task authorization names src/existing-user.mjs."]);
+  const afterAuthorization = snapshot();
+  assert.equal(afterAuthorization.source_digest, beforeAuthorization.source_digest);
+  assert.equal(afterAuthorization.change_digest, beforeAuthorization.change_digest);
+  assert.notEqual(afterAuthorization.scope_digest, beforeAuthorization.scope_digest);
+  assert.deepEqual(JSON.parse(fs.readFileSync(scopeFile, "utf8")).preexisting, baselineBeforeAuthorization,
+    "Recording authorization must preserve the original preexisting baseline.");
+  assert(!sameReviewSnapshot(beforeAuthorization, afterAuthorization));
+  assert.throws(() => validateReviewArtifact(project, reviewedBeforeAuthorization, job(), afterAuthorization), /stale/);
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "BLOCKED");
+  assert.match(fail("quality-review", "--task-id", task, "--report", reviewedBeforeAuthorization).stderr, /stale/i);
+  fail("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
+  const authorizedReview = begin();
+  importReport(artifact(authorizedReview));
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "PASS",
+    "A fresh review must restore readiness without rerunning unchanged check evidence.");
+
   // Content-equivalent Git operations preserve an approval, but fail read-only-run checks.
   const beforeStage = snapshot();
   git("add", "src/feature.mjs");
@@ -288,6 +327,64 @@ try {
   git("update-ref", "refs/heads/main", base, newBase); // Restore only the disposable fixture ref.
 
   formalSpecificationRegression();
+
+  // A different committed version cannot hide behind the previously reviewed worktree.
+  const reviewedDraft = fs.readFileSync(path.join(project, "src/existing-user.mjs"), "utf8");
+  const beforeCommittedDrift = snapshot();
+  const reviewedBeforeCommittedDrift = job().quality.code_review.report_path;
+  assert.equal(validateReviewArtifact(project, reviewedBeforeCommittedDrift, job(), beforeCommittedDrift).verdict,
+    "READY TO OPEN PR");
+  write("src/existing-user.mjs", 'export const userDraft = "WRONG COMMITTED CONTENT";\n');
+  git("add", "src/existing-user.mjs");
+  git("commit", "-m", "commit a different version of the authorized draft");
+  write("src/existing-user.mjs", reviewedDraft);
+  assert.match(git("show", "HEAD:src/existing-user.mjs").stdout, /WRONG COMMITTED CONTENT/);
+  assert.equal(fs.readFileSync(path.join(project, "src/existing-user.mjs"), "utf8"), reviewedDraft);
+  const afterCommittedDrift = snapshot();
+  assert.equal(afterCommittedDrift.source_digest, beforeCommittedDrift.source_digest,
+    "The restored working source must be identical to the reviewed source.");
+  assert.notEqual(afterCommittedDrift.change_digest, beforeCommittedDrift.change_digest,
+    "The unreviewed committed version must participate in review identity.");
+  assert(!sameReviewSnapshot(beforeCommittedDrift, afterCommittedDrift));
+  assert.throws(() => validateReviewArtifact(project, reviewedBeforeCommittedDrift, job(), afterCommittedDrift), /stale/);
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "BLOCKED");
+  assert.match(fail("quality-review", "--task-id", task, "--report", reviewedBeforeCommittedDrift).stderr, /stale/i);
+  fail("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
+  git("add", "src/existing-user.mjs");
+  assert(!sameReviewSnapshot(beforeCommittedDrift, snapshot()),
+    "Staging reviewed contents must not conceal the different version still in HEAD.");
+  git("commit", "-m", "publish only the reviewed draft contents");
+  assert(sameReviewSnapshot(beforeCommittedDrift, snapshot()),
+    "Once HEAD and the working tree both match reviewed contents, the original review is current again.");
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "PASS");
+
+  // A commit back to the merge-base version disappears from the committed diff,
+  // but must still invalidate an approval made after the reviewed code was committed.
+  const publishedReview = begin();
+  const publishedPath = artifact(publishedReview);
+  importReport(publishedPath);
+  const reviewedFeature = fs.readFileSync(path.join(project, "src/feature.mjs"), "utf8");
+  write("src/feature.mjs", git("show", "main:src/feature.mjs").stdout);
+  git("add", "src/feature.mjs");
+  git("commit", "-m", "revert the reviewed feature to its baseline");
+  write("src/feature.mjs", reviewedFeature);
+  const reverted = snapshot();
+  assert.match(git("show", "HEAD:src/feature.mjs").stdout, /enabled = false/);
+  assert.equal(reverted.source_digest, publishedReview.snap.source_digest);
+  assert.equal(reverted.change_digest, publishedReview.snap.change_digest,
+    "The baseline-revert case requires publication evidence beyond the effective diff digest.");
+  assert(!sameReviewSnapshot(publishedReview.snap, reverted));
+  assert.throws(() => validateReviewArtifact(project, publishedPath, job(), reverted), /stale/);
+  const revertedReport = work("report", "--task-id", task);
+  assert.equal(revertedReport.engineering_quality.gate, "BLOCKED");
+  assert.equal(revertedReport.engineering_quality.reviewed_diff_current, false);
+  assert.match(fail("quality-review", "--task-id", task, "--report", publishedPath).stderr, /stale/i);
+  fail("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
+  git("add", "src/feature.mjs");
+  assert(!sameReviewSnapshot(publishedReview.snap, snapshot()), "Staging cannot correct the published baseline reversion.");
+  git("commit", "-m", "restore the reviewed feature in HEAD");
+  assert(sameReviewSnapshot(publishedReview.snap, snapshot()));
+  assert.equal(work("report", "--task-id", task).engineering_quality.gate, "PASS");
 
   // Markdown and acceptance changes cannot retain an earlier approval.
   write("notes.md", "Changed after review\n");

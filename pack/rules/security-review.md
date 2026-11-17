@@ -111,7 +111,17 @@ The regression suite captures a scanner artifact and hash for one review, runs a
 
 ## Full review vs scan-only
 
-A normal review includes independent AI source reasoning and is eligible for a `/5` rating and merge decision.
+A normal review is eligible for a `/5` rating and merge decision only after the runner validates its completion. A successful provider process and an empty findings list are insufficient.
+
+The reviewer must report `review_status: COMPLETE`, evidence for every changed source input in `files_reviewed`, explicit coverage of all required security surfaces, and an evidence-backed `prior_findings` disposition for every previous finding. It must also supply `review_failures: []` when no current execution or source-access failure occurred. Each active failure uses `{stage: "EXECUTION" | "SOURCE_ACCESS", message: "specific current failure"}` and prevents completion even if the reviewer claims COMPLETE. A required surface may be `NOT_APPLICABLE` only with source-based notes. Missing or `LIMITED` source coverage cannot approve the branch.
+
+Source evidence, coverage notes and prior-finding evidence may quote diagnostics from code or tests. Those quotations are analytical evidence, not live failure reports. Record actual current failures in `review_failures` and describe the current run accurately in its summary and limitations. Provider execution errors and native sandbox failures remain authoritative failure signals.
+
+Use the exact repository-relative names supplied in `changed_files` for source-input evidence. The runner reads NUL-delimited Git output and preserves Unicode, whitespace and quotation marks; never copy Git's C-quoted display spelling or trim a filename.
+
+Sandbox setup failures (including Windows `SetNamedSecurityInfoW`, error 5), unavailable source files, partial/blocked responses, malformed output and provider failures produce a persisted `INCONCLUSIVE` result with `rating: null`, `approval_eligible: false` and `finding_lifecycle_verified: false`. The failed attempt replaces the current report without deleting history, preserves previous finding lifecycle fields, records completion issues and returns exit code `4`. Useful partial findings remain unverified observations. A contradictory completion claim cannot override an explicit report that review was impossible.
+
+Optional scanners are separate: `--no-scanners` or an unavailable optional scanner is a recorded limitation, not automatically an incomplete source review. `--fail-on-blocking` also returns `4` for completed reviews requesting changes and scan-only inconclusive runs; incomplete non-scan-only reviews always return `4`.
 
 `--scan-only` intentionally skips that source-level reasoning. Therefore scan-only:
 
@@ -167,9 +177,9 @@ Findings never silently disappear.
 - `STILL_OPEN` — same fingerprint remains on re-review;
 - `NEW` — first discovered on a later review;
 - `REGRESSION` — a resolved fingerprint reappears;
-- `RESOLVED` — a previous finding is no longer reproducible.
+- `RESOLVED` — a completed independent review explicitly rechecked the finding and supplied evidence that it is no longer reproducible.
 
-Only a **full independent review** may transition these states. Scan-only evidence may inform the next review but cannot mutate them.
+Only a **validated, completed independent review** may transition these states. Absence from a new findings list never establishes resolution. Every previous fingerprint needs an `OPEN`, `RESOLVED` or `UNVERIFIED` disposition with evidence; `UNVERIFIED`, missing evidence or a missing disposition blocks completion. Scan-only and incomplete-review evidence may inform the next review but cannot mutate the stored lifecycle. A newly fixed runner does not retroactively verify older approvals or repair previously incorrect resolution records; rerun the affected review against current source.
 
 ## Collision-safe branch storage
 
@@ -210,7 +220,7 @@ Pre-release legacy slug-only state may be migrated only when its `latest.json` r
 
 ## Rating out of 5
 
-Only full reviews are scored.
+Only validated, completed full reviews are scored. Incomplete reviews have no numeric rating.
 
 - `5.0` — no active blocking finding found in reviewed evidence;
 - `4.x` — low/info recommendations only;
@@ -222,14 +232,14 @@ The score may use decimals. Score and merge decision are separate: one confirmed
 
 ## Merge decision
 
-For a full review:
+For a validated, completed full review:
 
 - `REQUEST_CHANGES` when an active `CRITICAL`, `HIGH`, or `MEDIUM` finding has non-low confidence;
 - `APPROVE` when no such active blocking finding remains.
 
-For scan-only:
+For scan-only or incomplete reviews:
 
-- `INCONCLUSIVE` always; scan-only is not merge approval.
+- `INCONCLUSIVE` always; these results cannot grant merge approval or resolve previous findings.
 
 ## Independence
 

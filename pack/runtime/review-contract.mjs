@@ -120,6 +120,18 @@ export function reviewContextDigest(job, project) {
   }));
 }
 
+function validPublicationState(state, files) {
+  if (!Array.isArray(files) || !files.length || files.length > 5000
+    || !Array.isArray(state) || state.length !== files.length) return false;
+  const entry = value => value === null || (typeof value === "string"
+    && /^(100644|100755|120000|160000) (?:[a-f0-9]{40}|[a-f0-9]{64}) 0$/.test(value));
+  for (let i = 0; i < files.length; i++) {
+    if (!safeRelative(files[i]) || (i > 0 && files[i - 1] >= files[i])
+      || state[i]?.file !== files[i] || !entry(state[i].head_entry) || !entry(state[i].working_entry)) return false;
+  }
+  return true;
+}
+
 export function captureReviewSnapshot(project, job, sourceDigest) {
   if (!safeId(job.task_id) || typeof sourceDigest !== "function") throw new Error("Review needs a valid task and source fingerprint function.");
   const layout = repositoryContext(project);
@@ -154,6 +166,9 @@ export function captureReviewSnapshot(project, job, sourceDigest) {
   ];
   const files = [...new Set(lists.flatMap(args => git(repository, args).split("\0").filter(Boolean)))].filter(f => !generated(f)).sort();
   if (!files.length || files.length > 5000 || files.some(f => !safeRelative(f))) throw new Error("Review change list is empty, unsafe, or too large.");
+  if (checked.publication_head !== head || !validPublicationState(checked.publication_state, files)) {
+    throw new Error("Scope guard supplied no current publication evidence. Update the installed guard and rerun review on unchanged source.");
+  }
   const status = git(repository, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])
     .split("\0").filter(entry => entry && !generated(entry.slice(3))).join("\0");
   const source = sourceDigest(project);
@@ -172,6 +187,7 @@ export function captureReviewSnapshot(project, job, sourceDigest) {
     specification,
     scope_digest: hash(JSON.stringify([scope.intent, scope.allowed_paths, scope.extensions, scope.base, scope.repository_root, scope.project_prefix])),
     base: scope.base, base_commit: baseCommit, branch, merge_base: mergeBase, files,
+    publication_state: checked.publication_state,
     prior_findings: priorFindings,
     readonly_digest: hash(JSON.stringify([head, branch, index, status, source, checked.change_digest])),
   };
@@ -181,7 +197,17 @@ export function sameReviewSnapshot(a, b, readOnly = false) {
   const fields = ["task_id", "source_digest", "change_digest", "requirements_digest", "evidence_digest", "scope_digest", "base", "base_commit", "branch", "merge_base", "repository_root", "project_root"];
   if (readOnly) fields.push("readonly_digest");
   return fields.every(key => a?.[key] && a[key] === b?.[key]) && a?.project_prefix === b?.project_prefix && JSON.stringify(a.files) === JSON.stringify(b.files)
-    && JSON.stringify(a.specification) === JSON.stringify(b.specification);
+    && JSON.stringify(a.specification) === JSON.stringify(b.specification)
+    && validPublicationState(a.publication_state, a.files) && validPublicationState(b.publication_state, b.files)
+    // Compare the reviewed snapshot to the current one in that order. A partial
+    // commit may leave other files pending, but any changed HEAD entry must now
+    // publish that file's reviewed working content, mode, or deletion. Recording
+    // every changed path also catches commits that revert to the merge base.
+    && a.publication_state.every((before, i) => {
+      const after = b.publication_state[i];
+      return before.working_entry === after.working_entry
+        && (before.head_entry === after.head_entry || before.working_entry === after.head_entry);
+    });
 }
 
 function requireText(value, label) { if (!text(value)) throw new Error(`Review report requires ${label}.`); }
@@ -266,6 +292,9 @@ function validateEnvelope(envelope, job) {
 
 export function storeReviewArtifact(project, job, envelope) {
   validateEnvelope(envelope, job);
+  if (!validPublicationState(envelope.snapshot?.publication_state, envelope.snapshot?.files)) {
+    throw new Error("Review snapshot requires complete publication evidence.");
+  }
   const result = validateReviewReport(envelope.report, envelope.snapshot, job);
   if (envelope.verdict !== result.verdict) throw new Error("Review verdict disagrees with its evidence.");
   const relative = `${PREFIX}${job.task_id}/${envelope.run_id}.json`;
@@ -281,7 +310,7 @@ export function validateReviewArtifact(project, relative, job, snapshot, expecte
   if (relative !== `${PREFIX}${job.task_id}/${envelope.run_id}.json`) throw new Error("Review artifact location does not match its run.");
   const digest = reviewArtifactDigest(project, relative);
   if (expectedHash && digest !== expectedHash) throw new Error("Stored review evidence was modified.");
-  if (!sameReviewSnapshot(envelope.snapshot, snapshot)) throw new Error("Review evidence is stale against the code, base, specification, plan, requirements, or checks.");
+  if (!sameReviewSnapshot(envelope.snapshot, snapshot)) throw new Error("Review evidence is stale against the code, committed versions, base, specification, plan, requirements, or checks.");
   const result = validateReviewReport(envelope.report, envelope.snapshot, job);
   if (envelope.verdict !== result.verdict) throw new Error("Review verdict disagrees with its evidence.");
   return { envelope, digest, ...result };

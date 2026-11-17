@@ -85,6 +85,8 @@ const project = path.join(tempRoot, "project");
 fs.mkdirSync(path.join(project, "src"), { recursive: true });
 fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ name: "security-review-smoke", version: "1.0.0" }, null, 2));
 fs.writeFileSync(path.join(project, "src", "admin.js"), "export function canDelete(req) { return req.user.role === \"admin\"; }\n");
+const unstagedPathFixtures = ["src/unstaged café.js", "src/ leading unstaged name.js"];
+for (const file of [...unstagedPathFixtures, "src/rename-before.js"]) fs.writeFileSync(path.join(project, file), "export const original = true;\n");
 
 let init = spawnSync("git", ["init", "-b", "main"], { cwd: project, encoding: "utf8", windowsHide: true });
 if (init.error || init.status !== 0) {
@@ -132,6 +134,8 @@ const first = json(path.join(root, "latest.json"));
 assert(first.review_number === 1 && first.mode === "initial", "initial security review number/mode mismatch");
 assert(first.branch_storage_key === storageKey("ts-admin-security"), "collision-safe branch storage key mismatch");
 assert(first.provider === "codex", "Codex security backend was not recorded");
+assert(first.review_status === "COMPLETE" && first.approval_eligible === true && first.finding_lifecycle_verified === true, "completed source review was not validated");
+assert(first.files_reviewed.some((input) => input.file === "src/admin.js" && input.evidence), "completed review did not retain source input evidence");
 assert(first.decision === "REQUEST_CHANGES", "HIGH authorization finding should request changes");
 assert(first.rating > 0 && first.rating <= 2.9, `expected high-risk score <=2.9, got ${first.rating}`);
 assert(first.findings.length === 1, "expected exactly one initial security finding");
@@ -154,6 +158,8 @@ assert(second.rating === 5, `resolved review should rate 5/5, got ${second.ratin
 const resolved = second.findings.find((finding) => finding.id === "SEC-001");
 assert(resolved?.status === "RESOLVED", "SEC-001 was not preserved as RESOLVED");
 assert(resolved.blocking === false, "resolved finding remained blocking");
+assert(resolved.resolution_evidence?.includes("src/admin.js"), "finding resolution has no source recheck evidence");
+assert(second.prior_findings.some((finding) => finding.fingerprint === resolved.fingerprint && finding.status === "RESOLVED" && finding.evidence), "resolved review lost its explicit prior-finding disposition");
 assert(!second.changed_files.some((file) => file.startsWith(".agent-core/security-reviews/")), "generated review state polluted re-review changed-file scope");
 assert(fs.existsSync(path.join(root, "history", "review-002.json")), "second review history JSON missing");
 assert(fs.readFileSync(path.join(root, "latest.md"), "utf8").includes("5.0 / 5"), "Markdown report missing /5 rating");
@@ -166,6 +172,57 @@ run(process.execPath, [engine, "--project", project, "--base", "main", "--provid
 const fourth = json(path.join(root, "latest.json"));
 assert(fourth.provider === "gemini" && fourth.decision === "APPROVE", "Gemini provider adapter smoke failed");
 assert(fourth.findings.find((finding) => finding.id === "SEC-001")?.status === "RESOLVED", "resolved finding identity was lost across providers");
+
+function assertIncompleteRun(mode, stateRoot, provider = "codex", gate = true) {
+  const before = json(path.join(stateRoot, "latest.json"));
+  const result = spawnSync(process.execPath, [engine, "--project", project, "--base", "main", "--provider", provider, "--no-scanners", ...(gate ? ["--fail-on-blocking"] : [])], {
+    cwd: project, env: { ...baseEnv, WEB_KIT_TEST_SECURITY_MODE: mode }, encoding: "utf8", windowsHide: true, timeout: 60_000,
+  });
+  assert(!result.error && result.status === 4, `${mode}/${provider}: incomplete review must fail with exit 4, got ${result.status}: ${result.stderr}`);
+  const review = json(path.join(stateRoot, "latest.json"));
+  assert(review.review_number === before.review_number + 1, `${mode}/${provider}: failed review left stale latest state`);
+  assert(review.decision === "INCONCLUSIVE" && review.review_status !== "COMPLETE", `${mode}/${provider}: incomplete review granted approval`);
+  assert(review.rating === null && review.rating_status === "NOT_SCORED_INCOMPLETE_REVIEW", `${mode}/${provider}: incomplete review was assigned a score`);
+  assert(review.approval_eligible === false && review.finding_lifecycle_verified === false, `${mode}/${provider}: incomplete review claims approval eligibility or verified lifecycle`);
+  assert(review.completion_issues.length > 0, `${mode}/${provider}: missing completion diagnostics`);
+  assert(JSON.stringify(review.findings) === JSON.stringify(before.findings), `${mode}/${provider}: incomplete review changed previous finding lifecycle`);
+  assert(!result.stdout.includes("✓ No active security findings.") && !result.stdout.includes("  RESOLVED  "), `${mode}/${provider}: console falsely reports a clean review or resolved finding`);
+  const markdown = fs.readFileSync(path.join(stateRoot, "latest.md"), "utf8");
+  assert(markdown.includes("**Decision:** **INCONCLUSIVE**") && markdown.includes("NOT SCORED (incomplete review)"), `${mode}/${provider}: Markdown disagrees with blocked JSON`);
+  const history = json(path.join(stateRoot, "history", `review-${String(review.review_number).padStart(3, "0")}.json`));
+  assert(JSON.stringify(history) === JSON.stringify(review), `${mode}/${provider}: history disagrees with latest review`);
+  return { review, stdout: result.stdout };
+}
+
+// A provider protocol failure must replace a previously successful latest result,
+// and must fail even when --fail-on-blocking was not explicitly requested.
+const failedAfterApproval = assertIncompleteRun("malformed", root, "codex", false).review;
+assert(failedAfterApproval.review_status === "ERROR" && failedAfterApproval.summary.includes("invalid security-review JSON"), "provider protocol failure did not persist its diagnostic");
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: { ...baseEnv, WEB_KIT_TEST_SECURITY_MODE: "failure-handling-evidence" } });
+const recovered = json(path.join(root, "latest.json"));
+assert(recovered.decision === "APPROVE" && recovered.review_status === "COMPLETE" && recovered.rating === 5, "completed review discussing sandbox failure-handling code was falsely blocked");
+assert(recovered.files_reviewed.some((input) => input.evidence.includes("SetNamedSecurityInfoW")), "failure-handling evidence fixture was not exercised");
+
+// A quoted diagnostic describes reviewed source/tests; it is not a current
+// execution failure, even when the same wording appears in multiple fields.
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: { ...baseEnv, WEB_KIT_TEST_SECURITY_MODE: "quoted-failure-evidence" } });
+const quoted = json(path.join(root, "latest.json"));
+const quotedEvidence = 'Verified regression fixture rejects the diagnostic "Independent review was impossible." and preserves prior findings.';
+assert(quoted.decision === "APPROVE" && quoted.review_status === "COMPLETE" && quoted.rating === 5, "quoted regression evidence was mistaken for a current reviewer failure");
+assert(quoted.review_failures.length === 0 && quoted.completion_issues.length === 0, "completed quoted-evidence review contains false failures");
+assert(quoted.files_reviewed.every((input) => input.evidence === quotedEvidence), "source evidence quote fixture was not exercised");
+assert(quoted.coverage.filter((area) => !area.area.startsWith("Scanner:")).every((area) => area.notes === quotedEvidence), "coverage evidence quote fixture was not exercised");
+assert(quoted.prior_findings.length > 0 && quoted.prior_findings.every((finding) => finding.evidence === quotedEvidence), "prior-finding evidence quote fixture was not exercised");
+assert(quoted.summary === quotedEvidence && quoted.limitations.includes(quotedEvidence), "analytical summary/limitation quotes were not preserved");
+
+// Provider envelope fields are untrusted JSON, not strings to coerce. Each
+// malformed envelope must replace a prior approval with a persisted failure.
+for (const provider of ["claude", "gemini"]) for (const field of ["subtype", "result", "response"]) {
+  run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", provider, "--no-scanners"], { cwd: project, env: baseEnv });
+  assert(json(path.join(root, "latest.json")).decision === "APPROVE", `${provider}/${field}: expected a prior successful review`);
+  const invalid = assertIncompleteRun(`malformed-envelope-${field}`, root, provider).review;
+  assert(invalid.review_status === "ERROR" && invalid.summary.includes(`invalid security-review envelope; ${field} must be a string`), `${provider}/${field}: invalid envelope was not persisted as a reviewer failure`);
+}
 
 // Regression: scan-only can never issue APPROVE/5.0, especially when a scanner reports findings.
 const fakeScannerBin = scannerFixture(tempRoot);
@@ -254,15 +311,43 @@ const activeFindingBefore = activeBeforeScan.findings.find((finding) => finding.
 assert(activeFindingBefore?.status === "OPEN" && activeFindingBefore.blocking === true, "active scan-only fixture did not start with OPEN SEC-001");
 assert(activeBeforeScan.decision === "REQUEST_CHANGES", "active scan-only fixture should request changes before scan-only");
 
+// Reproduce the Windows sandbox incident: successful provider process, explicit
+// inability to review, and empty findings. No prior finding may be resolved.
+for (const provider of ["codex", "claude", "gemini"]) {
+  const blocked = assertIncompleteRun("sandbox-blocked", activeRoot, provider);
+  assert(blocked.review.review_status === "BLOCKED", `${provider}: blocked source access was not recorded`);
+  assert(blocked.review.limitations.some((item) => item.includes("SetNamedSecurityInfoW") && item.includes("error 5")), `${provider}: sandbox error diagnostic was lost`);
+  assert(blocked.stdout.includes("SetNamedSecurityInfoW"), `${provider}: console did not explain the sandbox failure`);
+  const runtimeError = assertIncompleteRun("runtime-error", activeRoot, provider).review;
+  assert(runtimeError.review_status === "ERROR", `${provider}: runtime error with exit 0 was accepted as successful`);
+}
+for (const mode of ["contradictory-complete", "partial", "missing-status", "invalid-status", "missing-source", "partial-coverage", "limited-coverage", "malformed-coverage", "malformed-findings", "omitted-recheck", "unsupported-resolution", "exit-error", "runtime-tool-error", "stderr-sandbox-error", "runtime-malformed-error", "structured-source-failure", "current-access-failure", "missing-failures", "malformed-failures"]) {
+  const { review } = assertIncompleteRun(mode, activeRoot);
+  if (mode === "contradictory-complete") assert(review.completion_issues.some((issue) => issue.includes("blocked source access")), "contradictory COMPLETE report was not identified");
+  if (mode === "missing-source") assert(review.unverified_findings.length === 1, "partial review lost useful reported findings");
+  if (mode === "omitted-recheck") assert(review.completion_issues.some((issue) => issue.includes("Prior finding was not rechecked")), "omitted prior finding lacked a recheck diagnostic");
+  if (mode === "stderr-sandbox-error") assert(review.review_status === "ERROR" && review.summary.includes("SetNamedSecurityInfoW"), "native sandbox failure on stderr was ignored after exit 0");
+  if (mode === "runtime-malformed-error") assert(review.review_status === "ERROR" && review.summary.includes("SetNamedSecurityInfoW"), "malformed native sandbox diagnostic escaped failure persistence");
+  if (mode === "structured-source-failure") assert(review.review_failures[0]?.stage === "SOURCE_ACCESS" && review.completion_issues.some((issue) => issue.includes("Current review failure (SOURCE_ACCESS)")), "structured current access failure was ignored despite COMPLETE/empty findings");
+  if (mode === "current-access-failure") assert(review.completion_issues.some((issue) => issue.includes("blocked source access")), "direct current inability was accepted as a completed review");
+}
+assert(json(path.join(activeRoot, "latest.json")).findings[0].status === "OPEN", "failed source reviews silently resolved the original finding");
+
+// After errors, an evidence-backed review can still update the same finding.
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: baseEnv });
+const activeAfterRecovery = json(path.join(activeRoot, "latest.json"));
+assert(activeAfterRecovery.decision === "REQUEST_CHANGES" && activeAfterRecovery.findings[0].status === "STILL_OPEN", "successful re-review lost the active finding after incomplete runs");
+const activeFindingBeforeScanOnly = activeAfterRecovery.findings[0];
+
 run(process.execPath, [engine, "--project", project, "--base", "main", "--scan-only"], { cwd: project, env: scanEnv });
 const activeAfterScan = json(path.join(activeRoot, "latest.json"));
 const activeFindingAfter = activeAfterScan.findings.find((finding) => finding.id === "SEC-001");
 assert(activeAfterScan.decision === "INCONCLUSIVE" && activeAfterScan.rating === null, "scan-only with an active finding became merge-approvable");
 assert(activeAfterScan.finding_lifecycle_verified === false, "scan-only with prior finding incorrectly claimed lifecycle verification");
-assert(activeFindingAfter?.status === "OPEN", `scan-only incorrectly changed prior SEC-001 status to ${activeFindingAfter?.status}`);
+assert(activeFindingAfter?.status === "STILL_OPEN", `scan-only incorrectly changed prior SEC-001 status to ${activeFindingAfter?.status}`);
 assert(activeFindingAfter.blocking === true, "scan-only incorrectly removed blocking state from prior SEC-001");
-assert(activeFindingAfter.last_seen_review === activeFindingBefore.last_seen_review, "scan-only incorrectly advanced last_seen_review without AI/source verification");
-assert(activeFindingAfter.resolved_review === activeFindingBefore.resolved_review, "scan-only incorrectly resolved a prior SEC finding");
+assert(activeFindingAfter.last_seen_review === activeFindingBeforeScanOnly.last_seen_review, "scan-only incorrectly advanced last_seen_review without AI/source verification");
+assert(activeFindingAfter.resolved_review === activeFindingBeforeScanOnly.resolved_review, "scan-only incorrectly resolved a prior SEC finding");
 
 // Regression: generic-path untracked file content must deterministically map security surfaces.
 git(project, ["checkout", "main"]);
@@ -311,5 +396,48 @@ run("git", ["add", "."], { cwd: project });
 const stagedAfterSecurityReview = run("git", ["diff", "--cached", "--name-only"], { cwd: project }).stdout.split(/\r?\n/).filter(Boolean);
 assert(!stagedAfterSecurityReview.some((file) => file.replace(/\\/g, "/").startsWith(".agent-core/security-reviews/")), "normal git add . staged generated security review state");
 assert(!treeContains(untrackedRoot, secretSentinel), "removing the original credential left a generated secret residue in the worktree");
+
+// Exact Git filenames must survive all four sources of changes. Force Git's
+// default C-quoting behavior so a line-based reader cannot accidentally pass.
+git(project, ["commit", "-m", "finish untracked evidence fixture"]);
+git(project, ["checkout", "main"]);
+git(project, ["checkout", "-b", "exact-path-evidence"]);
+git(project, ["config", "core.quotePath", "true"]);
+const committedPaths = ["src/café.js", "src/committed space.js"];
+const stagedPaths = ["src/staged café.js", "src/staged 'quote'.js", " leading staged.js"];
+const untrackedPaths = ["src/untracked café.js", "src/untracked space.js", " leading untracked.js"];
+// Windows prohibits double quotes, control characters, literal backslashes,
+// and trailing spaces in these path components; keep its fixture names valid.
+if (process.platform !== "win32") {
+  committedPaths.push('src/committed"quote.js');
+  stagedPaths.push("src/staged\ttab.js");
+  untrackedPaths.push("src/untracked\nline.js", "src/untracked\rreturn.js", "src/untracked\\backslash.js", "src/trailing-name.js ");
+}
+for (const file of committedPaths) fs.writeFileSync(path.join(project, file), "export const committed = true;\n");
+git(project, ["add", "--", ...committedPaths]);
+git(project, ["commit", "-m", "commit exact filename fixtures"]);
+for (const file of stagedPaths) fs.writeFileSync(path.join(project, file), "export const staged = true;\n");
+git(project, ["add", "--", ...stagedPaths]);
+const renamedPath = "src/renamed café.js";
+git(project, ["mv", "--", "src/rename-before.js", renamedPath]);
+for (const file of unstagedPathFixtures) fs.writeFileSync(path.join(project, file), "export const unstaged = true;\n");
+for (const file of untrackedPaths) fs.writeFileSync(path.join(project, file), "export const untracked = true;\n");
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: baseEnv });
+const pathRoot = reviewRoot(project, "exact-path-evidence");
+const pathReview = json(path.join(pathRoot, "latest.json"));
+const expectedPaths = [...committedPaths, ...stagedPaths, ...unstagedPathFixtures, ...untrackedPaths, renamedPath].sort();
+assert(JSON.stringify(pathReview.changed_files) === JSON.stringify(expectedPaths), "Git collection changed the exact names or omitted a source of changes");
+assert(pathReview.decision === "APPROVE" && pathReview.review_status === "COMPLETE", "honest source evidence for exact Git paths was rejected");
+for (const file of expectedPaths) assert(pathReview.files_reviewed.some((input) => input.file === file), `source evidence lost filename ${JSON.stringify(file)}`);
+const pathContext = json(path.join(pathRoot, "runtime", "review-context-001.json"));
+for (const file of [...stagedPaths, renamedPath]) assert(pathContext.working_tree_status.includes(`A  ${file}`), `staged status corrupted filename ${JSON.stringify(file)}`);
+for (const file of unstagedPathFixtures) assert(pathContext.working_tree_status.includes(` M ${file}`), `unstaged status corrupted filename ${JSON.stringify(file)}`);
+for (const file of untrackedPaths) assert(pathContext.working_tree_status.includes(`?? ${file}`), `untracked status corrupted filename ${JSON.stringify(file)}`);
+assert(pathContext.working_tree_status.includes("D  src/rename-before.js"), "rename source was lost while parsing NUL status records");
+const pathMetadata = json(path.resolve(project, pathContext.untracked_evidence_metadata_file));
+assert(JSON.stringify(pathMetadata.files.map((item) => item.path).sort()) === JSON.stringify([...untrackedPaths].sort()), "untracked evidence metadata did not retain exact filenames");
+assert(pathMetadata.files.every((item) => item.status === "CAPTURED_TEXT"), "exact untracked paths were not readable for source evidence");
+const fabricatedPath = assertIncompleteRun("c-quoted-unicode-path", pathRoot).review;
+assert(fabricatedPath.completion_issues.includes("Changed file was not reviewed: src/café.js"), "fabricated C-quoted/slash-normalized path satisfied the real Unicode file requirement");
 
 console.log(`Security Review smoke: PASS (${process.platform})`);

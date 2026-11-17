@@ -157,9 +157,22 @@ node .agent-core/rules/scope-guard.mjs extend \
 node .agent-core/rules/scope-guard.mjs check --task-id TASK-042
 ```
 
+If the task explicitly authorizes fixes to a file that was already untracked when the scope began, record that existing permission separately from the allowed path:
+
+```bash
+node .agent-core/rules/scope-guard.mjs authorize \
+  --task-id TASK-042 --allow src/feature.js \
+  --reason "The requested fix modifies this existing untracked file" \
+  --evidence "Original task explicitly authorizes editing src/feature.js"
+```
+
+Run `authorize` once for each authorized file. The command records an auditable scope extension and preserves the original baseline; it does not require asking again for permission already supplied by the user. It permits regular-file content edits and content-equivalent staging/commits, while rejecting deletion, unsafe links, mode changes and divergent staged/worktree contents. Other pre-existing edits remain protected. Legacy snapshots without file-type evidence cannot acquire this authorization; do not recreate a baseline after edits to hide that gap. A new authorization invalidates an earlier independent review even when source bytes are unchanged.
+
+Review snapshots also record each changed path's committed version and Git-normalized working content, mode or deletion. A changed committed version cannot hide behind restored working files, including when a commit reverts a file to its base version. Normal equivalent staging and partial commits retain approval. Replacing a committed PR change that was recorded as different from the reviewed working version changes the digest and requires a fresh review. Older review artifacts without this publication evidence require a new review.
+
 Nested installations are supported. Use the same project directory for progress, scope and review commands, such as `--project apps/web` when invoking them from the Git root. Scope `--allow` paths and review report source paths are always relative to that Git root: `apps/web/src/feature.js` or `packages/shared/contract.js`. Task state stays under `apps/web/.agent-core/state/`, checks run in `apps/web`, and scope/review evidence covers changes throughout the repository, including shared packages and unrelated user edits.
 
-Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, altered pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work. A scope snapshot additionally makes the existing `DONE` command fail on scope violations.
+Check scope after each coherent change/fix and before handoff, commit, push or PR creation. Unapproved paths, unauthorized alterations to pre-existing changes or missing Git evidence block progress; the guard never fixes them destructively. Independent review still inspects **hunks within allowed files** for accidental unrelated work. A scope snapshot additionally makes the existing `DONE` command fail on scope violations.
 
 After implementation, execute the required checks and link the acceptance evidence:
 
@@ -754,7 +767,7 @@ findings? ── yes -> responsible developer fixes -> tests -> independent re-r
 final/release validation
 ```
 
-The Security Reviewer never fixes its own findings. `--scan-only` remains informational/`INCONCLUSIVE` and cannot grant approval.
+The Security Reviewer never fixes its own findings. Only a completed review with evidence for the changed files, required security surfaces and previous findings may proceed to scoring or approval. An empty findings list is not completion evidence. A sandbox failure, missing source access, partial coverage or invalid provider result produces `INCONCLUSIVE`, no numeric rating and a failing exit code. Previous finding states remain unchanged; resolution requires an explicit recheck with evidence. Current execution/access failures are recorded in `review_failures`; quotations in source/test evidence do not indicate that the current review failed. Git filenames retain their exact Unicode and whitespace characters for coverage matching. `--scan-only` also remains informational/`INCONCLUSIVE` and cannot grant approval. Optional scanner unavailability is reported separately from incomplete source review.
 
 Terminal command:
 
