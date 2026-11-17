@@ -19,6 +19,11 @@ const write = (file, content) => {
   fs.mkdirSync(path.dirname(path.join(project, file)), { recursive: true });
   fs.writeFileSync(path.join(project, file), content);
 };
+const publication = (report, file) => {
+  const entry = report.publication_state.find(value => value.file === file);
+  assert(entry, `Missing publication evidence for ${file}`);
+  return entry;
+};
 
 try {
   assert.match(rolesMarkdown("Codex"), /pre-pr-review\.md/);
@@ -49,6 +54,12 @@ try {
   assert.equal(clean.verdict, "PASS");
   assert.match(clean.change_digest, /^[a-f0-9]{64}$/, "Review evidence must be bound to the exact Git change set");
   assert.equal(clean.untouched_preexisting_count, 1);
+  assert.equal(clean.publication_head, git("rev-parse", "HEAD").stdout.trim());
+  const publicationFiles = clean.publication_state.map(entry => entry.file);
+  assert.deepEqual(publicationFiles, [...new Set(publicationFiles)].sort());
+  assert.equal(publication(clean, "src/feature.js").head_entry, `100644 ${git("rev-parse", "HEAD:src/feature.js").stdout.trim()} 0`);
+  assert.equal(publication(clean, "src/feature.js").working_entry, `100644 ${git("hash-object", "--path=src/feature.js", "src/feature.js").stdout.trim()} 0`);
+  assert.equal(publication(clean, "private-notes.txt").head_entry, null);
 
   // A staged-only change must still invalidate review, even if its worktree
   // contents have been restored to the previously reviewed version.
@@ -281,16 +292,42 @@ try {
   // Equivalent staging/commits preserve readiness, including Git's CRLF
   // normalization, but a hidden staged version cannot be certified.
   authorizedGit("config", "core.autocrlf", "true");
-  authorizedWrite(eight[0], "// normalized content\r\n");
-  const beforeAdd = authorizedRun("check").change_digest;
+  authorizedWrite(eight[0], "export const enabled = true;\r\n");
+  const beforeAddReport = authorizedRun("check");
+  const beforeAdd = beforeAddReport.change_digest;
+  const untrackedPublication = publication(beforeAddReport, eight[0]);
+  assert.equal(untrackedPublication.head_entry, null);
+  assert.equal(untrackedPublication.working_entry,
+    `100644 ${authorizedGit("hash-object", `--path=${eight[0]}`, "--", eight[0])} 0`);
   authorizedGit("add", "--", ...eight);
-  assert.equal(authorizedRun("check").change_digest, beforeAdd);
+  const afterAddReport = authorizedRun("check");
+  assert.equal(afterAddReport.change_digest, beforeAdd);
+  assert.deepEqual(publication(afterAddReport, eight[0]), untrackedPublication);
   authorizedWrite(eight[0], "// differing worktree\r\n");
   assert.deepEqual(authorizedRun("check", [], 1).protected_preexisting_changes, [eight[0]]);
-  authorizedWrite(eight[0], "// normalized content\r\n");
+  authorizedWrite(eight[0], "export const enabled = true;\r\n");
   authorizedGit("commit", "--only", "-m", "authorized fixes", "--", ...eight);
-  assert.equal(authorizedRun("check").change_digest, beforeAdd);
+  const afterCommitReport = authorizedRun("check");
+  assert.equal(afterCommitReport.change_digest, beforeAdd);
+  assert.equal(afterCommitReport.publication_head, authorizedGit("rev-parse", "HEAD"));
+  assert.equal(publication(afterCommitReport, eight[0]).head_entry, untrackedPublication.working_entry);
+  assert.equal(publication(afterCommitReport, eight[0]).working_entry, untrackedPublication.working_entry);
   assert.equal(authorizedGit("rev-parse", ":tracked.js"), protectedIndex);
+  // Restoring reviewed bytes only in the worktree must not hide a different
+  // committed version that a push would publish (index == HEAD, unstaged edit).
+  authorizedWrite(eight[0], "export const enabled = 'WRONG COMMITTED CONTENT';\r\n");
+  authorizedGit("commit", "--only", "-m", "wrong committed version", "--", eight[0]);
+  authorizedWrite(eight[0], "export const enabled = true;\r\n");
+  assert.equal(authorizedGit("diff", "--cached", "--name-only", "HEAD", "--", eight[0]), "");
+  assert.match(authorizedGit("show", `HEAD:${eight[0]}`), /WRONG COMMITTED CONTENT/);
+  const committedShadow = authorizedRun("check");
+  assert.equal(committedShadow.verdict, "PASS", "The authorized working edit remains in scope");
+  assert.notEqual(committedShadow.change_digest, beforeAdd, "A divergent committed version invalidates the earlier review");
+  assert.notEqual(publication(committedShadow, eight[0]).head_entry, untrackedPublication.working_entry);
+  assert.equal(publication(committedShadow, eight[0]).working_entry, untrackedPublication.working_entry);
+  authorizedGit("commit", "--only", "-m", "commit the reviewed version", "--", eight[0]);
+  assert.equal(authorizedRun("check").change_digest, beforeAdd,
+    "Equivalent final content reuses review regardless of intervening commit IDs");
   authorizedWrite(eight[0], "// authorized follow-up edit\r\n");
   assert.equal(authorizedRun("check").verdict, "PASS");
   authorizedGit("rm", "--cached", "--", eight[1]);
@@ -312,6 +349,104 @@ try {
     ["--project", authorizedProject, "--task-id", "AUTHORIZATION.LEGACY"]);
   assert.match(missingTypeEvidence.error, /lacks required baseline type evidence/);
   assert.equal(fs.readFileSync(legacyAuthorizationPath, "utf8"), legacyAuthorizationBytes);
+
+  // Committed mode/type/deletion changes are also publishable variants, even
+  // when a tracked task file's reviewed working bytes have been restored.
+  const shadowProject = path.join(project, "committed-variants");
+  fs.mkdirSync(shadowProject);
+  const shadowGit = (...values) => {
+    const result = spawnSync("git", values, { cwd: shadowProject, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const shadowWrite = (file, value) => fs.writeFileSync(path.join(shadowProject, file), value);
+  const shadowScope = (command, extra = []) => {
+    const result = spawnSync(process.execPath, [script, command, "--project", shadowProject,
+      "--task-id", "COMMITTED-VARIANTS", ...extra], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  shadowGit("init", "-b", "main");
+  shadowGit("config", "user.name", "Committed variants regression");
+  shadowGit("config", "user.email", "committed-variants@example.invalid");
+  shadowWrite("feature.js", "export const enabled = false;\n");
+  shadowWrite("removed.js", "export const removed = false;\n");
+  shadowGit("add", "."); shadowGit("commit", "-m", "baseline");
+  shadowGit("switch", "-c", "feat/committed-variants");
+  shadowScope("start", ["--base", "main", "--intent", "Edit scoped files",
+    "--allow", "feature.js", "--allow", "removed.js", "--allow", "link.js"]);
+  shadowWrite("feature.js", "export const enabled = true;\n");
+  const featureReview = shadowScope("check").change_digest;
+  shadowGit("add", "feature.js"); shadowGit("commit", "-m", "reviewed feature");
+  const reviewedPublished = shadowScope("check");
+  assert.equal(reviewedPublished.change_digest, featureReview);
+  const reviewedPublication = publication(reviewedPublished, "feature.js");
+  assert.equal(reviewedPublication.head_entry, reviewedPublication.working_entry);
+  // A revert to the merge-base version disappears from the committed PR diff.
+  // The directional review gate needs explicit publication entries to reject
+  // this transition even when the effective-worktree digest is unchanged.
+  shadowWrite("feature.js", "export const enabled = false;\n");
+  shadowGit("commit", "--only", "-m", "revert published feature to base", "--", "feature.js");
+  shadowWrite("feature.js", "export const enabled = true;\n");
+  const revertedPublication = shadowScope("check");
+  assert.equal(revertedPublication.change_digest, reviewedPublished.change_digest);
+  assert.notEqual(publication(revertedPublication, "feature.js").head_entry, reviewedPublication.head_entry);
+  assert.equal(publication(revertedPublication, "feature.js").working_entry, reviewedPublication.working_entry);
+  shadowGit("commit", "--only", "-m", "restore the reviewed published feature", "--", "feature.js");
+  assert.deepEqual(publication(shadowScope("check"), "feature.js"), reviewedPublication);
+  if (process.platform !== "win32") {
+    shadowGit("update-index", "--chmod=+x", "feature.js");
+    shadowGit("commit", "-m", "different committed executable mode");
+    fs.chmodSync(path.join(shadowProject, "feature.js"), 0o644);
+    const modeShadow = shadowScope("check");
+    assert.notEqual(modeShadow.change_digest, featureReview,
+      "Restoring worktree mode does not hide a committed mode change");
+    assert.match(publication(modeShadow, "feature.js").head_entry, /^100755 /);
+    assert.match(publication(modeShadow, "feature.js").working_entry, /^100644 /);
+    shadowGit("update-index", "--chmod=-x", "feature.js");
+    shadowGit("commit", "-m", "restore reviewed mode");
+    assert.equal(shadowScope("check").change_digest, featureReview);
+
+    fs.unlinkSync(path.join(shadowProject, "feature.js"));
+    fs.symlinkSync("wrong-published-target.js", path.join(shadowProject, "feature.js"));
+    shadowGit("add", "feature.js"); shadowGit("commit", "-m", "different committed file type");
+    fs.unlinkSync(path.join(shadowProject, "feature.js"));
+    shadowWrite("feature.js", "export const enabled = true;\n");
+    const typeShadow = shadowScope("check");
+    assert.notEqual(typeShadow.change_digest, featureReview,
+      "A restored regular worktree file does not hide a committed symlink");
+    assert.match(publication(typeShadow, "feature.js").head_entry, /^120000 /);
+    assert.match(publication(typeShadow, "feature.js").working_entry, /^100644 /);
+    shadowGit("add", "feature.js"); shadowGit("commit", "-m", "restore reviewed regular file");
+    assert.equal(shadowScope("check").change_digest, featureReview);
+
+    fs.symlinkSync("feature.js", path.join(shadowProject, "link.js"));
+    const linkReport = shadowScope("check");
+    const linkReview = linkReport.change_digest;
+    assert.equal(publication(linkReport, "link.js").head_entry, null);
+    assert.match(publication(linkReport, "link.js").working_entry, /^120000 /);
+    shadowGit("add", "link.js"); shadowGit("commit", "-m", "equivalent reviewed symlink");
+    const committedLink = shadowScope("check");
+    assert.equal(committedLink.change_digest, linkReview,
+      "Committing an equivalent symlink must preserve the review identity");
+    assert.equal(publication(committedLink, "link.js").head_entry, publication(linkReport, "link.js").working_entry);
+  }
+  shadowWrite("removed.js", "export const removed = true;\n");
+  const deletionReview = shadowScope("check").change_digest;
+  shadowGit("rm", "--force", "removed.js");
+  const missingWorktree = publication(shadowScope("check"), "removed.js");
+  assert.match(missingWorktree.head_entry, /^100644 /);
+  assert.equal(missingWorktree.working_entry, null);
+  shadowGit("commit", "-m", "different committed deletion");
+  assert.deepEqual(publication(shadowScope("check"), "removed.js"), { file: "removed.js", head_entry: null, working_entry: null });
+  shadowWrite("removed.js", "export const removed = true;\n");
+  const deletionShadow = shadowScope("check");
+  assert.notEqual(deletionShadow.change_digest, deletionReview,
+    "Recreating reviewed worktree bytes must not hide a committed PR deletion");
+  assert.equal(publication(deletionShadow, "removed.js").head_entry, null);
+  assert.match(publication(deletionShadow, "removed.js").working_entry, /^100644 /);
+  shadowGit("add", "removed.js"); shadowGit("commit", "-m", "restore reviewed file");
+  assert.equal(shadowScope("check").change_digest, deletionReview);
 
   // A tracked bookkeeping file remains PR content after its deletion is committed.
   // HEAD/index alone cannot decide whether a state path is generated.

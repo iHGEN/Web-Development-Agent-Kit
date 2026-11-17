@@ -75,6 +75,7 @@ const payload = fixed
     };
 
 payload.review_status = "COMPLETE";
+payload.review_failures = [];
 payload.files_reviewed = [...new Set([...context.changed_files, ...(previous?.findings || []).map((finding) => finding.file), "src/admin.js"].filter(Boolean))].map((file) => {
   fs.readFileSync(path.resolve(project, file));
   return { file, evidence: `Inspected source input ${file} and the affected authorization boundary.` };
@@ -95,12 +96,37 @@ if (mode === "failure-handling-evidence") {
   payload.files_reviewed[0].evidence = "Inspected the SetNamedSecurityInfoW error 5 regression and verified the source error handling.";
   payload.coverage[0].notes = "Verified sandbox failure handling now preserves findings.";
 }
+if (mode === "quoted-failure-evidence") {
+  const evidence = 'Verified regression fixture rejects the diagnostic "Independent review was impossible." and preserves prior findings.';
+  payload.summary = evidence;
+  payload.limitations = [evidence];
+  for (const input of payload.files_reviewed) input.evidence = evidence;
+  for (const area of payload.coverage) area.notes = evidence;
+  for (const finding of payload.prior_findings) finding.evidence = evidence;
+}
 if (mode === "sandbox-blocked") {
-  Object.assign(payload, { review_status: "BLOCKED", summary: "Independent review was impossible.", limitations: [sandboxError], files_reviewed: [], coverage: [], prior_findings: [], findings: [] });
+  Object.assign(payload, { review_status: "BLOCKED", review_failures: [{ stage: "SOURCE_ACCESS", message: sandboxError }], summary: "Independent review was impossible.", limitations: [sandboxError], files_reviewed: [], coverage: [], prior_findings: [], findings: [] });
 }
 if (mode === "contradictory-complete") {
   Object.assign(payload, { summary: "Independent review was impossible.", limitations: [sandboxError], findings: [] });
   payload.prior_findings = payload.prior_findings.map((finding) => ({ ...finding, status: "RESOLVED" }));
+}
+if (mode === "structured-source-failure" || mode === "current-access-failure") {
+  payload.findings = [];
+  payload.prior_findings = payload.prior_findings.map((finding) => ({ ...finding, status: "RESOLVED" }));
+  if (mode === "structured-source-failure") {
+    payload.summary = "No findings were returned.";
+    payload.review_failures = [{ stage: "SOURCE_ACCESS", message: "Required source inputs were inaccessible in this reviewer session." }];
+  } else {
+    payload.summary = "I could not read any repository files.";
+  }
+}
+if (mode === "missing-failures") delete payload.review_failures;
+if (mode === "malformed-failures") payload.review_failures = [null];
+if (mode === "c-quoted-unicode-path") {
+  const input = payload.files_reviewed.find((item) => item.file === "src/café.js");
+  if (!input) { console.error("Unicode source fixture was not collected"); process.exit(10); }
+  input.file = '"src/caf/303/251.js"';
 }
 if (mode === "partial") payload.review_status = "PARTIAL";
 if (mode === "missing-status") delete payload.review_status;

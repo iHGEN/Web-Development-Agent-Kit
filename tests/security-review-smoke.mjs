@@ -85,6 +85,8 @@ const project = path.join(tempRoot, "project");
 fs.mkdirSync(path.join(project, "src"), { recursive: true });
 fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ name: "security-review-smoke", version: "1.0.0" }, null, 2));
 fs.writeFileSync(path.join(project, "src", "admin.js"), "export function canDelete(req) { return req.user.role === \"admin\"; }\n");
+const unstagedPathFixtures = ["src/unstaged café.js", "src/ leading unstaged name.js"];
+for (const file of [...unstagedPathFixtures, "src/rename-before.js"]) fs.writeFileSync(path.join(project, file), "export const original = true;\n");
 
 let init = spawnSync("git", ["init", "-b", "main"], { cwd: project, encoding: "utf8", windowsHide: true });
 if (init.error || init.status !== 0) {
@@ -201,6 +203,18 @@ const recovered = json(path.join(root, "latest.json"));
 assert(recovered.decision === "APPROVE" && recovered.review_status === "COMPLETE" && recovered.rating === 5, "completed review discussing sandbox failure-handling code was falsely blocked");
 assert(recovered.files_reviewed.some((input) => input.evidence.includes("SetNamedSecurityInfoW")), "failure-handling evidence fixture was not exercised");
 
+// A quoted diagnostic describes reviewed source/tests; it is not a current
+// execution failure, even when the same wording appears in multiple fields.
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: { ...baseEnv, WEB_KIT_TEST_SECURITY_MODE: "quoted-failure-evidence" } });
+const quoted = json(path.join(root, "latest.json"));
+const quotedEvidence = 'Verified regression fixture rejects the diagnostic "Independent review was impossible." and preserves prior findings.';
+assert(quoted.decision === "APPROVE" && quoted.review_status === "COMPLETE" && quoted.rating === 5, "quoted regression evidence was mistaken for a current reviewer failure");
+assert(quoted.review_failures.length === 0 && quoted.completion_issues.length === 0, "completed quoted-evidence review contains false failures");
+assert(quoted.files_reviewed.every((input) => input.evidence === quotedEvidence), "source evidence quote fixture was not exercised");
+assert(quoted.coverage.filter((area) => !area.area.startsWith("Scanner:")).every((area) => area.notes === quotedEvidence), "coverage evidence quote fixture was not exercised");
+assert(quoted.prior_findings.length > 0 && quoted.prior_findings.every((finding) => finding.evidence === quotedEvidence), "prior-finding evidence quote fixture was not exercised");
+assert(quoted.summary === quotedEvidence && quoted.limitations.includes(quotedEvidence), "analytical summary/limitation quotes were not preserved");
+
 // Provider envelope fields are untrusted JSON, not strings to coerce. Each
 // malformed envelope must replace a prior approval with a persisted failure.
 for (const provider of ["claude", "gemini"]) for (const field of ["subtype", "result", "response"]) {
@@ -307,13 +321,15 @@ for (const provider of ["codex", "claude", "gemini"]) {
   const runtimeError = assertIncompleteRun("runtime-error", activeRoot, provider).review;
   assert(runtimeError.review_status === "ERROR", `${provider}: runtime error with exit 0 was accepted as successful`);
 }
-for (const mode of ["contradictory-complete", "partial", "missing-status", "invalid-status", "missing-source", "partial-coverage", "limited-coverage", "malformed-coverage", "malformed-findings", "omitted-recheck", "unsupported-resolution", "exit-error", "runtime-tool-error", "stderr-sandbox-error", "runtime-malformed-error"]) {
+for (const mode of ["contradictory-complete", "partial", "missing-status", "invalid-status", "missing-source", "partial-coverage", "limited-coverage", "malformed-coverage", "malformed-findings", "omitted-recheck", "unsupported-resolution", "exit-error", "runtime-tool-error", "stderr-sandbox-error", "runtime-malformed-error", "structured-source-failure", "current-access-failure", "missing-failures", "malformed-failures"]) {
   const { review } = assertIncompleteRun(mode, activeRoot);
   if (mode === "contradictory-complete") assert(review.completion_issues.some((issue) => issue.includes("blocked source access")), "contradictory COMPLETE report was not identified");
   if (mode === "missing-source") assert(review.unverified_findings.length === 1, "partial review lost useful reported findings");
   if (mode === "omitted-recheck") assert(review.completion_issues.some((issue) => issue.includes("Prior finding was not rechecked")), "omitted prior finding lacked a recheck diagnostic");
   if (mode === "stderr-sandbox-error") assert(review.review_status === "ERROR" && review.summary.includes("SetNamedSecurityInfoW"), "native sandbox failure on stderr was ignored after exit 0");
   if (mode === "runtime-malformed-error") assert(review.review_status === "ERROR" && review.summary.includes("SetNamedSecurityInfoW"), "malformed native sandbox diagnostic escaped failure persistence");
+  if (mode === "structured-source-failure") assert(review.review_failures[0]?.stage === "SOURCE_ACCESS" && review.completion_issues.some((issue) => issue.includes("Current review failure (SOURCE_ACCESS)")), "structured current access failure was ignored despite COMPLETE/empty findings");
+  if (mode === "current-access-failure") assert(review.completion_issues.some((issue) => issue.includes("blocked source access")), "direct current inability was accepted as a completed review");
 }
 assert(json(path.join(activeRoot, "latest.json")).findings[0].status === "OPEN", "failed source reviews silently resolved the original finding");
 
@@ -380,5 +396,48 @@ run("git", ["add", "."], { cwd: project });
 const stagedAfterSecurityReview = run("git", ["diff", "--cached", "--name-only"], { cwd: project }).stdout.split(/\r?\n/).filter(Boolean);
 assert(!stagedAfterSecurityReview.some((file) => file.replace(/\\/g, "/").startsWith(".agent-core/security-reviews/")), "normal git add . staged generated security review state");
 assert(!treeContains(untrackedRoot, secretSentinel), "removing the original credential left a generated secret residue in the worktree");
+
+// Exact Git filenames must survive all four sources of changes. Force Git's
+// default C-quoting behavior so a line-based reader cannot accidentally pass.
+git(project, ["commit", "-m", "finish untracked evidence fixture"]);
+git(project, ["checkout", "main"]);
+git(project, ["checkout", "-b", "exact-path-evidence"]);
+git(project, ["config", "core.quotePath", "true"]);
+const committedPaths = ["src/café.js", "src/committed space.js"];
+const stagedPaths = ["src/staged café.js", "src/staged 'quote'.js", " leading staged.js"];
+const untrackedPaths = ["src/untracked café.js", "src/untracked space.js", " leading untracked.js"];
+// Windows prohibits double quotes, control characters, literal backslashes,
+// and trailing spaces in these path components; keep its fixture names valid.
+if (process.platform !== "win32") {
+  committedPaths.push('src/committed"quote.js');
+  stagedPaths.push("src/staged\ttab.js");
+  untrackedPaths.push("src/untracked\nline.js", "src/untracked\rreturn.js", "src/untracked\\backslash.js", "src/trailing-name.js ");
+}
+for (const file of committedPaths) fs.writeFileSync(path.join(project, file), "export const committed = true;\n");
+git(project, ["add", "--", ...committedPaths]);
+git(project, ["commit", "-m", "commit exact filename fixtures"]);
+for (const file of stagedPaths) fs.writeFileSync(path.join(project, file), "export const staged = true;\n");
+git(project, ["add", "--", ...stagedPaths]);
+const renamedPath = "src/renamed café.js";
+git(project, ["mv", "--", "src/rename-before.js", renamedPath]);
+for (const file of unstagedPathFixtures) fs.writeFileSync(path.join(project, file), "export const unstaged = true;\n");
+for (const file of untrackedPaths) fs.writeFileSync(path.join(project, file), "export const untracked = true;\n");
+run(process.execPath, [engine, "--project", project, "--base", "main", "--provider", "codex", "--no-scanners"], { cwd: project, env: baseEnv });
+const pathRoot = reviewRoot(project, "exact-path-evidence");
+const pathReview = json(path.join(pathRoot, "latest.json"));
+const expectedPaths = [...committedPaths, ...stagedPaths, ...unstagedPathFixtures, ...untrackedPaths, renamedPath].sort();
+assert(JSON.stringify(pathReview.changed_files) === JSON.stringify(expectedPaths), "Git collection changed the exact names or omitted a source of changes");
+assert(pathReview.decision === "APPROVE" && pathReview.review_status === "COMPLETE", "honest source evidence for exact Git paths was rejected");
+for (const file of expectedPaths) assert(pathReview.files_reviewed.some((input) => input.file === file), `source evidence lost filename ${JSON.stringify(file)}`);
+const pathContext = json(path.join(pathRoot, "runtime", "review-context-001.json"));
+for (const file of [...stagedPaths, renamedPath]) assert(pathContext.working_tree_status.includes(`A  ${file}`), `staged status corrupted filename ${JSON.stringify(file)}`);
+for (const file of unstagedPathFixtures) assert(pathContext.working_tree_status.includes(` M ${file}`), `unstaged status corrupted filename ${JSON.stringify(file)}`);
+for (const file of untrackedPaths) assert(pathContext.working_tree_status.includes(`?? ${file}`), `untracked status corrupted filename ${JSON.stringify(file)}`);
+assert(pathContext.working_tree_status.includes("D  src/rename-before.js"), "rename source was lost while parsing NUL status records");
+const pathMetadata = json(path.resolve(project, pathContext.untracked_evidence_metadata_file));
+assert(JSON.stringify(pathMetadata.files.map((item) => item.path).sort()) === JSON.stringify([...untrackedPaths].sort()), "untracked evidence metadata did not retain exact filenames");
+assert(pathMetadata.files.every((item) => item.status === "CAPTURED_TEXT"), "exact untracked paths were not readable for source evidence");
+const fabricatedPath = assertIncompleteRun("c-quoted-unicode-path", pathRoot).review;
+assert(fabricatedPath.completion_issues.includes("Changed file was not reviewed: src/café.js"), "fabricated C-quoted/slash-normalized path satisfied the real Unicode file requirement");
 
 console.log(`Security Review smoke: PASS (${process.platform})`);

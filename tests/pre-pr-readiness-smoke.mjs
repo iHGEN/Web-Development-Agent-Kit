@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sourceDigest, evaluateQuality } from "../pack/runtime/quality-pipeline.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "web-kit-pre-pr-"));
@@ -125,16 +126,41 @@ try {
   git("commit", "-m", "final reviewed feature");
   assert.equal(scope("check", "--task-id", task).change_digest, finalReviewDigest,
     "Committing unchanged reviewed content must preserve PR readiness");
+  assert.equal(work("report", "--task-id", task).engineering_quality.reviewed_diff_current, true,
+    "Publishing unchanged reviewed content must preserve validated review freshness");
+  // Capture a review of the published feature, so a later commit reverting its
+  // HEAD content cannot hide behind identical restored working-tree bytes.
+  assert.equal(review(task).verdict, "READY TO OPEN PR");
   work("update", "--task-id", task, "--status", "DONE", "--final-validation", "PASS");
   assert.equal(job(task).status, "DONE");
   const report = work("report", "--task-id", task);
   assert.equal(report.engineering_quality.scope_guard, "PASS");
   assert.equal(report.engineering_quality.reviewed_diff_current, true);
+  assert.equal(report.engineering_quality.current_source_freshness, "CURRENT");
+  const completed = job(task).completion;
+  const reviewedDocs = fs.readFileSync(path.join(project, "docs/feature.md"), "utf8");
   write("docs/feature.md", "# Changed after completion\n");
   const stale = work("report", "--task-id", task);
   assert.equal(stale.engineering_quality.current_source_freshness, "STALE",
     "Post-completion doc edits must not masquerade as current reviewed source");
   assert.equal(stale.engineering_quality.reviewed_diff_current, false);
+
+  write("docs/feature.md", reviewedDocs);
+  assert.equal(work("report", "--task-id", task).engineering_quality.reviewed_diff_current, true);
+  write("src/feature.js", git("show", "main:src/feature.js").stdout);
+  git("add", "src/feature.js");
+  git("commit", "-m", "revert published feature to baseline");
+  write("src/feature.js", "export const enabled = true;\n");
+  assert.equal(sourceDigest(project), completed.source_digest, "fixture must restore identical reviewed source bytes");
+  assert.equal(scope("check", "--task-id", task).change_digest, completed.change_digest,
+    "fixture must preserve the reviewed change digest despite publication drift");
+  const evaluation = evaluateQuality(job(task), project);
+  assert.equal(evaluation.review_artifact_current, false, "validated artifact freshness ignored changed published content");
+  const unpublished = work("report", "--task-id", task);
+  assert.equal(unpublished.engineering_quality.reviewed_diff_current, false,
+    "restored working bytes must not hide an unreviewed published state");
+  assert.equal(unpublished.engineering_quality.current_source_freshness, "STALE",
+    "DONE freshness must use the current validated review, not matching digests alone");
   console.log("Pre-PR readiness smoke: PASS");
 } finally {
   // The entire fixture is created by this test; no user project is removed.

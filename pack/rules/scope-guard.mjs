@@ -23,8 +23,8 @@ function parseArgs(argv) {
   return { command, options };
 }
 
-function git(project, args) {
-  const result = spawnSync("git", args, { cwd: project, encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
+function git(project, args, input) {
+  const result = spawnSync("git", args, { cwd: project, input, encoding: "buffer", maxBuffer: 50 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
     throw new Error(`git ${args.slice(0, 3).join(" ")} failed: ${result.error?.message || result.stderr?.toString("utf8").trim()}`);
   }
@@ -48,11 +48,11 @@ function fileDigest(file) {
   } finally { fs.closeSync(fd); }
   return hash.digest("hex");
 }
-function trackedStateFiles(project, comparisonBase = null, statePrefix = ".agent-core/state/") {
+function trackedStateFiles(project, comparisonBase = null, statePrefix = ".agent-core/state/", head = "HEAD") {
   // Generated state is exempt only while untracked. A tracked state file is real
   // repository content and must not be hidden from the scope fence.
   return new Set([
-    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", statePrefix]),
+    ...gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", head, "--", statePrefix]),
     ...(comparisonBase ? gitPaths(project, ["ls-tree", "-r", "--name-only", "-z", comparisonBase, "--", statePrefix]) : []),
     ...gitPaths(project, ["ls-files", "--cached", "-z", "--", statePrefix]),
   ]);
@@ -208,30 +208,70 @@ function snapshotExisting(project, statePrefix) {
   }));
 }
 
-function changePaths(project, base, statePrefix) {
-  const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
-  const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, "HEAD"]);
-  const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]);
+function changePaths(project, base, statePrefix, head = "HEAD") {
+  const mergeBase = gitText(project, ["merge-base", base, head]);
+  const committed = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z", mergeBase, head]);
+  const staged = gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", head]);
   const unstaged = gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]);
   // A committed deletion is still a real PR change even after the path vanished
   // from HEAD and the index. Preserve paths tracked at the comparison baseline.
-  const tracked = trackedStateFiles(project, mergeBase, statePrefix);
+  const tracked = trackedStateFiles(project, mergeBase, statePrefix, head);
   const untracked = gitPaths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
     .filter(file => !isGeneratedState(file, tracked, statePrefix));
   return [...new Set([...committed, ...staged, ...unstaged, ...untracked])]
     .filter(file => !isGeneratedState(file, tracked, statePrefix)).sort();
 }
 
-function changeDigest(project, base, statePrefix) {
-  const mergeBase = gitText(project, ["merge-base", base, "HEAD"]);
+function normalizedWorkingEntry(project, file, indexEntries) {
+  const fullPath = path.join(project, file);
+  const index = indexEntries.get(file);
+  let info;
+  try { info = fs.lstatSync(fullPath); }
+  catch (error) {
+    if (error.code === "ENOENT") return index?.startsWith("160000 ") ? index : null;
+    throw error;
+  }
+  if (info.isSymbolicLink()) {
+    const object = git(project, ["hash-object", "--stdin"], fs.readlinkSync(fullPath, { encoding: "buffer" })).toString("utf8").trim();
+    return `120000 ${object} 0`;
+  }
+  if (info.isFile()) {
+    const mode = process.platform === "win32" && index
+      ? index.slice(0, 6) : info.mode & 0o111 ? "100755" : "100644";
+    return `${mode} ${gitText(project, ["hash-object", `--path=${file}`, "--", file])} 0`;
+  }
+  if (info.isDirectory() && index?.startsWith("160000 ")) {
+    if (!sameDirectory(gitText(fullPath, ["rev-parse", "--show-toplevel"]), fullPath)) {
+      throw new Error(`Submodule is not checked out: ${file}`);
+    }
+    return `160000 ${gitText(fullPath, ["rev-parse", "--verify", "HEAD"])} 0`;
+  }
+  throw new Error(`Cannot safely fingerprint changed non-file path: ${file}`);
+}
+
+function publicationState(project, paths, head, indexEntries) {
+  const entries = new Map();
+  for (const record of gitPaths(project, ["ls-tree", "-r", "-z", head])) {
+    const split = record.indexOf("\t");
+    const metadata = /^(100644|100755|120000|160000) (?:blob|commit) ([a-f0-9]{40,64})$/.exec(record.slice(0, split));
+    if (split < 0 || !metadata) throw new Error("Cannot safely parse publication tree entries");
+    entries.set(record.slice(split + 1), `${metadata[1]} ${metadata[2]} 0`);
+  }
+  return paths.map(file => ({
+    file,
+    head_entry: entries.get(file) ?? null,
+    working_entry: normalizedWorkingEntry(project, file, indexEntries),
+  }));
+}
+
+function changeDigest(project, base, paths, head, indexEntries, workingEntries) {
+  const mergeBase = gitText(project, ["merge-base", base, head]);
   const hash = crypto.createHash("sha256");
   hash.update("web-kit-pr-diff-v2\0");
   hash.update(mergeBase);
   // A content-equivalent `git add` or `git commit` must NOT invalidate a prior
   // review. Hash the effective working tree once, irrespective of whether a
   // changed file is committed, staged, or untracked.
-  const paths = changePaths(project, base, statePrefix);
-  const indexEntries = indexSnapshot(project);
   for (const file of paths) {
     hash.update(file);
     hash.update("\0");
@@ -241,7 +281,7 @@ function changeDigest(project, base, statePrefix) {
   // Keep staged-only code visible when the index and working tree disagree.
   // Do not include the index when it matches the worktree: that would cause a
   // redundant review for a normal add/commit with no content change.
-  const staged = new Set(gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"]));
+  const staged = new Set(gitPaths(project, ["diff", "--cached", "--name-only", "--no-renames", "-z", head]));
   const unstaged = new Set(gitPaths(project, ["diff", "--name-only", "--no-renames", "-z"]));
   const divergent = [...staged].filter(file => unstaged.has(file)).sort();
   if (divergent.length) {
@@ -252,6 +292,27 @@ function changeDigest(project, base, statePrefix) {
       hash.update(indexEntries.get(file) || "deleted-in-index");
       hash.update("\0");
     }
+  }
+  // A push publishes HEAD, even when an authorized edit restored different
+  // reviewed content only in the worktree. Bind those committed variants too.
+  // Include only PR changes that differ from Git-normalized working content:
+  // equivalent add/commit (including CRLF) must preserve the review identity.
+  const relevant = new Set(paths);
+  const committed = gitPaths(project, ["diff", "--raw", "--no-abbrev", "--no-ext-diff", "--no-renames",
+    "--ignore-submodules=none", "-z", mergeBase, head]);
+  for (let i = 0; i < committed.length; i += 2) {
+    const metadata = /^:\d{6} (\d{6}) [a-f0-9]{40,64} ([a-f0-9]{40,64}) [A-Z]$/.exec(committed[i]);
+    const file = committed[i + 1];
+    if (!metadata || !file) throw new Error("Cannot safely parse committed Git changes");
+    if (!relevant.has(file)) continue;
+    const entry = metadata[1] === "000000" ? null : `${metadata[1]} ${metadata[2]} 0`;
+    if (!workingEntries.has(file)) throw new Error(`Missing publication evidence for ${file}`);
+    if (entry === workingEntries.get(file)) continue;
+    hash.update("committed-version\0");
+    hash.update(file);
+    hash.update("\0");
+    hash.update(entry || "deleted-in-head");
+    hash.update("\0");
   }
   return hash.digest("hex");
 }
@@ -303,7 +364,8 @@ function writeManifest(file, value) {
 
 function check(project, manifest, statePrefix) {
   if (currentBranch(project) !== manifest.branch) throw new Error(`Task is locked to branch ${manifest.branch}`);
-  const changed = changePaths(project, manifest.base, statePrefix);
+  const head = gitText(project, ["rev-parse", "--verify", "HEAD"]);
+  const changed = changePaths(project, manifest.base, statePrefix, head);
   const status = statusEntries(project, statePrefix);
   const indexEntries = indexSnapshot(project);
   const preexistingChanged = [];
@@ -341,12 +403,18 @@ function check(project, manifest, statePrefix) {
   if (protectedChanges.length) errors.push("Protected pre-existing user changes were altered; content-edit authorization does not permit divergent staged content, deletion, mode/type changes or linked-file writes.");
   if (unexpected.length) errors.push("Task changed files outside its declared scope: stop and justify/approve before proceeding.");
   if (!taskChanges.length) errors.push("No task changes found for a pre-PR review.");
+  const publication = publicationState(project, changed, head, indexEntries);
+  const workingEntries = new Map(publication.map(entry => [entry.file, entry.working_entry]));
+  const change = changeDigest(project, manifest.base, changed, head, indexEntries, workingEntries);
+  if (gitText(project, ["rev-parse", "--verify", "HEAD"]) !== head) throw new Error("HEAD changed while collecting scope publication evidence");
   return {
     verdict: errors.length ? "FAIL" : "PASS",
     task_id: manifest.task_id,
     branch: manifest.branch,
     base: manifest.base,
-    change_digest: changeDigest(project, manifest.base, statePrefix),
+    change_digest: change,
+    publication_head: head,
+    publication_state: publication,
     intended_changes: taskChanges.filter(file => allowed.has(file)),
     unexpected_paths: unexpected,
     preexisting_changed: preexistingChanged,

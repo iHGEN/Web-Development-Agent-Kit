@@ -252,6 +252,7 @@ export function evaluateQuality(job, project) {
   const formal = quality.required;
   const contract = quality.requirements.length > 0;
   const prBound = job.pr_bound === true;
+  let reviewArtifactCurrent = prBound ? false : null;
   const scope = scopeState(project, job.task_id, prBound);
   if (formal && !specificationReady(job, project)) acceptanceReasons.push("Specification approval missing or stale.");
   if ((formal || prBound) && !contract) acceptanceReasons.push("No acceptance criteria registered.");
@@ -263,6 +264,7 @@ export function evaluateQuality(job, project) {
   if (!formal && !contract && scope.status === "NOT_REQUIRED") return {
     ok: true, reasons: [], requirements_ok: null, requirements_reasons: [],
     required: false, verified: 0, total: 0, scope_status: "NOT_REQUIRED", change_digest: null,
+    review_artifact_current: null,
   };
   let digest;
   if (formal || contract || prBound) {
@@ -320,8 +322,11 @@ export function evaluateQuality(job, project) {
         try {
           const snapshot = captureReviewSnapshot(project, job, sourceDigest);
           const result = validateReviewArtifact(project, review.report_path, job, snapshot, review.artifact_digest);
+          // Freshness is the validated artifact/snapshot relationship, independent
+          // of unrelated acceptance or check failures in the overall quality gate.
+          reviewArtifactCurrent = quality.review_attempt?.run_id === result.envelope.run_id && quality.review_attempt.status === "COMPLETE";
           if (result.verdict !== "READY TO OPEN PR") reasons.push(...result.reasons);
-          if (quality.review_attempt?.run_id !== result.envelope.run_id || quality.review_attempt.status !== "COMPLETE") reasons.push("Review attempt is incomplete or superseded.");
+          if (!reviewArtifactCurrent) reasons.push("Review attempt is incomplete or superseded.");
         } catch (error) { reasons.push(error.message); }
       }
     }
@@ -337,6 +342,7 @@ export function evaluateQuality(job, project) {
     source_digest: digest || null,
     scope_status: scope.status,
     change_digest: scope.change_digest || null,
+    review_artifact_current: reviewArtifactCurrent,
   };
 }
 export function assertQualityComplete(job, project) {
@@ -362,7 +368,8 @@ function report(job, project) {
   const completion = job.status === "DONE" ? job.completion : null;
   const currentFreshness = completion?.source_digest && evaluation.source_digest
     ? (completion.source_digest === evaluation.source_digest
-      && (!job.pr_bound || (completion.change_digest && completion.change_digest === evaluation.change_digest))
+      && (!job.pr_bound || (completion.change_digest && completion.change_digest === evaluation.change_digest
+        && evaluation.review_artifact_current === true))
       ? "CURRENT" : "STALE")
     : "UNKNOWN";
   const failureCount = Number(m.repeated_action_alerts || 0) + (job.anti_slop?.violation ? 1 : 0);
@@ -398,7 +405,8 @@ function report(job, project) {
       pr_bound: Boolean(job.pr_bound),
       reviewed_diff_current: job.pr_bound ? (quality.code_review.status === "PASS"
         && Boolean(evaluation.change_digest)
-        && quality.code_review.change_digest === evaluation.change_digest) : null,
+        && quality.code_review.change_digest === evaluation.change_digest
+        && evaluation.review_artifact_current === true) : null,
       executed_checks: checks.map((c) => ({ script: c.script, status: c.status, exit_code: c.exit_code, elapsed_ms: c.elapsed_ms, source_current: c.source_digest === evaluation.source_digest })),
       independent_review: quality.code_review.status,
       review_run: quality.review_attempt || null,

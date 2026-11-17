@@ -77,6 +77,8 @@ Run `authorize` once per exact authorized path, which must already be in the sco
 
 Authorization covers regular-file contents and equivalent staging/commits when the index and worktree agree. It rejects deletion, symlink/hardlink escapes, executable-mode changes and divergent staged content. Other dirty files and their original staged blobs remain protected. A legacy snapshot without the required baseline type evidence cannot safely receive this authorization; report that gap without reinitializing the guard after edits. Authorization changes the scope digest and requires a fresh independent review.
 
+Scope permission and review freshness are separate checks. The change digest includes divergent committed branch content, modes and deletions. Review snapshots additionally retain each changed path's HEAD entry and Git-normalized working entry, including paths reverted to the base version. Comparing a reviewed snapshot with the current one permits unchanged HEAD entries or a changed entry that matches the reviewed working version. This preserves equivalent staging and partial commits while detecting a different committed version hidden behind restored working files, even when the effective diff digest is unchanged. Replacing a committed PR change that differed from the reviewed working version changes the digest and requires a fresh review. Missing publication evidence in an older guard or review artifact also requires a fresh review after updating the installed guard.
+
 After each coherent implementation/fix chunk and before any handoff, commit, push or PR creation:
 
 ```bash

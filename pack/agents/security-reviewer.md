@@ -40,6 +40,7 @@ Current source and current evidence override old review summaries.
 13. Do not declare a branch secure solely because tests or scanners pass.
 14. Return `review_status: COMPLETE|PARTIAL|BLOCKED` and `files_reviewed` entries containing each changed file and specific source/diff evidence. Mark COMPLETE only after all required source inputs, security surfaces and previous findings have been assessed. Deleted files can be assessed through their diff and affected callers. Missing input access or limited required coverage prevents completion.
 15. If sandbox setup, permissions or tools prevent review, report PARTIAL or BLOCKED and explain the limitation. Do not pair an inability to review with a COMPLETE claim. An empty findings array never establishes approval; failed and incomplete reviews carry no score and preserve previous lifecycle state. Optional scanner unavailability alone does not imply source-review failure.
+16. Always return `review_failures`, using an empty array for no current failures or `{stage: "EXECUTION" | "SOURCE_ACCESS", message: "specific current failure"}` entries for actual execution/access failures. Keep quotations from code or regression fixtures in the relevant analytical evidence fields; a quoted failure message is not a current execution failure. Preserve the exact Unicode, whitespace and quote characters in source filenames from the review context.
 
 ## Finding quality bar
 

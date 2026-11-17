@@ -54,7 +54,7 @@ function posix(value) { return String(value || "").replace(/\\/g, "/").replace(/
 function slug(value) { return posix(value || "detached").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "detached"; }
 function hash(value) { return crypto.createHash("sha256").update(String(value)).digest("hex"); }
 function branchStorageKey(branch) { return `${slug(branch).slice(0, 96)}--${hash(`branch:${branch}`).slice(0, 10)}`; }
-function isReviewState(file) { const normalized = posix(file); return normalized === REVIEW_STATE_REL || normalized.startsWith(REVIEW_STATE_PREFIX); }
+function isReviewState(file) { return file === REVIEW_STATE_REL || file.startsWith(REVIEW_STATE_PREFIX); }
 function unique(values) { return [...new Set(values.filter(Boolean))]; }
 
 function copyTree(src, dst) {
@@ -91,7 +91,15 @@ function run(command, args, options = {}) {
 }
 function git(project, args, fallback = "") { const r = run("git", args, { cwd: project, timeout: 60_000 }); return !r.error && r.status === 0 ? String(r.stdout || "").trim() : fallback; }
 function gitOk(project, args) { const r = run("git", args, { cwd: project, timeout: 60_000 }); return !r.error && r.status === 0; }
-function gitLines(project, args) { return git(project, args).split(/\r?\n/).map((x) => x.trim()).filter(Boolean); }
+function gitNul(project, args) {
+  const result = run("git", args, { cwd: project, timeout: 60_000 });
+  if (result.error || result.status !== 0) throw new Error(`Could not read security-review Git paths: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
+  const output = result.stdout || "";
+  if (output && !output.endsWith("\0")) throw new Error("Git path output was not NUL terminated.");
+  // Git -z emits exact repository-relative paths, including whitespace and
+  // literal backslashes on POSIX. Never trim, C-unquote, or normalize them.
+  return output ? output.slice(0, -1).split("\0") : [];
+}
 function resolveGitPath(project, name) {
   const value = git(project, ["rev-parse", "--git-path", name]);
   if (!value) return null;
@@ -157,8 +165,7 @@ function detectBase(project, current, explicit) {
   throw new Error("Could not determine a base branch/ref. Re-run with --base <branch>.");
 }
 function untrackedFiles(project) {
-  return gitLines(project, ["ls-files", "--others", "--exclude-standard"])
-    .map(posix)
+  return gitNul(project, ["ls-files", "--others", "--exclude-standard", "-z"])
     .filter((file) => !isReviewState(file))
     .sort();
 }
@@ -303,17 +310,17 @@ function withEphemeralUntrackedEvidence(evidence, action) {
 }
 
 function changedFiles(project, mergeBase) {
-  const committed = gitLines(project, ["diff", "--name-only", "--diff-filter=ACMRTUXB", `${mergeBase}...HEAD`]);
-  const staged = gitLines(project, ["diff", "--cached", "--name-only", "--diff-filter=ACMRTUXB"]);
-  const unstaged = gitLines(project, ["diff", "--name-only", "--diff-filter=ACMRTUXB"]);
+  const committed = gitNul(project, ["diff", "--name-only", "--diff-filter=ACMRTUXB", "-z", `${mergeBase}...HEAD`]);
+  const staged = gitNul(project, ["diff", "--cached", "--name-only", "--diff-filter=ACMRTUXB", "-z"]);
+  const unstaged = gitNul(project, ["diff", "--name-only", "--diff-filter=ACMRTUXB", "-z"]);
   const untracked = untrackedFiles(project);
-  return unique([...committed, ...staged, ...unstaged, ...untracked].map(posix)).filter((file) => !isReviewState(file)).sort();
+  return unique([...committed, ...staged, ...unstaged, ...untracked]).filter((file) => !isReviewState(file)).sort();
 }
 function workingTreeStatus(project) {
-  return gitLines(project, ["status", "--short"]).filter((line) => {
-    const file = posix(line.slice(3).replace(/^"|"$/g, ""));
-    return !isReviewState(file);
-  });
+  // Disable rename pairing so every NUL record keeps the existing "XY path"
+  // format; source/destination paths appear as separate deletion/addition records.
+  return gitNul(project, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z"])
+    .filter((entry) => !isReviewState(entry.slice(3)));
 }
 function diffText(project, mergeBase, untrackedEvidence) {
   return [
@@ -542,7 +549,7 @@ function parseJsonObject(text) {
   return start >= 0 && end > start ? jsonParse(cleaned.slice(start, end + 1), null) : null;
 }
 function reviewerPrompt(contextRel, ephemeralUntrackedEvidenceFile, previousRel) {
-  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${ephemeralUntrackedEvidenceFile ? `- ${ephemeralUntrackedEvidenceFile} (EPHEMERAL_UNTRACKED_EVIDENCE: redacted bounded untracked-file text outside the worktree; inspect CAPTURED_TEXT entries; this file is deleted after the review)` : ""}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding, including previously resolved findings. Return one prior_findings disposition per previous fingerprint with specific source evidence. Use OPEN and re-emit the same fingerprint when present; use RESOLVED only after verifying the fix; use UNVERIFIED when blocked. Omission never resolves a finding.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n10. Report COMPLETE only after reading every changed file (including its diff) and the required surrounding source, assessing every REVIEW_REQUIRED surface, and verifying every prior finding. List each source input in files_reviewed with specific evidence. Use PARTIAL or BLOCKED if sandbox, permissions, tools, or source access prevent completion; empty findings never indicate completion. Explain missing coverage in limitations. Optional scanner unavailability alone need not prevent a completed source review. For a mapped surface found inapplicable, report NOT_APPLICABLE with source-based notes.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"review_status\": \"COMPLETE|PARTIAL|BLOCKED\",\n  \"summary\": \"short assessment\",\n  \"files_reviewed\": [{\"file\":\"relative/path\",\"evidence\":\"specific source/diff inspected\"}],\n  \"prior_findings\": [{\"fingerprint\":\"previous stable fingerprint\",\"status\":\"OPEN|RESOLVED|UNVERIFIED\",\"evidence\":\"specific recheck evidence\"}],\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
+  return `Act as the independent Web Kit Security PR Reviewer.\n\nREAD-ONLY REVIEW: do not modify files, fix findings, commit, or alter repository state.\n\nRead first:\n- .agent-core/agents/security-reviewer.md\n- .agent-core/rules/security-review.md\n- ${contextRel}\n${ephemeralUntrackedEvidenceFile ? `- ${ephemeralUntrackedEvidenceFile} (EPHEMERAL_UNTRACKED_EVIDENCE: redacted bounded untracked-file text outside the worktree; inspect CAPTURED_TEXT entries; this file is deleted after the review)` : ""}\n${previousRel ? `- ${previousRel} (previous review; verify every previous finding and never silently drop one)` : ""}\n\nThe generated .agent-core/security-reviews directory is review state/evidence, not product code; do not treat its generated files as branch changes or vulnerability evidence.\n\nReview the current branch against the exact base/merge-base recorded in the context. Inspect the actual branch diff and every surrounding source/configuration/dependency needed to validate trust boundaries and exploitability.\n\nRequirements:\n1. Cover every REVIEW_REQUIRED attack surface and expand to any additional related surface discovered while tracing affected code.\n2. Check all relevant classes, not merely OWASP Top 10: auth/authz, IDOR/BOLA/BFLA, tenant isolation, sessions/JWT/OAuth, injection, XSS, CSRF/CORS, SSRF, uploads/filesystem, secrets, crypto, dependencies/supply chain, containers/IaC/cloud, CI/CD, privacy/logging, abuse/DoS, realtime, business logic, concurrency/idempotency, deserialization/XXE/prototype pollution, cache isolation, and framework/language-specific risks when relevant.\n3. Follow changed code into middleware, authorization, validation, data access, configuration and callers/callees when those control security.\n4. Read scanner artifacts listed in the context when present. Missing/failed scanners are limitations, never proof of safety. Verify high-impact scanner findings in source when possible.\n5. Use OWASP Web/API and CWE where appropriate. Include CVE/GHSA/OSV identifiers only when actual advisory/scanner evidence supports them. Never invent an advisory.\n6. Prefer evidence-backed, realistically exploitable findings over generic best-practice noise.\n7. Return ALL findings in this one review.\n8. On re-review, re-check every previous SEC finding, including previously resolved findings. Return one prior_findings disposition per previous fingerprint with specific source evidence. Use OPEN and re-emit the same fingerprint when present; use RESOLVED only after verifying the fix; use UNVERIFIED when blocked. Omission never resolves a finding.\n9. Do not calculate the /5 rating or merge decision; Web Kit owns those deterministically.\n10. Report COMPLETE only after reading every changed file (including its diff) and the required surrounding source, assessing every REVIEW_REQUIRED surface, and verifying every prior finding. List each source input in files_reviewed with specific evidence. Use PARTIAL or BLOCKED if sandbox, permissions, tools, or source access prevent completion; empty findings never indicate completion. Explain missing coverage in limitations. Optional scanner unavailability alone need not prevent a completed source review. For a mapped surface found inapplicable, report NOT_APPLICABLE with source-based notes.\n11. Report current execution or source-access failures in review_failures as {stage: EXECUTION|SOURCE_ACCESS, message: specific failure}; return [] only when none occurred. Any current failure prevents COMPLETE. Quoted diagnostics from source code, tests, or prior reports are evidence, not current failures; keep them separate from review_failures.\n\nReturn ONLY this JSON shape, no markdown fences:\n{\n  \"review_status\": \"COMPLETE|PARTIAL|BLOCKED\",\n  \"review_failures\": [],\n  \"summary\": \"short assessment\",\n  \"files_reviewed\": [{\"file\":\"relative/path\",\"evidence\":\"specific source/diff inspected\"}],\n  \"prior_findings\": [{\"fingerprint\":\"previous stable fingerprint\",\"status\":\"OPEN|RESOLVED|UNVERIFIED\",\"evidence\":\"specific recheck evidence\"}],\n  \"limitations\": [\"coverage limitation\"],\n  \"coverage\": [{\"area\":\"area\",\"status\":\"REVIEWED|NOT_APPLICABLE|LIMITED\",\"notes\":\"what was checked\"}],\n  \"findings\": [{\n    \"fingerprint\": \"stable-lowercase-id\",\n    \"title\": \"specific vulnerability\",\n    \"severity\": \"CRITICAL|HIGH|MEDIUM|LOW|INFO\",\n    \"confidence\": \"HIGH|MEDIUM|LOW\",\n    \"category\": \"category\",\n    \"file\": \"relative/path\",\n    \"line\": 123,\n    \"owasp\": [\"supported mapping\"],\n    \"cwe\": [\"CWE-...\"],\n    \"advisories\": [\"only verified CVE/GHSA/OSV ids\"],\n    \"evidence\": \"specific evidence without secret values\",\n    \"attack_scenario\": \"realistic abuse path\",\n    \"impact\": \"impact\",\n    \"recommendation\": \"specific fix\",\n    \"validation\": \"specific regression test/verification\"\n  }]\n}`;
 }
 function invokeProvider(provider, project, prompt, timeoutMs) {
   const env = { ...process.env, WEB_KIT_SECURITY_REVIEW_ACTIVE: "1", WEB_KIT_SECURITY_PROJECT_ROOT: project, WEB_KIT_CONTEXT_SUPERVISOR_BYPASS: "1" };
@@ -590,7 +597,8 @@ function invokeProvider(provider, project, prompt, timeoutMs) {
 const reviewText = (value) => typeof value === "string" && value.trim().length > 0 && value.length <= 16_000;
 const reviewObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const sourcePath = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096
-  && !path.posix.isAbsolute(value) && !/^[a-zA-Z]:/.test(value) && !/[\\\0]/.test(value)
+  && !path.posix.isAbsolute(value) && !/^[a-zA-Z]:/.test(value) && !value.includes("\0")
+  && (process.platform !== "win32" || !value.includes("\\"))
   && !value.split("/").some((part) => !part || part === "." || part === "..");
 
 function sandboxSetupFailure(value) {
@@ -598,9 +606,9 @@ function sandboxSetupFailure(value) {
 }
 
 function reviewBlockedText(value) {
-  // Defense against contradictory COMPLETE claims. Do not interpret ordinary
-  // vulnerability statements (e.g. "a user cannot access another tenant") as a failed review.
-  return typeof value === "string" && /\b(?:review|inspection)\s+(?:(?:was|is|remains)\s+)?(?:impossible|blocked|incomplete|not (?:performed|completed))\b|\b(?:I|we|reviewer)\s+(?:could not|cannot|can't|couldn't|was unable to|were unable to|am unable to|are unable to)\s+(?:read|access|inspect|review|verify|complete|perform|conduct|open)\b|\b(?:unable|failed) to (?:read|access|inspect|review) (?:any |the |required |source |repository |project |changed )*(?:files?|code|sources?|diff|repository)\b/i.test(value);
+  // A conservative legacy check for direct statements about this review. Do not
+  // search source/test evidence for phrases quoted from the code being reviewed.
+  return typeof value === "string" && /^\s*(?:(?:(?:the|this|current|independent|security|source)\s+){0,4}(?:review|inspection)\s+(?:(?:was|is|remains)\s+)?(?:impossible|blocked|incomplete|not (?:performed|completed))\b|(?:I|we|(?:the )?reviewer)\s+(?:could not|cannot|can't|couldn't|was unable to|were unable to|am unable to|are unable to)\s+(?:read|access|inspect|review|verify|complete|perform|conduct|open)\b|(?:unable|failed) to (?:read|access|inspect|review) (?:any |the |required |source |repository |project |changed )*(?:files?|code|sources?|diff|repository)\b|(?:(?:Windows\s+)?sandbox (?:setup|initiali[sz]ation)|(?:permission|ACL) setup)\s+(?:(?:has|had|was|is)\s+)?(?:failed|denied|unavailable|error(?=:))\b|SetNamedSecurityInfoW(?:\([^)]*\))?\s*[:,]\s*(?:error|failed|failure|access is denied)\b)/i.test(value);
 }
 
 function assessReviewCompletion(model, context, previous) {
@@ -608,12 +616,19 @@ function assessReviewCompletion(model, context, previous) {
   if (model.review_status !== "COMPLETE") issues.push(`Reviewer did not report COMPLETE (reported ${typeof model.review_status === "string" ? model.review_status.slice(0, 80) : "missing or invalid"}).`);
   if (!reviewText(model.summary)) issues.push("Reviewer supplied no valid summary.");
   const lists = {};
-  for (const [key, limit] of [["files_reviewed", 5000], ["coverage", 120], ["findings", 1000], ["prior_findings", 1000], ["limitations", 120]]) {
+  for (const [key, limit] of [["files_reviewed", 5000], ["coverage", 120], ["findings", 1000], ["prior_findings", 1000], ["limitations", 120], ["review_failures", 120]]) {
     const value = model[key];
     if (!Array.isArray(value) || value.length > limit) issues.push(`Reviewer supplied invalid ${key}.`);
     lists[key] = Array.isArray(value) ? value.slice(0, limit) : [];
   }
   if (lists.limitations.some((item) => !reviewText(item))) issues.push("Review limitations must contain nonempty text.");
+  for (const failure of lists.review_failures) {
+    if (!reviewObject(failure) || !["EXECUTION", "SOURCE_ACCESS"].includes(failure.stage) || !reviewText(failure.message)) {
+      issues.push("Invalid current review failure.");
+    } else {
+      issues.push(`Current review failure (${failure.stage}): ${failure.message}`);
+    }
+  }
   const reviewed = new Set();
   if (!lists.files_reviewed.length) issues.push("Reviewer supplied no source input evidence.");
   for (const input of lists.files_reviewed) {
@@ -664,9 +679,7 @@ function assessReviewCompletion(model, context, previous) {
     if (file && !reviewed.has(file)) issues.push(`Prior finding source was not reviewed: ${file}`);
   }
   for (const key of old.keys()) if (!dispositions.has(key)) issues.push(`Prior finding was not rechecked: ${key}`);
-  const diagnosticText = [model.summary, ...lists.limitations, ...lists.coverage.map((item) => item?.notes),
-    ...lists.files_reviewed.map((item) => item?.evidence), ...lists.prior_findings.map((item) => item?.evidence)];
-  if (diagnosticText.some(reviewBlockedText) || lists.limitations.some((item) => typeof item === "string" && sandboxSetupFailure(item))) issues.push("Reviewer reported blocked source access or an incomplete review despite its completion claim.");
+  if ([model.summary, ...lists.limitations].some(reviewBlockedText)) issues.push("Reviewer reported blocked source access or an incomplete review despite its completion claim.");
   return { complete: issues.length === 0, issues: unique(issues), dispositions };
 }
 
@@ -687,7 +700,7 @@ function normalizeFinding(f) {
     severity: severity(f.severity),
     confidence: confidence(f.confidence),
     category: field("category", "General Security"),
-    file: field("file") ? posix(f.file) : null,
+    file: typeof f.file === "string" && f.file.length ? f.file : null,
     line: Number.isInteger(line) && line > 0 ? line : null,
     owasp: strings("owasp").slice(0, 20),
     cwe: strings("cwe").filter((x) => /^CWE-\d+$/i.test(x)).slice(0, 20),
@@ -901,7 +914,7 @@ async function main() {
     const previousRel = previous ? posix(path.relative(project, latestJson)) : null;
 
     let provider = null;
-    let model = { review_status: "SCAN_ONLY", summary: "Scanner-only branch security evidence collection.", limitations: ["AI source/security reasoning was skipped by --scan-only."], files_reviewed: [], prior_findings: [], coverage: [], findings: [] };
+    let model = { review_status: "SCAN_ONLY", review_failures: [], summary: "Scanner-only branch security evidence collection.", limitations: ["AI source/security reasoning was skipped by --scan-only."], files_reviewed: [], prior_findings: [], coverage: [], findings: [] };
     if (!args.scanOnly) {
       try {
         provider = chooseProvider(args.provider);
@@ -910,7 +923,7 @@ async function main() {
       } catch (error) {
         if (!(error instanceof ReviewerFailure)) throw error;
         const diagnostic = redactSensitiveText(error.message);
-        model = { review_status: "ERROR", summary: diagnostic, limitations: [diagnostic], files_reviewed: [], prior_findings: [], coverage: [], findings: [] };
+        model = { review_status: "ERROR", review_failures: [{ stage: "EXECUTION", message: diagnostic }], summary: diagnostic, limitations: [diagnostic], files_reviewed: [], prior_findings: [], coverage: [], findings: [] };
       }
     } else {
       for (const s of scanners) if (s.status === "FINDINGS") model.limitations.push(`${s.name} reported ${Number(s.finding_count) || "one or more"} finding(s); a full security-review is required to correlate severity, exploitability, and persistent SEC-* findings.`);
@@ -947,6 +960,7 @@ async function main() {
       scan_only: args.scanOnly,
       review_status: completion.complete ? "COMPLETE" : args.scanOnly ? "SCAN_ONLY" : ["PARTIAL", "BLOCKED", "ERROR"].includes(model.review_status) ? model.review_status : "INCOMPLETE",
       completion_issues: completion.issues,
+      review_failures: Array.isArray(model.review_failures) ? model.review_failures.slice(0, 120) : [],
       files_reviewed: Array.isArray(model.files_reviewed) ? model.files_reviewed.slice(0, 5000) : [],
       prior_findings: Array.isArray(model.prior_findings) ? model.prior_findings.slice(0, 1000) : [],
       finding_lifecycle_verified: completion.complete,
