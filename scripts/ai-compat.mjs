@@ -8,6 +8,20 @@ const LEGACY_BRIDGE_START = "<!-- WEB-AGENT-KIT:AI-BRIDGE:START -->";
 const LEGACY_BRIDGE_END = "<!-- WEB-AGENT-KIT:AI-BRIDGE:END -->";
 const SUMMARY_START = "<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->";
 const SUMMARY_END = "<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:END -->";
+const SHARED_TARGETS = {
+  agents: ["AGENTS.md", "AGENTS-compatible assistants"],
+  claude: ["CLAUDE.md", "Claude Code"],
+  gemini: ["GEMINI.md", "Gemini CLI"],
+  "github-copilot": [".github/copilot-instructions.md", "GitHub Copilot"],
+  cursor: [".cursor/rules/ihgen-web-kit.mdc", "Cursor"],
+};
+const LOCAL_TARGETS = {
+  agents: [".agent-core/instructions/AGENTS.md", "AGENTS-compatible assistants"],
+  claude: [".agent-core/instructions/CLAUDE.md", "Claude Code"],
+  gemini: [".agent-core/instructions/GEMINI.md", "Gemini CLI"],
+  "github-copilot": [".agent-core/instructions/copilot-instructions.md", "GitHub Copilot"],
+  cursor: [".agent-core/instructions/ihgen-web-kit.mdc", "Cursor"],
+};
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); }
@@ -32,6 +46,58 @@ function appendWithoutChangingExisting(text, section) {
   if (!text) return `${section}\n`;
   const separator = text.endsWith("\n") || text.endsWith("\r") ? "" : "\n";
   return `${text}${separator}\n${section}\n`;
+}
+
+function removeMarkedRoles(file) {
+  if (!fs.existsSync(file)) return "absent";
+  const current = fs.readFileSync(file, "utf8");
+  let updated = current;
+  for (const [startMarker, endMarker] of [
+    [ROLE_START, ROLE_END],
+    [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END],
+  ]) {
+    const starts = current.split(startMarker).length - 1;
+    const ends = current.split(endMarker).length - 1;
+    if (starts !== ends || starts > 1) {
+      throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
+    }
+    if (starts === 1) {
+      const start = updated.indexOf(startMarker);
+      const end = updated.indexOf(endMarker, start) + endMarker.length;
+      // The installer appends a single separator newline before its final
+      // roles block and one newline after it. Undo both for an EOF block.
+      if (updated[start - 1] === "\n" && updated.slice(end) === "\n") {
+        updated = updated.slice(0, start - 1) + updated.slice(end + 1);
+      } else updated = updated.slice(0, start) + updated.slice(end);
+    }
+  }
+  if (updated !== current) fs.writeFileSync(file, updated, "utf8");
+  return updated === current ? "unchanged" : "removed-web-kit-roles";
+}
+
+function protectLocalInstructions(project) {
+  const localRoot = path.join(project, ".agent-core", "instructions");
+  fs.mkdirSync(localRoot, { recursive: true });
+  const ignore = path.join(localRoot, ".gitignore");
+  // A nested ignore also protects installs that happen before `git init`.
+  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n", "utf8");
+  else {
+    const text = fs.readFileSync(ignore, "utf8");
+    if (!text.split(/\r?\n/).includes("*")) fs.appendFileSync(ignore, `${text.endsWith("\n") ? "" : "\n"}*\n`, "utf8");
+  }
+}
+
+export function assertLocalMigrationSafe(project) {
+  for (const [relative] of Object.values(SHARED_TARGETS)) {
+    const file = path.join(project, relative);
+    if (!fs.existsSync(file)) continue;
+    const current = fs.readFileSync(file, "utf8");
+    for (const [start, end] of [[ROLE_START, ROLE_END], [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END]]) {
+      const starts = current.split(start).length - 1;
+      const ends = current.split(end).length - 1;
+      if (starts !== ends || starts > 1) throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
+    }
+  }
 }
 
 export function upsertRoles(file, section, initialContent = null) {
@@ -155,25 +221,33 @@ function cursorInitial(profile) {
   return `---\ndescription: Project instructions and iHGEN Web Kit roles\nalwaysApply: true\n---\n\n${projectSummary(profile, "Cursor")}`;
 }
 
-export function applyAiCompatibility(project, profile = null) {
+export function applyAiCompatibility(project, profile = null, options = {}) {
   project = path.resolve(project);
   profile = profile || readJson(path.join(project, ".agent-core", "index", "project-profile.json"));
+  const scope = options.instructionScope || "shared";
+  if (!["local", "shared"].includes(scope)) throw new Error(`Invalid AI instruction scope: ${scope}`);
+  const targets = scope === "local" ? LOCAL_TARGETS : SHARED_TARGETS;
 
-  const targets = {
-    agents: [path.join(project, "AGENTS.md"), "AGENTS-compatible assistants"],
-    claude: [path.join(project, "CLAUDE.md"), "Claude Code"],
-    gemini: [path.join(project, "GEMINI.md"), "Gemini CLI"],
-    "github-copilot": [path.join(project, ".github", "copilot-instructions.md"), "GitHub Copilot"],
-  };
+  if (scope === "local") {
+    // Refuse a partial or ambiguous migration before touching shared files.
+    assertLocalMigrationSafe(project);
+    protectLocalInstructions(project);
+  }
 
   const actions = {};
-  for (const [key, [file, label]] of Object.entries(targets)) actions[key] = upsertRoles(file, rolesMarkdown(label), projectSummary(profile, label));
-
-  const cursorPath = path.join(project, ".cursor", "rules", "ihgen-web-kit.mdc");
-  actions.cursor = upsertRoles(cursorPath, rolesMarkdown("Cursor"), cursorInitial(profile));
+  for (const [key, [relative, label]] of Object.entries(targets)) {
+    const file = path.join(project, relative);
+    actions[key] = upsertRoles(file, rolesMarkdown(label), key === "cursor" ? cursorInitial(profile) : projectSummary(profile, label));
+  }
+  if (scope === "local") {
+    for (const [key, [relative]] of Object.entries(SHARED_TARGETS)) {
+      actions[`removed-shared-${key}`] = removeMarkedRoles(path.join(project, relative));
+    }
+  }
 
   const compatibility = {
-    canonical_instructions: "AGENTS.md",
+    instruction_scope: scope,
+    canonical_instructions: targets.agents[0],
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
     efficiency_policy_rule: ".agent-core/rules/efficiency-policy.md",
@@ -210,14 +284,10 @@ export function applyAiCompatibility(project, profile = null) {
     explicit_session_controller_fallback: ".agent-core/bin/session-controller.mjs",
     temporary_graphify_role: ".agent-core/state/graphify-bootstrap-role.md",
     native_agents_md: ["codex", "kimi", "agents-md-compatible"],
-    managed_roles: {
-      agents: "AGENTS.md",
-      claude: "CLAUDE.md",
-      gemini: "GEMINI.md",
-      "github-copilot": ".github/copilot-instructions.md",
-      cursor: ".cursor/rules/ihgen-web-kit.mdc",
-    },
-    file_policy: "Existing instruction files are preserved; Web Kit changes only its marked roles block. Missing instruction files are created once with a project summary plus the roles block.",
+    managed_roles: Object.fromEntries(Object.entries(targets).map(([key, [relative]]) => [key, relative])),
+    file_policy: scope === "local"
+      ? "Web Kit instructions live under .agent-core/instructions and are locally Git-ignored. Only Web Kit-marked blocks are removed from shared project files when switching to local mode. Web Kit-controlled sessions load the local instructions explicitly."
+      : "Existing project instruction files are preserved; Web Kit changes only its marked roles block. Missing files are created once with a project summary plus the roles block.",
     runtime: "node+npm",
     actions,
   };

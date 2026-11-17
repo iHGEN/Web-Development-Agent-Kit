@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyProjectProfile, readJson, writeJson } from "./project-profile.mjs";
-import { applyAiCompatibility, findUnmanagedGraphifyConflicts, ROLE_START, ROLE_END } from "./ai-compat.mjs";
+import { applyAiCompatibility, assertLocalMigrationSafe, findUnmanagedGraphifyConflicts, ROLE_START, ROLE_END } from "./ai-compat.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -244,9 +244,12 @@ process.exit(result.error ? 1 : (result.status ?? 1));
 `, "utf8");
 }
 
-function install(project) {
+function install(project, options = {}) {
   project = path.resolve(project);
   fs.mkdirSync(project, { recursive: true });
+  const previous = readJson(path.join(project, ".agent-kit.json"));
+  const instructionScope = options.instructionScope || previous.ai_compatibility?.instruction_scope || "shared";
+  if (instructionScope === "local") assertLocalMigrationSafe(project);
   const { skills, evidence } = detect(project);
   const securityReviewStateExcluded = ensureSecurityReviewStateExcluded(project);
   const core = path.join(project, ".agent-core");
@@ -269,7 +272,7 @@ function install(project) {
   fs.copyFileSync(path.join(PACK, "router", "skill-catalog.json"), path.join(core, "catalog", "skill-catalog.json"));
 
   const profileResult = applyProjectProfile(project, { kitRoot: KIT_ROOT, version: VERSION });
-  const compatibility = applyAiCompatibility(project, profileResult.profile);
+  const compatibility = applyAiCompatibility(project, profileResult.profile, { instructionScope });
   writeProjectUpdater(project);
 
   console.log(`Web Agent Kit ${VERSION} installed`);
@@ -278,7 +281,9 @@ function install(project) {
   console.log(`Project directory: ${project}`);
   console.log(`Agents: ${fs.existsSync(path.join(core, "agents")) ? fs.readdirSync(path.join(core, "agents")).filter((name) => name.endsWith(".md")).length : 0}`);
   console.log(`Skills: ${skills.join(", ")}`);
-  console.log("AI instructions: existing files preserved; missing files created once with project summary; managed roles synchronized");
+  console.log(instructionScope === "local"
+    ? "AI instructions: local to .agent-core/instructions (Git-ignored); shared project instructions left free of Web Kit roles"
+    : "AI instructions: existing shared files preserved; missing files created once with project summary; managed roles synchronized");
   console.log(`Canonical workflow: ${compatibility.canonical_workflow}`);
   console.log("Automatic context rollover: .agent-core/bin/session-controller.mjs (default threshold 50%)");
   console.log(`Security review state: ${securityReviewStateExcluded ? "protected by local .git/info/exclude" : "Git local exclude will be enforced when security-review runs"}`);
@@ -309,14 +314,20 @@ function doctor(project) {
   const stale = installed.filter((skill) => !expected.includes(skill));
   const agentDir = path.join(project, ".agent-core", "agents");
   const agentFiles = fs.existsSync(agentDir) ? fs.readdirSync(agentDir).filter((name) => name.endsWith(".md")) : [];
-  const instructionPaths = {
-    "AGENTS.md": path.join(project, "AGENTS.md"),
-    "CLAUDE.md": path.join(project, "CLAUDE.md"),
-    "GEMINI.md": path.join(project, "GEMINI.md"),
-    "GitHub Copilot": path.join(project, ".github", "copilot-instructions.md"),
-    "Cursor": path.join(project, ".cursor", "rules", "ihgen-web-kit.mdc"),
-  };
+  const instructionScope = cfg.ai_compatibility?.instruction_scope || "shared";
+  const instructionPaths = Object.fromEntries(Object.entries(cfg.ai_compatibility?.managed_roles || {
+    agents: "AGENTS.md",
+    claude: "CLAUDE.md",
+    gemini: "GEMINI.md",
+    "github-copilot": ".github/copilot-instructions.md",
+    cursor: ".cursor/rules/ihgen-web-kit.mdc",
+  }).map(([key, relative]) => [key, path.join(project, relative)]));
   const rolesOk = Object.values(instructionPaths).every(hasRolesBlock);
+  const localIgnore = path.join(project, ".agent-core", "instructions", ".gitignore");
+  const localIgnoreReady = instructionScope !== "local" || (fs.existsSync(localIgnore) && fs.readFileSync(localIgnore, "utf8").split(/\r?\n/).includes("*"));
+  const staleSharedRoles = instructionScope === "local" ? [
+    "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md", ".cursor/rules/ihgen-web-kit.mdc",
+  ].filter((relative) => hasRolesBlock(path.join(project, relative))) : [];
   const warnings = [];
   const cfgGraphify = cfg.capabilities?.graphify || {};
   const profileGraphify = profile.capabilities?.graphify || {};
@@ -332,7 +343,7 @@ function doctor(project) {
   if (actualGraphReady && !Object.keys(graphState).length) warnings.push("Graphify graph exists but freshness state is missing");
 
   for (const [label, file] of Object.entries(instructionPaths)) {
-    if (label === "Cursor") continue;
+    if (label === "cursor") continue;
     for (const issue of findUnmanagedGraphifyConflicts(file)) warnings.push(`${label}: ${issue}; canonical Graph Refresh Gate should control Graphify refresh/use`);
   }
 
@@ -345,12 +356,14 @@ function doctor(project) {
   console.log(`Project index: ${fs.existsSync(path.join(project, ".agent-core", "index", "project-index.json")) ? "OK" : "MISSING"}`);
   console.log(`Project profile: ${fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json")) ? "OK" : "MISSING"}`);
   console.log(`Routing policy: ${fs.existsSync(path.join(project, ".agent-core", "routing", "context-policy.json")) ? "OK" : "MISSING"}`);
-  console.log(`AI managed roles: ${rolesOk ? "OK" : "MISSING"}`);
+  console.log(`AI managed roles (${instructionScope}): ${rolesOk ? "OK" : "MISSING"}`);
+  if (instructionScope === "local") console.log(`Local AI Git protection: ${localIgnoreReady ? "OK" : "MISSING"}`);
   console.log(`Session Controller: ${fs.existsSync(sessionController) ? "OK" : "MISSING"}`);
   console.log(`Context rollover rule: ${fs.existsSync(rolloverRule) ? "OK" : "MISSING"}`);
   console.log(`Graphify graph: ${actualGraphReady ? "READY" : "NOT READY"}`);
   if (missing.length) console.log(`Missing skills: ${missing.join(", ")}`);
   if (stale.length) console.log(`Installed but no longer detected: ${stale.join(", ")}`);
+  if (staleSharedRoles.length) console.log(`Shared files still containing Web Kit roles: ${staleSharedRoles.join(", ")}`);
   if (warnings.length) {
     console.log("Warnings:");
     for (const warning of warnings) console.log(`  - ${warning}`);
@@ -358,6 +371,7 @@ function doctor(project) {
   }
 
   const healthy = !missing.length && agentFiles.length > 0 && Object.keys(cfg).length && rolesOk
+    && localIgnoreReady && !staleSharedRoles.length
     && fs.existsSync(path.join(project, ".agent-core", "index", "project-profile.json"))
     && fs.existsSync(sessionController) && fs.existsSync(rolloverRule);
   console.log(healthy ? (warnings.length ? "Status: HEALTHY WITH WARNINGS" : "Status: HEALTHY") : "Status: NEEDS ATTENTION");
@@ -419,15 +433,22 @@ const { command, rest } = parseCli(process.argv.slice(2));
 let rc = 0;
 if (["scan", "doctor", "update", "install", "graphify"].includes(command)) {
   const project = rest.find((arg) => !arg.startsWith("-")) || ".";
+  const local = rest.includes("--local-instructions");
+  const shared = rest.includes("--shared-instructions");
+  if (local && shared) {
+    console.error("Choose only one instruction scope: --local-instructions or --shared-instructions.");
+    process.exit(2);
+  }
+  const instructionScope = local ? "local" : shared ? "shared" : undefined;
   if (rest.includes("--force-agents")) console.warn("--force-agents is deprecated and ignored: Web Kit never overwrites project-owned AI instruction content.");
   if (command === "scan") rc = scan(project);
   else if (command === "doctor") rc = doctor(project);
   else if (command === "graphify") rc = setupGraphify(project);
-  else rc = install(project);
+  else rc = install(project, { instructionScope });
 } else if (command === "catalog") rc = showCatalog();
 else if (command === "add-skill") rc = addSkill(rest[0] || ".", rest[1] || "");
 else {
-  console.error("Usage: node scripts/agent-kit.mjs <install|update|scan|doctor|graphify|catalog|add-skill> [project] [skill]");
+  console.error("Usage: node scripts/agent-kit.mjs <install|update|scan|doctor|graphify|catalog|add-skill> [project] [--local-instructions|--shared-instructions]");
   rc = 2;
 }
 process.exitCode = rc;

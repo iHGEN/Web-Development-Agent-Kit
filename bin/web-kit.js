@@ -37,6 +37,7 @@ Bare execution is idempotent:
 
 Explicit commands:
   npx @ihgen/web-kit install
+  npx @ihgen/web-kit install --local-instructions
   npx @ihgen/web-kit update
   npx @ihgen/web-kit doctor
   npx @ihgen/web-kit scan
@@ -56,6 +57,8 @@ Options:
   --sha256 <hash>        Verify downloaded archive.
   --allow-downgrade      Explicitly permit install/update to an older semantic version.
   --install-graphify     After Web-Kit setup, install/register optional Graphify support.
+  --local-instructions   Keep Web Kit AI rules local to .agent-core/instructions, outside shared files.
+  --shared-instructions  Explicitly enable the original shared AGENTS/CLAUDE/etc integration.
 
 Automatic session options:
   --prompt <text>                     Original task.
@@ -76,10 +79,11 @@ Provider permission defaults:
 Web Kit never silently selects Codex danger-full-access or Claude bypassPermissions. You may explicitly
 choose a different supported mode when your environment requires it.
 
-AI instruction files are non-destructive:
-  - existing AGENTS.md / CLAUDE.md / GEMINI.md / Copilot / Cursor instructions stay intact;
-  - Web Kit adds or refreshes only its marked roles block;
-  - missing instruction files are created once with a compact project summary plus roles.
+AI instruction scopes:
+  - default/shared: Web Kit adds or refreshes only its marked roles block in project files;
+  - local: Web Kit-managed sessions load Git-ignored .agent-core/instructions files;
+  - switching to local removes only Web Kit-marked blocks from shared files;
+  - the chosen scope persists across later updates.
 
 Automatic context rollover:
   - Web Kit owns Codex/Claude through their structured headless modes;
@@ -345,9 +349,9 @@ if (result.error) {
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 if (action === "install") {
-  console.log("\n✓ Web Development Agent Kit installed.\n✓ Existing AI instruction content preserved; managed roles synchronized.\n✓ Node/npm is the only Web Kit runtime requirement.\n");
+  console.log("\n✓ Web Development Agent Kit installed.\n✓ AI instruction scope synchronized; user-owned instruction content preserved.\n✓ Node/npm is the only Web Kit runtime requirement.\n");
 } else if (action === "update") {
-  console.log("\n✓ Web Development Agent Kit updated/refreshed.\n✓ Project discovery, managed AI roles, routing, and detected skills are synchronized.\n✓ No system Python runtime is required by Web Kit.\n");
+  console.log("\n✓ Web Development Agent Kit updated/refreshed.\n✓ Project discovery, chosen AI instruction scope, routing, and detected skills are synchronized.\n✓ No system Python runtime is required by Web Kit.\n");
 } else if (action === "doctor") {
   console.log("\n✓ Web Development Agent Kit health check completed.\n✓ No automatic downgrade was performed.\n");
 }

@@ -489,7 +489,26 @@ This is **not** the normal developer UX.
 
 ## Non-destructive AI instruction files
 
-Web Kit never replaces project-owned AI instructions.
+Web Kit never replaces project-owned AI instructions. By default it retains the
+original shared-file integration. To use Web Kit privately without committing
+its workflow rules for teammates, opt into local mode:
+
+```bash
+npx @ihgen/web-kit install --local-instructions
+# or, for an existing installation:
+npx @ihgen/web-kit update --local-instructions
+npx @ihgen/web-kit session codex --prompt "Implement my feature"
+```
+
+Local mode keeps `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot, and Cursor
+equivalents in the Git-ignored `.agent-core/instructions/` directory. Web
+Kit-controlled Codex/Claude sessions and supervised interactive launches load
+these explicitly. It removes only
+Web Kit-marked roles from previously shared project files; team-owned text
+is preserved. Unwrapped AI sessions do not automatically load the
+local copies. The choice persists on later updates.
+
+**Shared mode** continues to manage these project-level targets:
 
 Managed targets include:
 

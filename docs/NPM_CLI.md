@@ -133,7 +133,15 @@ Web Kit never requires `python`, `python3`, `py`, pip, or pipx during normal ins
 
 ## AI instruction safety
 
-Existing project-owned instruction files are preserved:
+To keep Web Kit guidance local to your own checkout rather than inject it into
+team-level files, choose `install --local-instructions` or
+`update --local-instructions`. Local files live under Git-ignored
+`.agent-core/instructions/`, and Web Kit-controlled Codex/Claude sessions and
+supervised interactive launches load
+them explicitly. Your choice survives later updates. Use
+`update --shared-instructions` only if you want shared project integration.
+
+In the default shared mode, these files are preserved:
 
 ```text
 AGENTS.md

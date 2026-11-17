@@ -27,7 +27,9 @@ Canonical generated project metadata is stored at:
 
 The Context Router uses this profile for initial routing instead of requiring a generated project header inside every AI instruction file.
 
-## Non-destructive instruction-file behavior
+## Choose shared or local instructions
+
+The default **shared** mode retains Web Kit's existing integration with project instructions:
 
 Web Kit manages these AI instruction locations:
 
@@ -38,6 +40,52 @@ GEMINI.md
 .github/copilot-instructions.md
 .cursor/rules/ihgen-web-kit.mdc
 ```
+
+If you want Web Kit for yourself without making its workflow mandatory for teammates,
+choose **local** mode:
+
+```bash
+npx @ihgen/web-kit install --local-instructions
+# In an already installed project:
+npx @ihgen/web-kit update --local-instructions
+```
+
+Local mode generates separate instructions under:
+
+```text
+.agent-core/instructions/AGENTS.md
+.agent-core/instructions/CLAUDE.md
+.agent-core/instructions/GEMINI.md
+.agent-core/instructions/copilot-instructions.md
+.agent-core/instructions/ihgen-web-kit.mdc
+```
+
+These files are protected by a nested `.gitignore`, including when installation
+happens before `git init`. Local mode removes **only Web Kit-marked role blocks**
+from any older shared project instructions. Project-written text and any old
+generated project summaries remain untouched. It refuses malformed or duplicate
+markers rather than risk corrupting the file.
+
+Web Kit's controlled `session codex` and `session claude` commands inject the
+corresponding local instructions into each provider session, including after a
+context rollover. Normal interactive `codex` / `claude` launches through Web
+Kit's transparent supervisor also use them. Codex receives additive developer
+instructions, and Claude appends the local instruction file to its normal
+prompt. Existing custom Codex `developer_instructions` or Claude
+`--append-system-prompt-file` arguments take precedence and are never silently
+replaced; in that situation, use an explicit Web Kit `session` command.
+
+Unwrapped providers and other AI clients do **not** auto-load the files from
+this hidden directory. Other clients can load their local file explicitly,
+but this mode does not imply automatic integration with their unmodified CLIs.
+
+Your selection persists in `.agent-kit.json`, so subsequent plain `update`
+commands keep the same scope. To deliberately return to shared mode, run
+`npx @ihgen/web-kit update --shared-instructions`. That restores Web Kit role
+blocks in the project's shared instruction files; it does not delete the local
+copies.
+
+## Non-destructive instruction-file behavior (shared mode)
 
 ### If the file already exists
 
@@ -63,7 +111,7 @@ Web Kit managed roles block
 
 The one-time summary includes lightweight project identity/stack/structure information. Later Web-Kit updates leave that summary unchanged and refresh only the managed roles block.
 
-## No parallel AGENTS file
+## No extra root AGENTS file
 
 Fresh installs do not create `AGENTS.web-kit.md`.
 
@@ -92,7 +140,7 @@ Web Kit project discovery and AI-role management use Node.js:
 node scripts/agent-kit.mjs install /path/to/project
 ```
 
-Normal users should use:
+Normal users can use:
 
 ```bash
 npx @ihgen/web-kit

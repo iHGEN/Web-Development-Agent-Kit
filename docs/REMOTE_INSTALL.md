@@ -74,7 +74,7 @@ Invoke-WebRequest `
 └── skills/
 ```
 
-AI instruction files follow a non-destructive policy:
+AI instruction files follow a non-destructive policy in the default shared mode:
 
 ```text
 file exists
@@ -87,6 +87,13 @@ file missing
 ```
 
 Managed targets include `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, GitHub Copilot instructions, and Cursor rules.
+
+For a personal, non-shared integration, run `npx @ihgen/web-kit install
+--local-instructions` (or `update --local-instructions`). Web Kit puts its
+provider-specific files in Git-ignored `.agent-core/instructions/` and its
+controlled or supervised Codex/Claude sessions load them without altering the team's rules.
+Switching from shared mode removes only Web Kit-marked blocks from the old
+shared files. See [project-aware AI instructions](PROJECT_AWARE_AGENTS.md).
 
 ## Updating later
 

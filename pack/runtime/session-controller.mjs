@@ -437,14 +437,22 @@ function markHandoffConsumed(file, sessionId) {
 function progressProtocol(taskId) {
   return `Before your final response in every controller cycle, atomically write \`.agent-core/state/session-progress.json\` as JSON with this shape:\n\n{\n  "schema_version": 1,\n  "task_id": "${taskId}",\n  "status": "continue | done | blocked",\n  "phase": "current Web-Kit phase",\n  "role": "current routed role",\n  "summary": "compact evidence-backed summary of what this cycle completed",\n  "completed_steps": [],\n  "current_step": "current/just-completed step",\n  "pending_steps": [],\n  "files_changed": [],\n  "validation_completed": [],\n  "validation_pending": [],\n  "decisions": [],\n  "constraints": [],\n  "next_action": "exact next safe action, required when status=continue",\n  "updated_at": "ISO-8601 timestamp"\n}\n\nThis file MUST be freshly rewritten during the current controller cycle; stale progress from a prior cycle is rejected. Use status=done only when the original user request has passed the required Web-Kit final validation. Use status=blocked only when progress genuinely requires user input/permission. Otherwise use status=continue.`;
 }
-function initialPrompt(taskId, originalPrompt) {
-  return `You are operating under the iHGEN Web Kit automatic Session Controller.\n\nOriginal user request:\n${originalPrompt}\n\nFollow the repository's existing AGENTS/CLAUDE instructions and the canonical \`.agent-core/rules/workflow.md\`. Execute exactly ONE safe Web-Kit workflow unit in this controller cycle: one discovery/planning/validation phase, or one approved implementation step plus its required local checks/Graph Refresh Gate/handoff. A small request may finish in one unit if that unit legitimately reaches final validation. Do not batch multiple independent implementation steps merely to finish in one process.\n\n${progressProtocol(taskId)}\n\nThe Session Controller owns context rollover. Do not run /clear, /new, or /compact to manage this controlled session. When the controller reaches its context threshold it will persist a handoff and start a fresh provider process automatically.`;
+function sessionInstructions(project, provider) {
+  const scope = readJson(path.join(project, ".agent-kit.json"), {})?.ai_compatibility?.instruction_scope;
+  if (scope !== "local") return "";
+  const relative = `.agent-core/instructions/${provider === "claude" ? "CLAUDE.md" : "AGENTS.md"}`;
+  const file = path.join(project, relative);
+  if (!fs.existsSync(file)) throw new Error(`Missing local Web Kit instructions: ${relative}. Run Web Kit update first.`);
+  return `Local Web Kit instructions for this managed session only (${relative}):\n${fs.readFileSync(file, "utf8").trim()}\n\nThese instructions do not replace the project's own AGENTS.md / CLAUDE.md. Preserve and follow project-owned instructions too.\n\n`;
 }
-function continuePrompt(taskId) {
-  return `Continue the same original task under the Web Kit Session Controller. Read \`.agent-core/state/session-progress.json\`, verify any material claims against current repository source/diff/tests, and execute exactly the NEXT single safe Web-Kit workflow unit.\n\n${progressProtocol(taskId)}\n\nDo not run /clear, /new, or /compact; the controller owns context rollover.`;
+function initialPrompt(taskId, originalPrompt, localInstructions = "") {
+  return `You are operating under the iHGEN Web Kit automatic Session Controller.\n\n${localInstructions}Original user request:\n${originalPrompt}\n\nFollow the repository's existing AGENTS/CLAUDE instructions and the canonical \`.agent-core/rules/workflow.md\`. Execute exactly ONE safe Web-Kit workflow unit in this controller cycle: one discovery/planning/validation phase, or one approved implementation step plus its required local checks/Graph Refresh Gate/handoff. A small request may finish in one unit if that unit legitimately reaches final validation. Do not batch multiple independent implementation steps merely to finish in one process.\n\n${progressProtocol(taskId)}\n\nThe Session Controller owns context rollover. Do not run /clear, /new, or /compact to manage this controlled session. When the controller reaches its context threshold it will persist a handoff and start a fresh provider process automatically.`;
 }
-function rolloverPrompt(taskId, handoff) {
-  return `A Web Kit Session Controller context rollover just created this fresh provider session.\n\nRead \`.agent-core/state/context-handoff.json\` first. The handoff below is routing evidence, not source of truth. Verify current source/diff/tests/runtime before relying on it. Resume the exact original task at the recorded next action and execute exactly ONE safe workflow unit.\n\nHANDOFF:\n${JSON.stringify(handoff, null, 2)}\n\n${progressProtocol(taskId)}\n\nDo not reconstruct unrelated history. Do not run /clear, /new, or /compact; the controller owns future rollovers.`;
+function continuePrompt(taskId, localInstructions = "") {
+  return `${localInstructions}Continue the same original task under the Web Kit Session Controller. Read \`.agent-core/state/session-progress.json\`, verify any material claims against current repository source/diff/tests, and execute exactly the NEXT single safe Web-Kit workflow unit.\n\n${progressProtocol(taskId)}\n\nDo not run /clear, /new, or /compact; the controller owns context rollover.`;
+}
+function rolloverPrompt(taskId, handoff, localInstructions = "") {
+  return `A Web Kit Session Controller context rollover just created this fresh provider session.\n\n${localInstructions}Read \`.agent-core/state/context-handoff.json\` first. The handoff below is routing evidence, not source of truth. Verify current source/diff/tests/runtime before relying on it. Resume the exact original task at the recorded next action and execute exactly ONE safe workflow unit.\n\nHANDOFF:\n${JSON.stringify(handoff, null, 2)}\n\n${progressProtocol(taskId)}\n\nDo not reconstruct unrelated history. Do not run /clear, /new, or /compact; the controller owns future rollovers.`;
 }
 
 async function main() {
@@ -473,6 +481,7 @@ async function main() {
   if (!CLAUDE_PERMISSION_MODES.has(providerOptions.claudePermissionMode)) throw new Error(`Invalid --claude-permission-mode: ${providerOptions.claudePermissionMode}`);
   if (!originalPrompt) throw new Error("Missing task prompt. Use --prompt, --prompt-file, or place the prompt after --.");
   if (!fs.existsSync(path.join(project, ".agent-core", "rules", "workflow.md"))) throw new Error("Web Kit is not installed in this project. Run `npx @ihgen/web-kit` first.");
+  const localInstructions = sessionInstructions(project, provider);
 
   const executable = resolveProvider(provider, project);
   if (!executable) throw new Error(`${provider} CLI was not found. Install/authenticate that AI CLI first, then retry.`);
@@ -485,7 +494,7 @@ async function main() {
   fs.mkdirSync(stateDir, { recursive: true });
 
   let sessionId = null;
-  let nextPrompt = initialPrompt(taskId, originalPrompt);
+  let nextPrompt = initialPrompt(taskId, originalPrompt, localInstructions);
   let cycle = 0;
   let rollovers = 0;
   let telemetryMissingStreak = 0;
@@ -607,7 +616,7 @@ async function main() {
       console.log(`Validated handoff: ${posix(path.relative(project, paths.current))}`);
       console.log("Starting a fresh AI process automatically; no /clear or /new input is required.");
       sessionId = null;
-      nextPrompt = rolloverPrompt(taskId, handoff);
+      nextPrompt = rolloverPrompt(taskId, handoff, localInstructions);
       activePendingHandoff = true;
       const nextState = readJson(controllerStateFile, {});
       Object.assign(nextState, { rollovers, provider_session_id: null, last_rollover_reason: reason, last_handoff: posix(path.relative(project, paths.current)), updated_at: nowIso() });
@@ -616,7 +625,7 @@ async function main() {
       continue;
     }
 
-    nextPrompt = continuePrompt(taskId);
+    nextPrompt = continuePrompt(taskId, localInstructions);
   }
 
   const state = readJson(controllerStateFile, {});
