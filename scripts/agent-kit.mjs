@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyProjectProfile, readJson, writeJson } from "./project-profile.mjs";
-import { applyAiCompatibility, assertLocalMigrationSafe, findUnmanagedGraphifyConflicts, hasLocalInstructionScope, localInstructionCompatibility, localInstructionPrivacy, localAdapterStatus, protectLocalInstructions, ROLE_START, ROLE_END } from "./ai-compat.mjs";
+import { applyAiCompatibility, assertLocalMigrationSafe, assertSharedTransitionSafe, findUnmanagedGraphifyConflicts, hasLocalInstructionScope, localInstructionCompatibility, localInstructionPrivacy, localAdapterStatus, protectLocalInstructions, ROLE_START, ROLE_END } from "./ai-compat.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -253,7 +253,7 @@ function install(project, options = {}) {
     assertLocalMigrationSafe(project);
     // Validate privacy before writing any shared install metadata or files.
     protectLocalInstructions(project);
-  }
+  } else assertSharedTransitionSafe(project);
   const { skills, evidence } = detect(project);
   const securityReviewStateExcluded = ensureSecurityReviewStateExcluded(project);
   const core = path.join(project, ".agent-core");
@@ -323,7 +323,12 @@ function doctor(project) {
   const agentFiles = fs.existsSync(agentDir) ? fs.readdirSync(agentDir).filter((name) => name.endsWith(".md")) : [];
   const local = hasLocalInstructionScope(project);
   const instructionScope = local ? "local" : "shared";
-  const compatibility = local ? localInstructionCompatibility(project) : cfg.ai_compatibility?.instruction_scope === "shared" ? cfg.ai_compatibility : null;
+  const sharedCompatibility = cfg.ai_compatibility;
+  // Older Web Kit installs had shared compatibility metadata without an
+  // instruction_scope field; their managed role files are still required.
+  const compatibility = local ? localInstructionCompatibility(project)
+    : sharedCompatibility && (sharedCompatibility.instruction_scope == null || sharedCompatibility.instruction_scope === "shared")
+      ? sharedCompatibility : null;
   const instructionPaths = Object.fromEntries(Object.entries(compatibility?.managed_roles || {
     agents: "AGENTS.md",
     claude: "CLAUDE.md",

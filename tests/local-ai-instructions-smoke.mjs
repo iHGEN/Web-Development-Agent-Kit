@@ -139,6 +139,16 @@ try {
   kit(clone, "update");
   assert.equal(JSON.parse(read(clone, ".agent-kit.json")).ai_compatibility.instruction_scope, "shared");
   assert(!fs.existsSync(path.join(clone, localScope)), "clone adopted local scope on default update");
+  // Older shared installations have compatibility metadata but no explicit
+  // instruction_scope. Missing shared roles must still fail doctor.
+  const legacyConfig = JSON.parse(read(clone, ".agent-kit.json"));
+  delete legacyConfig.ai_compatibility.instruction_scope;
+  write(clone, ".agent-kit.json", `${JSON.stringify(legacyConfig, null, 2)}\n`);
+  fs.unlinkSync(path.join(clone, "CLAUDE.md"));
+  const legacyDoctor = spawnSync(process.execPath, [installer, "doctor", clone], { cwd: clone, encoding: "utf8" });
+  assert.notEqual(legacyDoctor.status, 0, "doctor accepted a legacy shared installation missing CLAUDE.md");
+  assert.match(legacyDoctor.stdout, /AI managed roles \(shared\): MISSING/);
+  assert.match(legacyDoctor.stdout, /Status: NEEDS ATTENTION/);
 
   // Local adapters must also be ignored when the install predates git init.
   const beforeGit = path.join(temp, "before-git-init");
@@ -151,6 +161,35 @@ try {
   const trackedDoctor = spawnSync(process.execPath, [installer, "doctor", beforeGit], { cwd: beforeGit, encoding: "utf8" });
   assert.notEqual(trackedDoctor.status, 0, "doctor accepted a forcibly tracked private instruction file");
   assert.match(trackedDoctor.stdout, /Local AI Git protection: MISSING/);
+
+  // Switching to shared mode must preflight a tracked private scope BEFORE
+  // mutating team instructions, native adapters, or shared metadata.
+  const blockedTransition = path.join(temp, "blocked-shared-transition");
+  fs.mkdirSync(blockedTransition);
+  run("git", ["init", "-q"], blockedTransition);
+  write(blockedTransition, "package.json", '{"name":"blocked-shared-transition"}\n');
+  write(blockedTransition, "AGENTS.md", "# Team-owned AGENTS instructions\n");
+  kit(blockedTransition, "install", "--local-instructions");
+  run("git", ["add", "-f", localScope], blockedTransition);
+  const protectedPaths = [...sharedPaths, ...adapterPaths, localScope,
+    ".agent-kit.json", ".agent-core/index/project-profile.json"];
+  const beforeTransition = new Map(protectedPaths.map((relative) => {
+    const file = path.join(blockedTransition, relative);
+    return [relative, fs.existsSync(file) ? fs.readFileSync(file) : null];
+  }));
+  const beforeStatus = run("git", ["status", "--porcelain"], blockedTransition).stdout;
+  const rejectedTransition = spawnSync(process.execPath,
+    [installer, "update", blockedTransition, "--shared-instructions"],
+    { cwd: blockedTransition, encoding: "utf8" });
+  assert.notEqual(rejectedTransition.status, 0, "tracked local scope allowed shared-mode transition");
+  assert.match(rejectedTransition.stderr, /Cannot remove tracked or symlinked local Web Kit scope/);
+  for (const [relative, previous] of beforeTransition) {
+    const file = path.join(blockedTransition, relative);
+    assert.equal(fs.existsSync(file), previous !== null, `${relative}: rejected transition changed file existence`);
+    if (previous !== null) assert.deepEqual(fs.readFileSync(file), previous, `${relative}: rejected transition modified file contents`);
+  }
+  assert.equal(run("git", ["status", "--porcelain"], blockedTransition).stdout, beforeStatus,
+    "rejected shared-mode transition changed the Git working tree");
 
   const migrated = path.join(temp, "migrated");
   fs.mkdirSync(migrated);
@@ -319,7 +358,7 @@ try {
   assert.match(warningDoctor.stdout, /CLAUDE\.md: direct Graphify update command outside the managed roles block/,
     "doctor should show the shared warning filename expected by the existing smoke test");
   assert.match(warningDoctor.stdout, /Status: HEALTHY WITH WARNINGS/);
-  console.log("Local Web Kit AI instructions: PASS (privacy, commit-and-clone, nested tracking, marker validation, named profiles, Graphify warning, all five clients, rollover and shared opt-in).");
+  console.log("Local Web Kit AI instructions: PASS (privacy, legacy shared doctor, atomic transition preflight, commit-and-clone, nested tracking, marker validation, named profiles, Graphify warning, all five clients, rollover and shared opt-in).");
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

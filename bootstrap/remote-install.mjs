@@ -117,7 +117,8 @@ function installTransparentSupervisor(project) {
   try { status = JSON.parse(String(result.stdout || "").trim()); } catch {}
   console.log(`Transparent context supervisor: ${status?.enabled === false ? "installed but disabled" : "enabled"}`);
   console.log(`Context threshold: ${status?.threshold_percent || 50}%`);
-  if (readJson(path.join(project, ".agent-kit.json")).ai_compatibility?.instruction_scope === "local") {
+  const localScope = readJson(path.join(project, ".agent-core", "instructions", ".local-scope.json"));
+  if (localScope.schema_version === 1 && localScope.instruction_scope === "local") {
     console.log("Local AI rules are loaded by Web Kit-supervised `codex` / `claude` and explicit `web-kit session` commands; unwrapped provider sessions retain only their own instructions.");
   } else {
     console.log("After opening a new terminal once, use `codex` or `claude` normally; no Web-Kit session command is required.");

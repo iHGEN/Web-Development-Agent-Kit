@@ -362,6 +362,16 @@ export function protectLocalInstructions(project) {
   }
 }
 
+export function assertSharedTransitionSafe(project) {
+  // Reject an unsafe checkout-local scope before any team-facing instruction
+  // updates or native adapter cleanup. In particular, a forcibly tracked
+  // overlay must not leave the project half in shared and half in local mode.
+  const overlayFile = path.join(project, LOCAL_SCOPE_FILE);
+  if (fs.existsSync(overlayFile) && (isTracked(project, LOCAL_SCOPE_FILE) || hasUnsafeAdapterPath(project, LOCAL_SCOPE_FILE))) {
+    throw new Error("Cannot remove tracked or symlinked local Web Kit scope. Untrack or inspect it before switching to shared mode.");
+  }
+}
+
 export function assertLocalMigrationSafe(project) {
   for (const [relative] of Object.values(SHARED_TARGETS)) {
     const file = path.join(project, relative);
@@ -518,7 +528,7 @@ export function applyAiCompatibility(project, profile = null, options = {}) {
     // Refuse a partial or ambiguous migration before touching shared files.
     assertLocalMigrationSafe(project);
     protectLocalInstructions(project);
-  }
+  } else assertSharedTransitionSafe(project);
 
   const actions = {};
   for (const [key, [relative, label]] of Object.entries(targets)) {
@@ -585,9 +595,7 @@ export function applyAiCompatibility(project, profile = null, options = {}) {
   if (scope === "local") {
     writeJson(overlayFile, { schema_version: 1, instruction_scope: "local", ai_compatibility: compatibility });
   } else if (fs.existsSync(overlayFile)) {
-    if (isTracked(project, LOCAL_SCOPE_FILE) || hasUnsafeAdapterPath(project, LOCAL_SCOPE_FILE)) {
-      throw new Error("Cannot remove tracked or symlinked local Web Kit scope. Untrack or inspect it before switching to shared mode.");
-    }
+    assertSharedTransitionSafe(project);
     fs.unlinkSync(overlayFile);
   }
 
