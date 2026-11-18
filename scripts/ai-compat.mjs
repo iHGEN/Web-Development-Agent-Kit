@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 export const ROLE_START = "<!-- WEB-AGENT-KIT:AI-ROLES:START -->";
 export const ROLE_END = "<!-- WEB-AGENT-KIT:AI-ROLES:END -->";
@@ -8,6 +9,262 @@ const LEGACY_BRIDGE_START = "<!-- WEB-AGENT-KIT:AI-BRIDGE:START -->";
 const LEGACY_BRIDGE_END = "<!-- WEB-AGENT-KIT:AI-BRIDGE:END -->";
 const SUMMARY_START = "<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:START -->";
 const SUMMARY_END = "<!-- WEB-AGENT-KIT:PROJECT-SUMMARY:END -->";
+const SHARED_TARGETS = {
+  agents: ["AGENTS.md", "AGENTS-compatible assistants"],
+  claude: ["CLAUDE.md", "Claude Code"],
+  gemini: ["GEMINI.md", "Gemini CLI"],
+  "github-copilot": [".github/copilot-instructions.md", "GitHub Copilot"],
+  cursor: [".cursor/rules/ihgen-web-kit.mdc", "Cursor"],
+};
+const LOCAL_TARGETS = {
+  agents: [".agent-core/instructions/AGENTS.md", "AGENTS-compatible assistants"],
+  claude: [".agent-core/instructions/CLAUDE.md", "Claude Code"],
+  gemini: [".agent-core/instructions/GEMINI.md", "Gemini CLI"],
+  "github-copilot": [".agent-core/instructions/copilot-instructions.md", "GitHub Copilot"],
+  cursor: [".agent-core/instructions/ihgen-web-kit.mdc", "Cursor"],
+};
+const LOCAL_ADAPTER_MARKER = "<!-- WEB-AGENT-KIT:LOCAL-ADAPTER -->";
+const LOCAL_ADAPTER_FILES = {
+  "github-copilot": ".github/instructions/ihgen-web-kit-local.instructions.md",
+  cursor: ".cursor/rules/ihgen-web-kit-local.mdc",
+};
+const GEMINI_SETTINGS = ".gemini/settings.json";
+const GEMINI_CONTEXT = LOCAL_TARGETS.gemini[0];
+const GEMINI_ADAPTER_STATE = ".agent-core/instructions/.gemini-adapter-state.json";
+const ADAPTER_IGNORE_COMMENT = "# iHGEN Web Kit private adapter";
+export const LOCAL_SCOPE_FILE = ".agent-core/instructions/.local-scope.json";
+
+function gitResult(project, args) {
+  return spawnSync("git", args, { cwd: project, encoding: "utf8", windowsHide: true });
+}
+
+function gitRoot(project) {
+  const result = gitResult(project, ["rev-parse", "--show-toplevel"]);
+  return !result.error && result.status === 0 ? path.resolve(result.stdout.trim()) : null;
+}
+
+function isTracked(project, relative) {
+  const root = gitRoot(project);
+  if (!root) return false;
+  const relativeToRoot = path.relative(root, path.join(project, relative));
+  const result = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativeToRoot], {
+    cwd: root, encoding: "utf8", windowsHide: true,
+  });
+  return result.status === 0;
+}
+
+function hasUnsafeAdapterPath(project, relative) {
+  let current = project;
+  for (const part of relative.split("/")) {
+    current = path.join(current, part);
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) return true;
+  }
+  return false;
+}
+
+function isAdapterProtected(project, relative) {
+  const root = gitRoot(project);
+  if (root) return gitResult(project, ["check-ignore", "-q", "--", relative]).status === 0;
+  const ignore = path.join(project, path.dirname(relative), ".gitignore");
+  return fs.existsSync(ignore) && fs.readFileSync(ignore, "utf8").split(/\r?\n/).includes(`/${path.basename(relative)}`);
+}
+
+function adapterIgnoreContent(relative) {
+  return `${ADAPTER_IGNORE_COMMENT}\n/.gitignore\n/${path.basename(relative)}\n`;
+}
+
+function gitExcludeInfo(project, relative) {
+  const root = gitRoot(project);
+  if (!root) return null;
+  const gitPath = gitResult(project, ["rev-parse", "--git-path", "info/exclude"]);
+  if (gitPath.error || gitPath.status !== 0) return null;
+  const target = gitPath.stdout.trim();
+  if (!target) return null;
+  const repoRelative = path.relative(root, path.join(project, relative)).split(path.sep).join("/");
+  if (repoRelative.startsWith("../") || repoRelative === ".." || /[\r\n]/.test(repoRelative)) return null;
+  return {
+    file: path.isAbsolute(target) ? target : path.resolve(project, target),
+    pattern: `/${repoRelative.replace(/[\\*?\[\]]/g, "\\$&")}`,
+  };
+}
+
+function protectAdapter(project, relative) {
+  const file = path.join(project, relative);
+  const ignoreFile = path.join(path.dirname(file), ".gitignore");
+  // This only creates new, narrowly scoped local ignore files; existing team
+  // .gitignore files are never rewritten, even when they are untracked.
+  if (!fs.existsSync(ignoreFile)) {
+    fs.mkdirSync(path.dirname(ignoreFile), { recursive: true });
+    fs.writeFileSync(ignoreFile, adapterIgnoreContent(relative), "utf8");
+  }
+  const root = gitRoot(project);
+  if (!root) return isAdapterProtected(project, relative);
+  const info = gitExcludeInfo(project, relative);
+  if (!info) return false;
+  fs.mkdirSync(path.dirname(info.file), { recursive: true });
+  const existing = fs.existsSync(info.file) ? fs.readFileSync(info.file, "utf8") : "";
+  if (!existing.split(/\r?\n/).includes(info.pattern)) {
+    fs.appendFileSync(info.file, `${existing && !existing.endsWith("\n") ? "\n" : ""}${ADAPTER_IGNORE_COMMENT}\n${info.pattern}\n`, "utf8");
+  }
+  return isAdapterProtected(project, relative);
+}
+
+function unprotectAdapter(project, relative) {
+  const info = gitExcludeInfo(project, relative);
+  if (info && fs.existsSync(info.file)) {
+    const text = fs.readFileSync(info.file, "utf8");
+    const pair = `${ADAPTER_IGNORE_COMMENT}\n${info.pattern}\n`;
+    if (text.includes(pair)) fs.writeFileSync(info.file, text.replace(pair, ""), "utf8");
+  }
+  const ignore = path.join(project, path.dirname(relative), ".gitignore");
+  if (fs.existsSync(ignore) && fs.readFileSync(ignore, "utf8") === adapterIgnoreContent(relative)) fs.unlinkSync(ignore);
+}
+
+function hasOneCompleteRolesBlock(value) {
+  return value.split(ROLE_START).length === 2 && value.split(ROLE_END).length === 2
+    && value.indexOf(ROLE_START) < value.indexOf(ROLE_END);
+}
+
+function writeLocalAdapter(project, relative, content) {
+  const file = path.join(project, relative);
+  if (hasUnsafeAdapterPath(project, relative)) return "blocked: symbolic link in adapter path";
+  if (isTracked(project, relative)) return "blocked: tracked team file";
+  if (fs.existsSync(file)) {
+    if (!fs.lstatSync(file).isFile()) return "blocked: adapter is not a regular file";
+    const existing = fs.readFileSync(file, "utf8");
+    if (!existing.includes(LOCAL_ADAPTER_MARKER)) return "blocked: existing non-Web-Kit file";
+    if (!hasOneCompleteRolesBlock(existing)) return "blocked: malformed Web Kit adapter";
+    content = replaceMarkedSection(existing, ROLE_START, ROLE_END,
+      content.slice(content.indexOf(ROLE_START), content.indexOf(ROLE_END) + ROLE_END.length));
+  }
+  if (!protectAdapter(project, relative)) return "blocked: cannot ensure private Git exclusion";
+  fs.writeFileSync(file, content, "utf8");
+  return "active";
+}
+
+function geminiContextNames(value) {
+  if (value === undefined) return ["GEMINI.md"];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return [...value];
+  return null;
+}
+
+function installGeminiAdapter(project) {
+  if (hasUnsafeAdapterPath(project, GEMINI_SETTINGS)) return "blocked: symbolic link in Gemini settings path";
+  if (isTracked(project, GEMINI_SETTINGS)) return "blocked: existing tracked Gemini settings";
+  const file = path.join(project, GEMINI_SETTINGS);
+  let settings = {};
+  const existed = fs.existsSync(file);
+  if (existed) {
+    if (!isAdapterProtected(project, GEMINI_SETTINGS)) {
+      return "blocked: existing unprotected Gemini settings (add a local ignore first)";
+    }
+    if (!fs.statSync(file).isFile()) return "blocked: Gemini settings are not a regular file";
+    try { settings = JSON.parse(fs.readFileSync(file, "utf8")); }
+    catch { return "blocked: Gemini settings are not valid JSON"; }
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return "blocked: invalid Gemini settings shape";
+    if (settings.context !== undefined && (!settings.context || typeof settings.context !== "object" || Array.isArray(settings.context))) {
+      return "blocked: invalid Gemini context settings";
+    }
+  }
+  const prior = settings.context?.fileName;
+  const names = geminiContextNames(prior);
+  if (!names) return "blocked: unsupported Gemini context.fileName value";
+  if (!protectAdapter(project, GEMINI_SETTINGS)) return "blocked: cannot ensure private Git exclusion";
+  const stateFile = path.join(project, GEMINI_ADAPTER_STATE);
+  if (!fs.existsSync(stateFile)) {
+    writeJson(stateFile, { created: !existed, had_file_name: prior !== undefined, original_file_name: prior ?? null });
+  }
+  settings.context = { ...(settings.context || {}), fileName: [...new Set([...names, GEMINI_CONTEXT])] };
+  writeJson(file, settings);
+  return "active";
+}
+
+function removeLocalAdapter(project, relative, generated) {
+  const file = path.join(project, relative);
+  if (!fs.existsSync(file)) return "absent";
+  if (hasUnsafeAdapterPath(project, relative)) return "preserved: symbolic link in adapter path";
+  if (isTracked(project, relative)) return "preserved: tracked file";
+  const contents = fs.readFileSync(file, "utf8");
+  if (!contents.includes(LOCAL_ADAPTER_MARKER)) return "preserved: not Web-Kit-owned";
+  if (!hasOneCompleteRolesBlock(contents)) return "preserved: malformed Web Kit adapter";
+  if (contents === generated) { fs.unlinkSync(file); unprotectAdapter(project, relative); return "removed"; }
+  // The user extended this adapter. Remove only Web Kit's roles and marker;
+  // keep their notes and native frontmatter rather than deleting their edits.
+  const withoutRoles = replaceMarkedSection(contents, ROLE_START, ROLE_END, "")
+    .replace(`# ${LOCAL_ADAPTER_MARKER}`, "").replace(LOCAL_ADAPTER_MARKER, "");
+  fs.writeFileSync(file, withoutRoles, "utf8");
+  return "removed Web Kit roles; preserved user edits";
+}
+
+function removeGeminiAdapter(project) {
+  const stateFile = path.join(project, GEMINI_ADAPTER_STATE);
+  if (!fs.existsSync(stateFile)) return "absent";
+  const relative = GEMINI_SETTINGS;
+  if (hasUnsafeAdapterPath(project, relative)) return "preserved: symbolic link in Gemini settings path";
+  if (isTracked(project, relative)) return "preserved: tracked Gemini settings";
+  const file = path.join(project, relative);
+  if (!fs.existsSync(file)) { fs.unlinkSync(stateFile); unprotectAdapter(project, relative); return "absent"; }
+  let settings;
+  try { settings = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch { return "preserved: Gemini settings were edited to invalid JSON"; }
+  const names = geminiContextNames(settings.context?.fileName);
+  if (!names || !names.includes(GEMINI_CONTEXT)) return "preserved: Gemini context was changed";
+  const state = readJson(stateFile);
+  const remaining = names.filter((name) => name !== GEMINI_CONTEXT);
+  const original = geminiContextNames(state.had_file_name ? state.original_file_name : undefined);
+  if (JSON.stringify(remaining) === JSON.stringify(original)) {
+    if (state.had_file_name) settings.context.fileName = state.original_file_name;
+    else delete settings.context.fileName;
+  } else settings.context.fileName = remaining;
+  if (!Object.keys(settings.context).length) delete settings.context;
+  if (state.created && !Object.keys(settings).length) fs.unlinkSync(file);
+  else writeJson(file, settings);
+  fs.unlinkSync(stateFile);
+  if (!fs.existsSync(file)) unprotectAdapter(project, relative);
+  return "removed";
+}
+
+function generatedAdapter(project, key) {
+  const local = path.join(project, LOCAL_TARGETS[key][0]);
+  if (!fs.existsSync(local)) return null;
+  const content = fs.readFileSync(local, "utf8");
+  return key === "cursor" ? content.replace(/^---\n/, `---\n# ${LOCAL_ADAPTER_MARKER}\n`)
+    : `---\napplyTo: "**/*"\n---\n\n${LOCAL_ADAPTER_MARKER}\n${content}`;
+}
+
+function synchronizeLocalAdapters(project, scope) {
+  if (scope === "shared") return {
+    "github-copilot": removeLocalAdapter(project, LOCAL_ADAPTER_FILES["github-copilot"], generatedAdapter(project, "github-copilot")),
+    cursor: removeLocalAdapter(project, LOCAL_ADAPTER_FILES.cursor, generatedAdapter(project, "cursor")),
+    gemini: removeGeminiAdapter(project),
+  };
+  return {
+    "github-copilot": writeLocalAdapter(project, LOCAL_ADAPTER_FILES["github-copilot"], generatedAdapter(project, "github-copilot")),
+    cursor: writeLocalAdapter(project, LOCAL_ADAPTER_FILES.cursor, generatedAdapter(project, "cursor")),
+    gemini: installGeminiAdapter(project),
+  };
+}
+
+export function localAdapterStatus(project) {
+  if (!hasLocalInstructionScope(project)) return {};
+  const result = {};
+  for (const [key, relative] of Object.entries(LOCAL_ADAPTER_FILES)) {
+    const file = path.join(project, relative);
+    const ready = !hasUnsafeAdapterPath(project, relative) && fs.existsSync(file)
+      && fs.lstatSync(file).isFile() && fs.readFileSync(file, "utf8").includes(LOCAL_ADAPTER_MARKER)
+      && hasOneCompleteRolesBlock(fs.readFileSync(file, "utf8"));
+    result[key] = ready && !isTracked(project, relative) && isAdapterProtected(project, relative) ? "active" : "missing or unprotected";
+  }
+  const geminiFile = path.join(project, GEMINI_SETTINGS);
+  const geminiState = path.join(project, GEMINI_ADAPTER_STATE);
+  const geminiCfg = readJson(geminiFile);
+  const geminiNames = geminiContextNames(geminiCfg.context?.fileName);
+  result.gemini = !hasUnsafeAdapterPath(project, GEMINI_SETTINGS) && fs.existsSync(geminiState)
+    && !isTracked(project, GEMINI_SETTINGS)
+    && geminiNames?.includes(GEMINI_CONTEXT) && isAdapterProtected(project, GEMINI_SETTINGS) ? "active" : "missing or unprotected";
+  return result;
+}
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); }
@@ -32,6 +289,111 @@ function appendWithoutChangingExisting(text, section) {
   if (!text) return `${section}\n`;
   const separator = text.endsWith("\n") || text.endsWith("\r") ? "" : "\n";
   return `${text}${separator}\n${section}\n`;
+}
+
+function removeMarkedRoles(file) {
+  if (!fs.existsSync(file)) return "absent";
+  const current = fs.readFileSync(file, "utf8");
+  let updated = current;
+  for (const [startMarker, endMarker] of [
+    [ROLE_START, ROLE_END],
+    [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END],
+  ]) {
+    const starts = current.split(startMarker).length - 1;
+    const ends = current.split(endMarker).length - 1;
+    if (starts !== ends || starts > 1 || (starts === 1 && current.indexOf(startMarker) > current.indexOf(endMarker))) {
+      throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
+    }
+    if (starts === 1) {
+      const start = updated.indexOf(startMarker);
+      const end = updated.indexOf(endMarker, start) + endMarker.length;
+      // The installer appends a single separator newline before its final
+      // roles block and one newline after it. Undo both for an EOF block.
+      if (updated[start - 1] === "\n" && updated.slice(end) === "\n") {
+        updated = updated.slice(0, start - 1) + updated.slice(end + 1);
+      } else updated = updated.slice(0, start) + updated.slice(end);
+    }
+  }
+  if (updated !== current) fs.writeFileSync(file, updated, "utf8");
+  return updated === current ? "unchanged" : "removed-web-kit-roles";
+}
+
+const localPrivatePaths = [...Object.values(LOCAL_TARGETS).map(([relative]) => relative), LOCAL_SCOPE_FILE];
+
+export function hasLocalInstructionScope(project) {
+  const overlay = readJson(path.join(project, LOCAL_SCOPE_FILE));
+  return overlay.schema_version === 1 && overlay.instruction_scope === "local";
+}
+
+export function localInstructionCompatibility(project) {
+  if (!hasLocalInstructionScope(project)) return null;
+  return readJson(path.join(project, LOCAL_SCOPE_FILE)).ai_compatibility || null;
+}
+
+export function localInstructionPrivacy(project) {
+  const ignore = path.join(project, ".agent-core", "instructions", ".gitignore");
+  const root = gitRoot(project);
+  if (!root) {
+    // Without a Git repository, the only auditable future-ignore policy is
+    // the exact self-ignoring policy Web Kit creates for this private folder.
+    return fs.existsSync(ignore) && fs.readFileSync(ignore, "utf8") === "*\n";
+  }
+  return localPrivatePaths.every((relative) => !isTracked(project, relative)
+    && gitResult(project, ["check-ignore", "-q", "--", relative]).status === 0);
+}
+
+export function protectLocalInstructions(project) {
+  const localRoot = path.join(project, ".agent-core", "instructions");
+  if ([".agent-core/instructions", ...localPrivatePaths].some((relative) => hasUnsafeAdapterPath(project, relative))) {
+    throw new Error("Cannot use symlinked Web Kit private instruction paths.");
+  }
+  fs.mkdirSync(localRoot, { recursive: true });
+  const ignore = path.join(localRoot, ".gitignore");
+  // A nested ignore also protects installs that happen before `git init`.
+  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n", "utf8");
+  else {
+    const text = fs.readFileSync(ignore, "utf8");
+    if (!text.split(/\r?\n/).includes("*") && !isTracked(project, ".agent-core/instructions/.gitignore")) {
+      fs.appendFileSync(ignore, `${text.endsWith("\n") ? "" : "\n"}*\n`, "utf8");
+    }
+  }
+  if (!localInstructionPrivacy(project)) {
+    throw new Error("Cannot ensure private Web Kit instructions are untracked and effectively Git-ignored. Check .agent-core/instructions/.gitignore and tracked files before installing local mode.");
+  }
+}
+
+export function assertSharedTransitionSafe(project) {
+  // Reject an unsafe checkout-local scope before any team-facing instruction
+  // updates or native adapter cleanup. In particular, a forcibly tracked
+  // overlay must not leave the project half in shared and half in local mode.
+  const overlayFile = path.join(project, LOCAL_SCOPE_FILE);
+  if (fs.existsSync(overlayFile) && (isTracked(project, LOCAL_SCOPE_FILE) || hasUnsafeAdapterPath(project, LOCAL_SCOPE_FILE))) {
+    throw new Error("Cannot remove tracked or symlinked local Web Kit scope. Untrack or inspect it before switching to shared mode.");
+  }
+}
+
+export function assertLocalMigrationSafe(project) {
+  for (const [relative] of Object.values(SHARED_TARGETS)) {
+    const file = path.join(project, relative);
+    if (!fs.existsSync(file)) continue;
+    const current = fs.readFileSync(file, "utf8");
+    for (const [start, end] of [[ROLE_START, ROLE_END], [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END]]) {
+      const starts = current.split(start).length - 1;
+      const ends = current.split(end).length - 1;
+      if (starts !== ends || starts > 1 || (starts === 1 && current.indexOf(start) > current.indexOf(end))) {
+        throw new Error(`Cannot safely migrate malformed or repeated Web Kit instruction markers: ${file}`);
+      }
+    }
+    // Both marker formats may coexist during migrations, but their ranges
+    // must not overlap or nest; otherwise removal would corrupt team content.
+    const ranges = [[ROLE_START, ROLE_END], [LEGACY_BRIDGE_START, LEGACY_BRIDGE_END]]
+      .filter(([start]) => current.includes(start))
+      .map(([start, end]) => [current.indexOf(start), current.indexOf(end) + end.length])
+      .sort((a, b) => a[0] - b[0]);
+    if (ranges.length > 1 && ranges[0][1] > ranges[1][0]) {
+      throw new Error(`Cannot safely migrate overlapping Web Kit instruction markers: ${file}`);
+    }
+  }
 }
 
 export function upsertRoles(file, section, initialContent = null) {
@@ -155,25 +517,35 @@ function cursorInitial(profile) {
   return `---\ndescription: Project instructions and iHGEN Web Kit roles\nalwaysApply: true\n---\n\n${projectSummary(profile, "Cursor")}`;
 }
 
-export function applyAiCompatibility(project, profile = null) {
+export function applyAiCompatibility(project, profile = null, options = {}) {
   project = path.resolve(project);
   profile = profile || readJson(path.join(project, ".agent-core", "index", "project-profile.json"));
+  const scope = options.instructionScope || "shared";
+  if (!["local", "shared"].includes(scope)) throw new Error(`Invalid AI instruction scope: ${scope}`);
+  const targets = scope === "local" ? LOCAL_TARGETS : SHARED_TARGETS;
 
-  const targets = {
-    agents: [path.join(project, "AGENTS.md"), "AGENTS-compatible assistants"],
-    claude: [path.join(project, "CLAUDE.md"), "Claude Code"],
-    gemini: [path.join(project, "GEMINI.md"), "Gemini CLI"],
-    "github-copilot": [path.join(project, ".github", "copilot-instructions.md"), "GitHub Copilot"],
-  };
+  if (scope === "local") {
+    // Refuse a partial or ambiguous migration before touching shared files.
+    assertLocalMigrationSafe(project);
+    protectLocalInstructions(project);
+  } else assertSharedTransitionSafe(project);
 
   const actions = {};
-  for (const [key, [file, label]] of Object.entries(targets)) actions[key] = upsertRoles(file, rolesMarkdown(label), projectSummary(profile, label));
-
-  const cursorPath = path.join(project, ".cursor", "rules", "ihgen-web-kit.mdc");
-  actions.cursor = upsertRoles(cursorPath, rolesMarkdown("Cursor"), cursorInitial(profile));
+  for (const [key, [relative, label]] of Object.entries(targets)) {
+    const file = path.join(project, relative);
+    actions[key] = upsertRoles(file, rolesMarkdown(label), key === "cursor" ? cursorInitial(profile) : projectSummary(profile, label));
+  }
+  if (scope === "local") {
+    for (const [key, [relative]] of Object.entries(SHARED_TARGETS)) {
+      actions[`removed-shared-${key}`] = removeMarkedRoles(path.join(project, relative));
+    }
+  }
+  const adapters = synchronizeLocalAdapters(project, scope);
+  for (const [key, action] of Object.entries(adapters)) actions[`local-adapter-${key}`] = action;
 
   const compatibility = {
-    canonical_instructions: "AGENTS.md",
+    instruction_scope: scope,
+    canonical_instructions: targets.agents[0],
     canonical_workflow: ".agent-core/rules/workflow.md",
     canonical_navigation_rule: ".agent-core/rules/repository-navigation.md",
     efficiency_policy_rule: ".agent-core/rules/efficiency-policy.md",
@@ -210,29 +582,36 @@ export function applyAiCompatibility(project, profile = null) {
     explicit_session_controller_fallback: ".agent-core/bin/session-controller.mjs",
     temporary_graphify_role: ".agent-core/state/graphify-bootstrap-role.md",
     native_agents_md: ["codex", "kimi", "agents-md-compatible"],
-    managed_roles: {
-      agents: "AGENTS.md",
-      claude: "CLAUDE.md",
-      gemini: "GEMINI.md",
-      "github-copilot": ".github/copilot-instructions.md",
-      cursor: ".cursor/rules/ihgen-web-kit.mdc",
-    },
-    file_policy: "Existing instruction files are preserved; Web Kit changes only its marked roles block. Missing instruction files are created once with a project summary plus the roles block.",
+    managed_roles: Object.fromEntries(Object.entries(targets).map(([key, [relative]]) => [key, relative])),
+    local_adapters: scope === "local" ? adapters : {},
+    file_policy: scope === "local"
+      ? "Web Kit instructions live under .agent-core/instructions and are locally Git-ignored. Copilot and Cursor receive ignored native rule adapters; Gemini receives a private project context setting where safely possible. Only Web Kit-marked blocks are removed from shared project files when switching to local mode. Web Kit-controlled Codex/Claude sessions load the local instructions explicitly."
+      : "Existing project instruction files are preserved; Web Kit changes only its marked roles block. Missing files are created once with a project summary plus the roles block.",
     runtime: "node+npm",
     actions,
   };
 
+  const overlayFile = path.join(project, LOCAL_SCOPE_FILE);
+  if (scope === "local") {
+    writeJson(overlayFile, { schema_version: 1, instruction_scope: "local", ai_compatibility: compatibility });
+  } else if (fs.existsSync(overlayFile)) {
+    assertSharedTransitionSafe(project);
+    fs.unlinkSync(overlayFile);
+  }
+
   const cfgPath = path.join(project, ".agent-kit.json");
   const cfg = readJson(cfgPath);
   if (Object.keys(cfg).length) {
-    cfg.ai_compatibility = compatibility;
+    if (scope === "shared") cfg.ai_compatibility = compatibility;
+    else delete cfg.ai_compatibility;
     writeJson(cfgPath, cfg);
   }
 
   const profilePath = path.join(project, ".agent-core", "index", "project-profile.json");
   const currentProfile = readJson(profilePath);
   if (Object.keys(currentProfile).length) {
-    currentProfile.ai_compatibility = compatibility;
+    if (scope === "shared") currentProfile.ai_compatibility = compatibility;
+    else delete currentProfile.ai_compatibility;
     writeJson(profilePath, currentProfile);
   }
 

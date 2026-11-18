@@ -7,6 +7,7 @@
     "web-kit": "bin/web-kit-entry.js"
   },
   "scripts": {
+    "test:local-instructions": "node tests/local-ai-instructions-smoke.mjs",
     "test:review-isolation": "node scripts/verify-review-isolation.mjs --portable",
     "verify:review-isolation": "node scripts/verify-review-isolation.mjs"
   },

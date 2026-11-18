@@ -27,7 +27,9 @@ Canonical generated project metadata is stored at:
 
 The Context Router uses this profile for initial routing instead of requiring a generated project header inside every AI instruction file.
 
-## Non-destructive instruction-file behavior
+## Choose shared or local instructions
+
+The default **shared** mode retains Web Kit's existing integration with project instructions:
 
 Web Kit manages these AI instruction locations:
 
@@ -38,6 +40,83 @@ GEMINI.md
 .github/copilot-instructions.md
 .cursor/rules/ihgen-web-kit.mdc
 ```
+
+If you want Web Kit for yourself without making its workflow mandatory for teammates,
+choose **local** mode:
+
+```bash
+npx @ihgen/web-kit install --local-instructions
+# In an already installed project:
+npx @ihgen/web-kit update --local-instructions
+```
+
+Local mode generates separate instructions under:
+
+```text
+.agent-core/instructions/AGENTS.md
+.agent-core/instructions/CLAUDE.md
+.agent-core/instructions/GEMINI.md
+.agent-core/instructions/copilot-instructions.md
+.agent-core/instructions/ihgen-web-kit.mdc
+```
+
+These files, together with `.agent-core/instructions/.local-scope.json`, are
+protected by a nested `.gitignore`, including when installation happens before
+`git init`. The scope selection and local adapter metadata live in that ignored
+checkout-only file, **not** in committed `.agent-kit.json` or the generated
+project profile. A teammate cloning the repository therefore does not inherit
+your local opt-in; a normal update in their clone uses shared mode unless they
+explicitly choose local mode too. Local mode removes **only Web Kit-marked role blocks**
+from any older shared project instructions. Project-written text and any old
+generated project summaries remain untouched. It refuses malformed or duplicate
+markers rather than risk corrupting the file.
+
+For automatic local discovery by other clients, Web Kit also installs **private
+provider adapters** outside the shared instruction files:
+
+| Client | Local adapter | Activation |
+| --- | --- | --- |
+| Gemini CLI | `.gemini/settings.json` | Adds `.agent-core/instructions/GEMINI.md` to `context.fileName` while preserving other local settings |
+| GitHub Copilot (IDE/CLI) | `.github/instructions/ihgen-web-kit-local.instructions.md` | `applyTo: "**/*"` when working with matching files |
+| Cursor | `.cursor/rules/ihgen-web-kit-local.mdc` | `alwaysApply: true` in the local editor |
+
+Generated adapters are narrowly ignored in Git, including via the checkout's
+local `.git/info/exclude` when available. They remain uncommitted even when
+other team settings are tracked. Existing **tracked** `.gemini/settings.json`
+or colliding Copilot/Cursor rule files are never changed. Existing untracked
+Gemini settings are merged only if they are already Git-ignored. If an adapter
+is blocked, installation reports it and `doctor` returns `NEEDS ATTENTION`;
+the remaining clients continue working. Gemini's `/memory show` and Copilot's
+`/instructions` can confirm which rules the client loaded.
+
+Web Kit's controlled `session codex` and `session claude` commands inject the
+corresponding local instructions into each provider session, including after a
+context rollover. Normal interactive `codex` / `claude` launches through Web
+Kit's transparent supervisor also use them. Codex receives additive developer
+instructions, and Claude appends the local instruction file to its normal
+prompt. Existing custom Codex `developer_instructions` or Claude
+`--append-system-prompt-file` arguments take precedence and are never silently
+replaced. This includes `developer_instructions` declared in an explicitly
+selected Codex `--profile`/`-p` configuration. In that situation, use an
+explicit Web Kit `session` command.
+
+Unwrapped Codex/Claude sessions do **not** automatically load the hidden Web Kit
+files unless their project-level instructions already reference them. Use the
+Web Kit session command or transparent supervisor for those providers.
+Gemini, Copilot, and Cursor use the private native adapters above. Their
+desktop/CLI installations must support the indicated native instruction
+feature; remote cloud agents cannot read Git-ignored local files.
+
+Your selection persists locally in the ignored `.local-scope.json` file, so
+subsequent plain `update` commands **in your checkout** keep the same scope.
+Web Kit verifies effective Git ignoring and refuses a local install if the
+private files are tracked or can be accidentally committed (even with a
+negated `.gitignore` rule). To deliberately return to shared mode, run
+`npx @ihgen/web-kit update --shared-instructions`. That restores Web Kit role
+blocks in the project's shared instruction files and removes Web Kit-owned
+native adapters where safe. It does not delete the private canonical copies.
+
+## Non-destructive instruction-file behavior (shared mode)
 
 ### If the file already exists
 
@@ -63,7 +142,7 @@ Web Kit managed roles block
 
 The one-time summary includes lightweight project identity/stack/structure information. Later Web-Kit updates leave that summary unchanged and refresh only the managed roles block.
 
-## No parallel AGENTS file
+## No extra root AGENTS file
 
 Fresh installs do not create `AGENTS.web-kit.md`.
 
@@ -92,7 +171,7 @@ Web Kit project discovery and AI-role management use Node.js:
 node scripts/agent-kit.mjs install /path/to/project
 ```
 
-Normal users should use:
+Normal users can use:
 
 ```bash
 npx @ihgen/web-kit

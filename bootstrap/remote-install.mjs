@@ -21,7 +21,7 @@ function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 function parseArgs(argv) {
-  const out = { action: "install", repo: null, ref: null, source: null, sha256: null, project: ".", forceAgents: false };
+  const out = { action: "install", repo: null, ref: null, source: null, sha256: null, project: ".", forceAgents: false, instructionScope: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = () => argv[++i] || null;
@@ -38,6 +38,13 @@ function parseArgs(argv) {
     else if (arg === "--project") out.project = next() || ".";
     else if (arg.startsWith("--project=")) out.project = arg.slice(10);
     else if (arg === "--force-agents") out.forceAgents = true;
+    else if (arg === "--local-instructions") {
+      if (out.instructionScope === "shared") throw new Error("--local-instructions and --shared-instructions are mutually exclusive.");
+      out.instructionScope = "local";
+    } else if (arg === "--shared-instructions") {
+      if (out.instructionScope === "local") throw new Error("--local-instructions and --shared-instructions are mutually exclusive.");
+      out.instructionScope = "shared";
+    }
   }
   return out;
 }
@@ -110,7 +117,12 @@ function installTransparentSupervisor(project) {
   try { status = JSON.parse(String(result.stdout || "").trim()); } catch {}
   console.log(`Transparent context supervisor: ${status?.enabled === false ? "installed but disabled" : "enabled"}`);
   console.log(`Context threshold: ${status?.threshold_percent || 50}%`);
-  console.log("After opening a new terminal once, use `codex` or `claude` normally; no Web-Kit session command is required.");
+  const localScope = readJson(path.join(project, ".agent-core", "instructions", ".local-scope.json"));
+  if (localScope.schema_version === 1 && localScope.instruction_scope === "local") {
+    console.log("Local AI rules are loaded by Web Kit-supervised `codex` / `claude` and explicit `web-kit session` commands; unwrapped provider sessions retain only their own instructions.");
+  } else {
+    console.log("After opening a new terminal once, use `codex` or `claude` normally; no Web-Kit session command is required.");
+  }
 }
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -146,6 +158,7 @@ async function main() {
     const cli = path.join(kit, "scripts", "agent-kit.mjs");
     const cmd = [cli, args.action, project];
     if (args.forceAgents) cmd.push("--force-agents");
+    if (args.instructionScope) cmd.push(`--${args.instructionScope}-instructions`);
 
     console.log(`Running Web Kit ${args.action} against ${project}...`);
     const result = spawnSync(process.execPath, cmd, { stdio: "inherit", windowsHide: true });

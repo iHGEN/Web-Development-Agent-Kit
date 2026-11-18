@@ -171,6 +171,41 @@ function readCodexConfigNotify() {
   } catch { return null; }
 }
 
+function localInstructionFile(project, provider) {
+  const local = readJson(path.join(project, ".agent-core", "instructions", ".local-scope.json"), {});
+  if (local.schema_version !== 1 || local.instruction_scope !== "local") return null;
+  const file = path.join(project, ".agent-core", "instructions", provider === "claude" ? "CLAUDE.md" : "AGENTS.md");
+  if (!fs.existsSync(file)) throw new Error(`Web Kit local instructions missing: ${file}. Run Web Kit update before starting ${provider}.`);
+  return file;
+}
+
+function codexHasCustomDeveloperInstructions(args, project) {
+  for (let i = 0; i < args.length; i += 1) {
+    if ((args[i] === "-c" || args[i] === "--config") && /^developer_instructions\s*=/.test(args[i + 1] || "")) return true;
+    if (/^--config=developer_instructions\s*=/.test(args[i])) return true;
+  }
+  const configHome = process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : path.join(os.homedir(), ".codex");
+  for (const file of [path.join(configHome, "config.toml"), path.join(project, ".codex", "config.toml")]) {
+    if (!fs.existsSync(file)) continue;
+    if (/^\s*developer_instructions\s*=/m.test(fs.readFileSync(file, "utf8"))) return true;
+  }
+  // Codex 0.134+ loads selected profiles from separate config layers.
+  // CLI -c values would override a profile's developer_instructions, so do
+  // not inject when an explicitly selected profile already owns that field.
+  let profile = null;
+  for (let i = 0; i < args.length; i += 1) {
+    if ((args[i] === "-p" || args[i] === "--profile") && args[i + 1]) profile = args[++i];
+    else if (args[i].startsWith("--profile=")) profile = args[i].slice("--profile=".length);
+  }
+  if (profile !== null) {
+    if (!/^[A-Za-z0-9_-]+$/.test(profile)) return true;
+    const profileFile = path.join(configHome, `${profile}.config.toml`);
+    if (!fs.existsSync(profileFile)) return true; // fail closed on an unknown profile
+    if (/^\s*developer_instructions\s*=/m.test(fs.readFileSync(profileFile, "utf8"))) return true;
+  }
+  return false;
+}
+
 function extractCodexNotify(args) {
   let original = null;
   const clean = [];
@@ -304,6 +339,15 @@ function prepareInstrumentation(provider, rawArgs, project, supervisorId) {
     const { clean, original } = extractCodexNotify(rawArgs);
     const notify = [process.execPath, bridge, "codex-notify"];
     const instrument = ["-c", `notify=${JSON.stringify(notify)}`];
+    const localFile = localInstructionFile(project, provider);
+    if (localFile && codexHasCustomDeveloperInstructions(clean, project)) {
+      console.warn("[Web Kit] Existing Codex developer_instructions detected. Preserving them; use `web-kit session codex` to explicitly include local Web Kit rules.");
+    } else if (localFile) {
+      // developer_instructions adds to Codex's normal instructions; unlike
+      // model_instructions_file, it does not replace the project's AGENTS.md.
+      const content = fs.readFileSync(localFile, "utf8");
+      instrument.push("-c", `developer_instructions=${JSON.stringify(content)}`);
+    }
     if (original) env.WEB_KIT_ORIGINAL_CODEX_NOTIFY_B64 = encodeJson(original);
     return {
       initialArgs: [...instrument, ...clean],
@@ -315,6 +359,12 @@ function prepareInstrumentation(provider, rawArgs, project, supervisorId) {
 
   const { clean, explicit } = extractClaudeSettings(rawArgs, project);
   const originalStatusLine = effectiveClaudeStatusLine(project, explicit);
+  const localFile = localInstructionFile(project, provider);
+  const hasAppendFile = clean.some((arg) => arg === "--append-system-prompt-file" || arg.startsWith("--append-system-prompt-file="));
+  if (localFile && hasAppendFile) {
+    console.warn("[Web Kit] Existing Claude --append-system-prompt-file detected. Preserving it; use `web-kit session claude` to explicitly include local Web Kit rules.");
+  }
+  const localArgs = localFile && !hasAppendFile ? ["--append-system-prompt-file", localFile] : [];
   if (originalStatusLine) env.WEB_KIT_ORIGINAL_CLAUDE_STATUSLINE_B64 = encodeJson(originalStatusLine);
   const runtimeDir = path.join(webKitHome(), "runtime");
   fs.mkdirSync(runtimeDir, { recursive: true });
@@ -343,8 +393,8 @@ function prepareInstrumentation(provider, rawArgs, project, supervisorId) {
   };
   atomicWrite(settingsFile, merged);
   return {
-    initialArgs: ["--settings", settingsFile, ...clean],
-    freshBaseArgs: ["--settings", settingsFile, ...sanitizeClaudeFreshArgs(clean)],
+    initialArgs: ["--settings", settingsFile, ...localArgs, ...clean],
+    freshBaseArgs: ["--settings", settingsFile, ...localArgs, ...sanitizeClaudeFreshArgs(clean)],
     env,
     cleanup: () => { try { fs.unlinkSync(settingsFile); } catch {} },
   };

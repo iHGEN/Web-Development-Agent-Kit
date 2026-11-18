@@ -133,7 +133,21 @@ Web Kit never requires `python`, `python3`, `py`, pip, or pipx during normal ins
 
 ## AI instruction safety
 
-Existing project-owned instruction files are preserved:
+To keep Web Kit guidance local to your own checkout rather than inject it into
+team-level files, choose `install --local-instructions` or
+`update --local-instructions`. Local files live under Git-ignored
+`.agent-core/instructions/`, and Web Kit-controlled Codex/Claude sessions and
+supervised interactive launches load them explicitly. Private, Git-ignored
+adapters also activate local Gemini CLI, Copilot IDE/CLI, and Cursor where
+native provider settings allow it. `doctor` reports conflicts with tracked
+project settings without overwriting them. Your choice is stored only in the
+Git-ignored `.agent-core/instructions/.local-scope.json`, not shared project
+metadata, and survives later updates in your checkout. Fresh clones default to
+shared mode. Git-effective ignore checks block local setup when private files
+are tracked or unignored. Use
+`update --shared-instructions` only if you want shared project integration.
+
+In the default shared mode, these files are preserved:
 
 ```text
 AGENTS.md
